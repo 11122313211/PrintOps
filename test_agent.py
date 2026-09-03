@@ -102,6 +102,16 @@ class AgentTest(unittest.TestCase):
         result = self.agent.chat("做 A4 名片", {"unknownField": "should not persist"})
         self.assertNotIn("unknownField", result["order"])
 
+    def test_spec_preset_patch_applies_process_fields(self):
+        result = self.agent.chat("沿用常用规格", {
+            "paper": "250g 铜版纸", "printing": "双面四色",
+            "finishing": "哑膜", "binding": "骑马钉"
+        })
+        self.assertEqual(result["order"]["paper"], "250g 铜版纸")
+        self.assertEqual(result["order"]["printing"], "双面四色")
+        self.assertEqual(result["order"]["finishing"], "哑膜")
+        self.assertEqual(result["order"]["binding"], "骑马钉")
+
     def test_generate_is_idempotent_after_draft_exists(self):
         self.agent.chat("做 500 份 A4 名片，250g铜版纸，双面四色，下周内")
         self.agent.choose("balanced")

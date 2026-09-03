@@ -61,6 +61,7 @@ let suppressOrderDiff = true;
 let fileFeedback = null;
 let pdfPreview = null;
 const orderHistoryKey = "printops_order_history";
+const specPresetKey = "printops_spec_presets";
 
 function loadOrderHistory() {
   try {
@@ -128,6 +129,104 @@ function renderOrderHistory() {
     button.append(title, meta);
     root.append(button);
   });
+}
+
+function loadSpecPresets() {
+  try {
+    const presets = JSON.parse(localStorage.getItem(specPresetKey) || "[]");
+    return Array.isArray(presets) ? presets.filter((item) => item?.id && item.fields) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSpecPresets(presets) {
+  try { localStorage.setItem(specPresetKey, JSON.stringify(presets.slice(0, 8))); }
+  catch { showToast("常用规格保存空间已满，请清理浏览器数据"); }
+}
+
+function currentSpecPresetFields(order = {}) {
+  return {
+    paper: order.paper || "",
+    printing: order.printing || "",
+    finishing: order.finishing || "",
+    binding: order.binding || ""
+  };
+}
+
+function specPresetHasContent(fields = {}) {
+  return Object.values(fields).some((value) => hasValue(value));
+}
+
+function specPresetTitle(fields = {}) {
+  const parts = ["paper", "printing", "finishing", "binding"].map((key) => fields[key]).filter(Boolean);
+  return parts.length ? parts.join(" · ") : "未命名规格";
+}
+
+function renderSpecPresets() {
+  const root = $("#preset-list");
+  const presets = loadSpecPresets();
+  $("#preset-count").textContent = `${presets.length} 组`;
+  $("#save-preset").disabled = !specPresetHasContent(currentSpecPresetFields(state.order));
+  root.innerHTML = "";
+  if (!presets.length) {
+    const empty = document.createElement("p");
+    empty.className = "preset-empty";
+    empty.textContent = "保存后可快速复用。";
+    root.append(empty);
+    return;
+  }
+  presets.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "preset-item";
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "preset-apply";
+    apply.dataset.presetId = item.id;
+    const title = document.createElement("strong");
+    title.textContent = specPresetTitle(item.fields);
+    const meta = document.createElement("small");
+    meta.textContent = formatOrderHistoryTime(item.createdAt);
+    apply.append(title, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "preset-remove";
+    remove.dataset.presetId = item.id;
+    remove.setAttribute("aria-label", `删除规格 ${specPresetTitle(item.fields)}`);
+    remove.textContent = "×";
+    row.append(apply, remove);
+    root.append(row);
+  });
+}
+
+function saveCurrentSpecPreset() {
+  const fields = currentSpecPresetFields(state.order);
+  if (!specPresetHasContent(fields)) {
+    showToast("请先补充纸张、颜色、工艺或装订");
+    return;
+  }
+  const presets = loadSpecPresets();
+  const signature = JSON.stringify(fields);
+  const existingIndex = presets.findIndex((item) => JSON.stringify(item.fields) === signature);
+  if (existingIndex >= 0) presets.splice(existingIndex, 1);
+  presets.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, fields, createdAt: Date.now() });
+  saveSpecPresets(presets);
+  renderSpecPresets();
+  showToast("常用规格已保存");
+}
+
+async function applySpecPreset(presetId) {
+  const preset = loadSpecPresets().find((item) => item.id === presetId);
+  if (!preset || isSending) return;
+  const patch = Object.fromEntries(Object.entries(preset.fields).filter(([, value]) => hasValue(value)));
+  if (!Object.keys(patch).length) return;
+  await sendMessage("沿用常用规格", patch);
+}
+
+function removeSpecPreset(presetId) {
+  saveSpecPresets(loadSpecPresets().filter((item) => item.id !== presetId));
+  renderSpecPresets();
+  showToast("常用规格已删除");
 }
 
 async function switchOrder(orderId) {
@@ -314,6 +413,7 @@ function render(data, showMessages = true) {
   renderProgress();
   rememberOrderHistory();
   renderOrderHistory();
+  renderSpecPresets();
   $("#agent-trace").textContent = data.toolTrace?.length ? data.toolTrace.join("  /  ") : "等待输入";
   $("#memory-status").textContent = data.nextAction || (data.stage === "confirm" ? "订单记忆已锁定，等待人工确认。" : data.order?.productType ? "订单记忆已保存，可继续补充或修改。" : "等待第一条需求，Agent 将自动建立订单记忆。");
   $("#agent-status").innerHTML = '<span class="status-dot"></span>Agent 在线';
@@ -928,6 +1028,13 @@ $("#theme-toggle").addEventListener("click", () => setHighContrast(document.docu
 $("#history-list").addEventListener("click", (event) => {
   const item = event.target.closest(".history-item");
   if (item) switchOrder(item.dataset.sessionId);
+});
+$("#save-preset").addEventListener("click", saveCurrentSpecPreset);
+$("#preset-list").addEventListener("click", (event) => {
+  const apply = event.target.closest(".preset-apply");
+  if (apply) applySpecPreset(apply.dataset.presetId);
+  const remove = event.target.closest(".preset-remove");
+  if (remove) removeSpecPreset(remove.dataset.presetId);
 });
 $("#reset-order").addEventListener("click", async () => {
   chatRequestSeq += 1;

@@ -143,6 +143,20 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .history-item[aria-current="true"] { color: var(--red-deep); background: #f6e5d7; border-color: var(--red); box-shadow: inset 2px 0 0 var(--red); }
 .history-item:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 .history-empty { margin: 0; color: var(--quiet); font-size: 9px; }
+.preset-panel { margin-top: 18px; }
+.preset-list { display: grid; gap: 5px; max-height: 172px; margin-top: 9px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #b99d79 transparent; }
+.preset-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 4px; }
+.preset-apply { display: grid; gap: 3px; min-width: 0; padding: 8px; color: var(--ink-soft); background: rgba(249, 242, 226, .45); border: 1px solid #c9b99e; border-radius: 9px; text-align: left; transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease, transform var(--duration-fast) ease; }
+.preset-apply strong { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.preset-apply small { color: var(--quiet); font-family: ui-monospace, monospace; font-size: 8px; }
+.preset-apply:hover { color: var(--red-deep); background: var(--red-pale); border-color: #b97861; transform: translateY(-1px); }
+.preset-apply:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.preset-remove { display: grid; place-items: center; color: var(--quiet); background: transparent; border: 1px solid var(--rule-light); border-radius: 9px; font-size: 13px; }
+.preset-remove:hover { color: var(--red-deep); border-color: var(--red); }
+.preset-empty { margin: 0; color: var(--quiet); font-size: 9px; }
+.preset-save { width: 100%; margin-top: 7px; padding: 8px; color: var(--red-deep); background: transparent; border: 1px dashed #c9a783; border-radius: 9px; font-size: 10px; font-weight: 800; }
+.preset-save:hover:not(:disabled) { color: #fff; background: var(--red); border-style: solid; border-color: var(--red-deep); }
+.preset-save:disabled { opacity: .42; cursor: not-allowed; }
 
 .chat-section, .order-section { min-width: 0; }
 .chat-section { min-height: 0; display: flex; flex-direction: column; padding: 22px clamp(20px, 3vw, 32px) 15px; overflow: hidden; background: rgba(249, 245, 235, .75); }
@@ -379,6 +393,8 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
   .tool-panel { display: block; margin-top: 16px; }
   .history-panel { margin-top: 16px; }
   .history-list { max-height: none; }
+  .preset-panel { margin-top: 16px; }
+  .preset-list { max-height: none; }
   .catalog-panel { margin-top: 16px; }
   .tool-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 8px; }
   .tool-item { padding: 6px 4px; }
