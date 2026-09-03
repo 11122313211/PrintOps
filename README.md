@@ -57,6 +57,7 @@ http://localhost:4173/api/health
 - 可解释哑粉纸/铜版纸、出血、覆膜、颜色和装订等常见印刷概念
 - 支持 PDF 文件类型与大小的前端预检入口
 - 生成、复制标准化订单草稿
+- 订单草稿可导出 JSON、CSV 或 Markdown，支持高对比显示模式
 - 展示需求收集、方案选择、订单确认三个状态
 - SQLite 保存会话记忆，刷新或重启后可继续订单
 - UI 可配置 OpenAI 兼容 API URL、模型名和可选 Key；留空时继续使用规则 Agent，Key 只保存于本机服务端
@@ -88,7 +89,7 @@ http://localhost:4173/api/health
 
 ## Git 与版本
 
-项目按可运行里程碑使用 Git 管理。当前验收版本为 `v0.1.0`，详细记录见 [CHANGELOG.md](CHANGELOG.md)。源码、知识库和前端会进入版本库；`data/` 下的会话数据库、日志和模型配置被 `.gitignore` 排除，API Key 不会随 Git 提交。
+项目按可运行里程碑使用 Git 管理。当前验收版本为 `v0.2.0`，详细记录见 [CHANGELOG.md](CHANGELOG.md)。源码、知识库和前端会进入版本库；`data/` 下的会话数据库、日志和模型配置被 `.gitignore` 排除，API Key 不会随 Git 提交。
 
 克隆后可用下面的命令启动：
 
