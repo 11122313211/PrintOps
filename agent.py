@@ -181,13 +181,68 @@ def explain_print_term(question: str) -> dict[str, str]:
 
 
 @tool
-def preflight_file(file_name: str, size_bytes: int) -> dict[str, Any]:
-    """检查文件类型和大小，返回基础印前预检结果。"""
+def preflight_file(file_name: str, size_bytes: int, page_count: int | None = None,
+                   encrypted: bool = False, readable: bool = True) -> dict[str, Any]:
+    """检查文件类型、大小和可读取的基础印前线索。"""
+    checks = []
+    errors = []
+    warnings = []
+    suggestions = []
     if not file_name.lower().endswith(".pdf"):
-        return {"ok": False, "message": "MVP 暂只支持 PDF 文件。"}
-    if size_bytes > 20 * 1024 * 1024:
-        return {"ok": False, "message": "文件超过 20 MB，请压缩后再上传。"}
-    return {"ok": True, "message": "基础检查通过；出血、颜色和字体仍需正式印前检查。"}
+        errors.append("MVP 暂只支持 PDF 文件。")
+        checks.append({"label": "文件类型", "status": "error", "detail": "仅支持 PDF"})
+    else:
+        checks.append({"label": "文件类型", "status": "ok", "detail": "PDF"})
+    if size_bytes <= 0:
+        errors.append("文件大小无效，请重新选择文件。")
+        checks.append({"label": "文件大小", "status": "error", "detail": "大小无效"})
+    elif size_bytes > 20 * 1024 * 1024:
+        errors.append("文件超过 20 MB，请压缩后再上传。")
+        checks.append({"label": "文件大小", "status": "error", "detail": "超过 20 MB"})
+    else:
+        checks.append({"label": "文件大小", "status": "ok", "detail": f"{size_bytes / 1024 / 1024:.1f} MB"})
+    if not readable:
+        errors.append("文件内容无法读取，请确认文件未损坏后重新上传。")
+        checks.append({"label": "文件内容", "status": "error", "detail": "无法读取"})
+    elif encrypted:
+        errors.append("PDF 已加密，请先解除密码保护再上传。")
+        checks.append({"label": "文件保护", "status": "error", "detail": "已加密"})
+    else:
+        checks.append({"label": "文件保护", "status": "ok", "detail": "未发现加密标记"})
+    if page_count is None:
+        warnings.append("无法解析页数，请在下单前人工确认页数。")
+        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
+    elif page_count <= 0:
+        warnings.append("未解析到页数，可能使用了压缩对象流，请人工确认页数。")
+        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
+    else:
+        checks.append({"label": "页数", "status": "ok", "detail": f"{page_count} 页"})
+        if page_count >= 49:
+            warnings.append("页数较多，请确认装订方式和翻阅强度。")
+            suggestions.append("页数较多时优先确认胶装、锁线或特殊装订方案。")
+    file_hints = " ".join(part.lower() for part in re.split(r"[\s_-]+", file_name) if part)
+    naming_warnings = []
+    if "无出血" in file_name or "no-bleed" in file_hints:
+        naming_warnings.append("文件名提示可能缺少出血")
+    if "rgb" in file_hints:
+        naming_warnings.append("文件名提示可能使用 RGB 颜色")
+    if "低分辨率" in file_name or "low-res" in file_hints:
+        naming_warnings.append("文件名提示可能存在低分辨率图片")
+    if naming_warnings:
+        warnings.extend(f"{item}，请上传前检查印前设置。" for item in naming_warnings)
+        checks.append({"label": "文件命名", "status": "warn", "detail": "；".join(naming_warnings)})
+    else:
+        checks.append({"label": "文件命名", "status": "ok", "detail": "未发现常见风险标记"})
+    if errors:
+        message = errors[0]
+    elif warnings:
+        page_summary = f"已解析到 {page_count} 页；" if page_count and page_count > 0 else ""
+        message = f"基础检查完成，{page_summary}有 {len(warnings)} 项需要人工确认：" + "；".join(warnings)
+    else:
+        message = "基础检查通过；出血、颜色和字体仍需正式印前检查。"
+    return {"ok": not errors, "message": message, "fileName": file_name, "sizeBytes": size_bytes,
+            "pageCount": page_count, "encrypted": encrypted, "checks": checks,
+            "warnings": warnings, "suggestions": suggestions}
 
 
 @tool
@@ -398,7 +453,13 @@ class Agent:
                 size_bytes = int(payload.get("sizeBytes", 0))
             except (TypeError, ValueError):
                 size_bytes = 0
-            result = self._call(name, str(payload.get("fileName", "")), size_bytes)
+            page_count = payload.get("pageCount")
+            try:
+                page_count = int(page_count) if page_count is not None else None
+            except (TypeError, ValueError):
+                page_count = None
+            result = self._call(name, str(payload.get("fileName", "")), size_bytes, page_count,
+                                payload.get("encrypted") is True, payload.get("readable") is not False)
             if result.get("ok"):
                 self.state["uploadedFile"] = payload.get("fileName")
             return self._tool_reply(result["message"], tool_result=result, remember=remember)
@@ -452,13 +513,14 @@ class Agent:
         self._save()
         return self._result([message], [], [], handoff)
 
-    def upload(self, file_name: str, size_bytes: int) -> dict[str, Any]:
+    def upload(self, file_name: str, size_bytes: int, page_count: int | None = None,
+               encrypted: bool = False, readable: bool = True) -> dict[str, Any]:
         self.trace = []
-        check = self._call("preflight_file", file_name, size_bytes)
+        check = self._call("preflight_file", file_name, size_bytes, page_count, encrypted, readable)
         if check["ok"]:
             self.state["uploadedFile"] = file_name
             self._save()
-        return self._result([check["message"]])
+        return self._result([check["message"]], tool_result=check)
 
     def set_platform(self, platform_id: str) -> dict[str, Any]:
         platform_id = platform_id if platform_id in PLATFORMS else "generic"

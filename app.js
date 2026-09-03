@@ -572,7 +572,7 @@ function renderFileState() {
   const activePreview = pdfPreview && (!feedback || pdfPreview.fileName === feedback.fileName) ? pdfPreview : null;
   node.hidden = !feedback && !activePreview;
   if (!feedback && !activePreview) return;
-  node.className = `file-state ${feedback.ok ? "ok" : "error"}`;
+  node.className = `file-state ${feedback.ok && activePreview?.preflight?.ok !== false ? "ok" : "error"}`;
   node.innerHTML = "";
   const heading = document.createElement("div");
   heading.className = "file-state-heading";
@@ -607,13 +607,55 @@ function renderFileState() {
     openLink.rel = "noopener";
     openLink.textContent = "在新窗口打开 PDF";
     fallback.append("内置预览不可用时，", openLink);
-    heading.append(meta, viewer, fallback);
+    heading.append(meta);
+    if (activePreview.preflight) {
+      const checks = document.createElement("div");
+      checks.className = "file-checks";
+      activePreview.preflight.checks.forEach((item) => {
+        const check = document.createElement("div");
+        check.className = `file-check check-${item.status}`;
+        const term = document.createElement("span");
+        const detail = document.createElement("strong");
+        term.textContent = item.label;
+        detail.textContent = item.detail;
+        check.append(term, detail);
+        checks.appendChild(check);
+      });
+      if (activePreview.preflight.warnings.length) {
+        const warning = document.createElement("p");
+        warning.className = "file-warning";
+        warning.textContent = `需要确认：${activePreview.preflight.warnings.join("；")}`;
+        checks.append(warning);
+      }
+      heading.append(checks);
+    }
+    heading.append(viewer, fallback);
   } else {
     const detail = document.createElement("small");
     detail.textContent = feedback?.message || "";
     heading.append(detail);
   }
   node.append(heading);
+}
+
+async function inspectPdf(file) {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const decoder = new TextDecoder("windows-1252");
+    const content = decoder.decode(bytes);
+    const header = decoder.decode(bytes.slice(0, 1024));
+    const tail = decoder.decode(bytes.slice(Math.max(0, bytes.length - 2048)));
+    return {
+      readable: true,
+      isPdf: header.startsWith("%PDF-"),
+      pdfVersion: header.match(/^%PDF-(\d\.\d)/)?.[1] || null,
+      pageCount: (content.match(/\/Type\s*\/Page\b/g) || []).length,
+      encrypted: /\/Encrypt\b/.test(content),
+      hasEof: tail.includes("%%EOF")
+    };
+  } catch (error) {
+    return { readable: false, isPdf: false, pdfVersion: null, pageCount: null, encrypted: false, hasEof: false };
+  }
 }
 
 function renderTools() {
@@ -797,18 +839,37 @@ async function uploadFile(file) {
     renderFileState();
     return;
   }
+  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
+  renderFileState();
+  const inspection = await inspectPdf(file);
+  if (!inspection.readable || !inspection.isPdf) {
+    clearPdfPreview();
+    fileFeedback = { ok: false, fileName: file.name, message: "文件不是有效的 PDF，或内容无法读取。" };
+    renderFileState();
+    addMessage("assistant", fileFeedback.message);
+    return;
+  }
   pdfPreview = {
     url: URL.createObjectURL(file),
     fileName: file.name,
     size: file.size,
     type: file.type || "application/pdf",
-    lastModified: file.lastModified
+    lastModified: file.lastModified,
+    inspection
   };
-  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
   renderFileState();
   try {
-    const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size });
+    const data = await api("/api/preflight", {
+      sessionId,
+      fileName: file.name,
+      sizeBytes: file.size,
+      pageCount: inspection.pageCount,
+      encrypted: inspection.encrypted,
+      readable: inspection.readable
+    });
     fileFeedback = null;
+    pdfPreview.preflight = data.toolResult || null;
+    if (data.toolResult && !data.toolResult.ok) fileFeedback = data.toolResult;
     render(data);
   } catch (error) {
     clearPdfPreview();

@@ -68,7 +68,23 @@ class AgentTest(unittest.TestCase):
     def test_explanation_tool_answers_non_expert_questions(self):
         result = self.agent.chat("哑粉纸和铜版纸怎么选？")
         self.assertEqual(result["toolTrace"][-1], "调用工具：explain_print_term")
-        self.assertIn("颜色", result["messages"][0])
+
+    def test_pdf_preflight_reports_pages_and_filename_risks(self):
+        result = self.agent.upload("画册-无出血-RGB.pdf", 1024 * 1024, page_count=52)
+        check = result["toolResult"]
+        self.assertTrue(check["ok"])
+        self.assertEqual(check["pageCount"], 52)
+        self.assertIn("52 页", result["messages"][0])
+        self.assertIn("缺少出血", result["messages"][0])
+        self.assertIn("RGB 颜色", result["messages"][0])
+        self.assertIn("装订方式", result["messages"][0])
+
+    def test_pdf_preflight_rejects_encrypted_file(self):
+        result = self.agent.upload("报价单.pdf", 1024, page_count=2, encrypted=True)
+        check = result["toolResult"]
+        self.assertFalse(check["ok"])
+        self.assertIn("已加密", result["messages"][0])
+        self.assertIsNone(self.agent.state["uploadedFile"])
 
     def test_patch_fields_are_whitelisted(self):
         result = self.agent.chat("做 A4 名片", {"unknownField": "should not persist"})
