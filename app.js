@@ -920,6 +920,7 @@ function exportOrder(format) {
       selectedOption: state.selectedOption,
       order: state.order,
       productProfile: state.productProfile,
+      handoff: state.handoff ? { text: state.handoff.text, supplierReadiness: state.handoff.supplierReadiness } : null,
       fields: rows
     }, null, 2);
     contentType = "application/json;charset=utf-8";
@@ -1116,7 +1117,20 @@ async function bootstrap() {
       api("/api/platforms", undefined, "GET"), api("/api/products", undefined, "GET"),
       api("/api/tools", undefined, "GET"), api("/api/settings", undefined, "GET")
     ]);
-    $("#platform-select").innerHTML = platforms.platforms.map((item) => `<option value="${item.id}">${item.name}</option>`).join("");
+    const platformSelect = $("#platform-select");
+    platformSelect.innerHTML = "";
+    platforms.platforms.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      const profile = item.supplierProfile || {};
+      option.title = [
+        `品类：${(profile.categories || []).join("、") || "待补充"}`,
+        `最大尺寸：${profile.maxSize || "待补充"}`,
+        `交期参考：${profile.leadTime || "待补充"}`
+      ].join("\n");
+      platformSelect.appendChild(option);
+    });
     renderCatalog(products.categories || []);
     renderSettings(settings);
     const snapshot = await api("/api/session", sessionId ? { sessionId } : {});

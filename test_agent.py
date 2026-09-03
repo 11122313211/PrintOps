@@ -5,7 +5,7 @@ from unittest.mock import patch as mock_patch
 import json
 from pathlib import Path
 
-from agent import Agent, Memory, validate_order
+from agent import Agent, Memory, ORDER_DEFAULTS, prepare_handoff, validate_order
 from llm_adapter import OpenAICompatiblePlanner, normalize_base_url, read_saved_config, write_saved_config
 
 
@@ -111,6 +111,17 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result["order"]["printing"], "双面四色")
         self.assertEqual(result["order"]["finishing"], "哑膜")
         self.assertEqual(result["order"]["binding"], "骑马钉")
+
+    def test_supplier_handoff_reports_capability_readiness(self):
+        order = {**ORDER_DEFAULTS, "productType": "画册", "paper": "250g 铜版纸",
+                 "finishing": "哑膜", "size": "A4", "deadline": "下周", "platform": "shengda"}
+        result = prepare_handoff(order)
+        readiness = result["supplierReadiness"]
+        self.assertTrue(any(item["field"] == "品类" for item in readiness["supported"]))
+        self.assertTrue(any(item["value"] == "250g 铜版纸" for item in readiness["supported"]))
+        self.assertTrue(any(item["value"] == "哑膜" for item in readiness["supported"]))
+        self.assertTrue(any(item["field"] == "成品尺寸" for item in readiness["needsReview"]))
+        self.assertTrue(any(item["field"] == "交期" for item in readiness["needsReview"]))
 
     def test_generate_is_idempotent_after_draft_exists(self):
         self.agent.chat("做 500 份 A4 名片，250g铜版纸，双面四色，下周内")

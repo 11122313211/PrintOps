@@ -83,11 +83,16 @@ class Memory:
 
 
 PLATFORMS = {
-    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"]},
-    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"]},
-    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"]},
-    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"]},
-    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"]},
+    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"],
+                "supplierProfile": {"categories": ["全品类"], "maxSize": "按供应商确认", "papers": ["按供应商确认"], "finishing": ["按供应商确认"], "leadTime": "按供应商确认"}},
+    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"],
+                "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册", "标签", "包装盒"], "maxSize": "1200×900mm", "papers": ["铜版纸", "哑粉纸", "白卡纸", "牛皮纸"], "finishing": ["覆膜", "哑膜", "亮膜", "烫金", "局部UV"], "leadTime": "1-5 天"}},
+    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
+                   "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册"], "maxSize": "A3+", "papers": ["铜版纸", "哑粉纸"], "finishing": ["覆膜", "哑膜", "亮膜"], "leadTime": "2-6 天"}},
+    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
+                   "supplierProfile": {"categories": ["名片", "标签", "手提袋", "包装盒"], "maxSize": "900×600mm", "papers": ["白卡纸", "牛皮纸", "不干胶"], "finishing": ["烫金", "击凸", "局部UV"], "leadTime": "3-7 天"}},
+    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"],
+                 "supplierProfile": {"categories": ["待补充"], "maxSize": "待补充", "papers": ["待补充"], "finishing": ["待补充"], "leadTime": "待补充"}},
 }
 
 Tool = Callable[..., Any]
@@ -249,6 +254,33 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
 def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
     """按目标平台生成标准化订单交接文本。"""
     platform = PLATFORMS.get(order["platform"], PLATFORMS["generic"])
+    supplier_profile = platform.get("supplierProfile", {})
+    supported = []
+    needs_review = []
+    product_type = order.get("productType", "")
+    categories = supplier_profile.get("categories", [])
+    if product_type and (product_type in categories or "全品类" in categories):
+        supported.append({"field": "品类", "value": product_type})
+    elif product_type:
+        needs_review.append({"field": "品类", "message": f"供应商档案未明确支持{product_type}"})
+    paper = order.get("paper", "")
+    papers = supplier_profile.get("papers", [])
+    if paper and papers and "按供应商确认" not in papers and not any(item in paper for item in papers):
+        needs_review.append({"field": "纸张/材料", "message": f"{paper}不在常用纸张档案中"})
+    elif paper:
+        supported.append({"field": "纸张/材料", "value": paper})
+    finishing = order.get("finishing", "")
+    finishings = supplier_profile.get("finishing", [])
+    if finishing and finishings and "按供应商确认" not in finishings:
+        matched = [item for item in finishings if item.lower() in finishing.lower()]
+        if matched:
+            supported.append({"field": "表面工艺", "value": "、".join(matched)})
+        else:
+            needs_review.append({"field": "表面工艺", "message": f"{finishing}不在常用工艺档案中"})
+    if order.get("size") and supplier_profile.get("maxSize"):
+        needs_review.append({"field": "成品尺寸", "message": f"请确认{order['size']}不超过{supplier_profile['maxSize']}"})
+    if order.get("deadline"):
+        needs_review.append({"field": "交期", "message": f"请确认{order['deadline']}满足{supplier_profile.get('leadTime', '供应商标准交期')}"})
     fields = [(key, LABELS[key]) for key in LABELS if key != "platform"]
     lines = [f"目标平台：{platform['name']}"] + [f"{label}：{order[key] or '未填写'}" for key, label in fields]
     profile = parameter_state(order)
@@ -257,7 +289,10 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
         lines.append("品类参数：")
         lines.extend(f"- {item['label']}：{item['value'] or '未填写'}" for item in profile["parameters"])
     text = "\n".join(lines)
-    return {"platform": platform, "text": text, "productProfile": profile, "requiresHumanConfirmation": True}
+    return {"platform": platform, "text": text, "productProfile": profile,
+            "supplierReadiness": {"supported": supported, "needsReview": needs_review,
+                                  "profile": supplier_profile},
+            "requiresHumanConfirmation": True}
 
 
 @tool
