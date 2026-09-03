@@ -83,11 +83,16 @@ class Memory:
 
 
 PLATFORMS = {
-    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"]},
-    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"]},
-    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"]},
-    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"]},
-    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"]},
+    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"],
+                "supplierProfile": {"categories": ["全品类"], "maxSize": "按供应商确认", "papers": ["按供应商确认"], "finishing": ["按供应商确认"], "leadTime": "按供应商确认"}},
+    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"],
+                "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册", "标签", "包装盒"], "maxSize": "1200×900mm", "papers": ["铜版纸", "哑粉纸", "白卡纸", "牛皮纸"], "finishing": ["覆膜", "哑膜", "亮膜", "烫金", "局部UV"], "leadTime": "1-5 天"}},
+    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
+                   "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册"], "maxSize": "A3+", "papers": ["铜版纸", "哑粉纸"], "finishing": ["覆膜", "哑膜", "亮膜"], "leadTime": "2-6 天"}},
+    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
+                   "supplierProfile": {"categories": ["名片", "标签", "手提袋", "包装盒"], "maxSize": "900×600mm", "papers": ["白卡纸", "牛皮纸", "不干胶"], "finishing": ["烫金", "击凸", "局部UV"], "leadTime": "3-7 天"}},
+    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"],
+                 "supplierProfile": {"categories": ["待补充"], "maxSize": "待补充", "papers": ["待补充"], "finishing": ["待补充"], "leadTime": "待补充"}},
 }
 
 Tool = Callable[..., Any]
@@ -181,19 +186,101 @@ def explain_print_term(question: str) -> dict[str, str]:
 
 
 @tool
-def preflight_file(file_name: str, size_bytes: int) -> dict[str, Any]:
-    """检查文件类型和大小，返回基础印前预检结果。"""
+def preflight_file(file_name: str, size_bytes: int, page_count: int | None = None,
+                   encrypted: bool = False, readable: bool = True) -> dict[str, Any]:
+    """检查文件类型、大小和可读取的基础印前线索。"""
+    checks = []
+    errors = []
+    warnings = []
+    suggestions = []
     if not file_name.lower().endswith(".pdf"):
-        return {"ok": False, "message": "MVP 暂只支持 PDF 文件。"}
-    if size_bytes > 20 * 1024 * 1024:
-        return {"ok": False, "message": "文件超过 20 MB，请压缩后再上传。"}
-    return {"ok": True, "message": "基础检查通过；出血、颜色和字体仍需正式印前检查。"}
+        errors.append("MVP 暂只支持 PDF 文件。")
+        checks.append({"label": "文件类型", "status": "error", "detail": "仅支持 PDF"})
+    else:
+        checks.append({"label": "文件类型", "status": "ok", "detail": "PDF"})
+    if size_bytes <= 0:
+        errors.append("文件大小无效，请重新选择文件。")
+        checks.append({"label": "文件大小", "status": "error", "detail": "大小无效"})
+    elif size_bytes > 20 * 1024 * 1024:
+        errors.append("文件超过 20 MB，请压缩后再上传。")
+        checks.append({"label": "文件大小", "status": "error", "detail": "超过 20 MB"})
+    else:
+        checks.append({"label": "文件大小", "status": "ok", "detail": f"{size_bytes / 1024 / 1024:.1f} MB"})
+    if not readable:
+        errors.append("文件内容无法读取，请确认文件未损坏后重新上传。")
+        checks.append({"label": "文件内容", "status": "error", "detail": "无法读取"})
+    elif encrypted:
+        errors.append("PDF 已加密，请先解除密码保护再上传。")
+        checks.append({"label": "文件保护", "status": "error", "detail": "已加密"})
+    else:
+        checks.append({"label": "文件保护", "status": "ok", "detail": "未发现加密标记"})
+    if page_count is None:
+        warnings.append("无法解析页数，请在下单前人工确认页数。")
+        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
+    elif page_count <= 0:
+        warnings.append("未解析到页数，可能使用了压缩对象流，请人工确认页数。")
+        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
+    else:
+        checks.append({"label": "页数", "status": "ok", "detail": f"{page_count} 页"})
+        if page_count >= 49:
+            warnings.append("页数较多，请确认装订方式和翻阅强度。")
+            suggestions.append("页数较多时优先确认胶装、锁线或特殊装订方案。")
+    file_hints = " ".join(part.lower() for part in re.split(r"[\s_-]+", file_name) if part)
+    naming_warnings = []
+    if "无出血" in file_name or "no-bleed" in file_hints:
+        naming_warnings.append("文件名提示可能缺少出血")
+    if "rgb" in file_hints:
+        naming_warnings.append("文件名提示可能使用 RGB 颜色")
+    if "低分辨率" in file_name or "low-res" in file_hints:
+        naming_warnings.append("文件名提示可能存在低分辨率图片")
+    if naming_warnings:
+        warnings.extend(f"{item}，请上传前检查印前设置。" for item in naming_warnings)
+        checks.append({"label": "文件命名", "status": "warn", "detail": "；".join(naming_warnings)})
+    else:
+        checks.append({"label": "文件命名", "status": "ok", "detail": "未发现常见风险标记"})
+    if errors:
+        message = errors[0]
+    elif warnings:
+        page_summary = f"已解析到 {page_count} 页；" if page_count and page_count > 0 else ""
+        message = f"基础检查完成，{page_summary}有 {len(warnings)} 项需要人工确认：" + "；".join(warnings)
+    else:
+        message = "基础检查通过；出血、颜色和字体仍需正式印前检查。"
+    return {"ok": not errors, "message": message, "fileName": file_name, "sizeBytes": size_bytes,
+            "pageCount": page_count, "encrypted": encrypted, "checks": checks,
+            "warnings": warnings, "suggestions": suggestions}
 
 
 @tool
 def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
     """按目标平台生成标准化订单交接文本。"""
     platform = PLATFORMS.get(order["platform"], PLATFORMS["generic"])
+    supplier_profile = platform.get("supplierProfile", {})
+    supported = []
+    needs_review = []
+    product_type = order.get("productType", "")
+    categories = supplier_profile.get("categories", [])
+    if product_type and (product_type in categories or "全品类" in categories):
+        supported.append({"field": "品类", "value": product_type})
+    elif product_type:
+        needs_review.append({"field": "品类", "message": f"供应商档案未明确支持{product_type}"})
+    paper = order.get("paper", "")
+    papers = supplier_profile.get("papers", [])
+    if paper and papers and "按供应商确认" not in papers and not any(item in paper for item in papers):
+        needs_review.append({"field": "纸张/材料", "message": f"{paper}不在常用纸张档案中"})
+    elif paper:
+        supported.append({"field": "纸张/材料", "value": paper})
+    finishing = order.get("finishing", "")
+    finishings = supplier_profile.get("finishing", [])
+    if finishing and finishings and "按供应商确认" not in finishings:
+        matched = [item for item in finishings if item.lower() in finishing.lower()]
+        if matched:
+            supported.append({"field": "表面工艺", "value": "、".join(matched)})
+        else:
+            needs_review.append({"field": "表面工艺", "message": f"{finishing}不在常用工艺档案中"})
+    if order.get("size") and supplier_profile.get("maxSize"):
+        needs_review.append({"field": "成品尺寸", "message": f"请确认{order['size']}不超过{supplier_profile['maxSize']}"})
+    if order.get("deadline"):
+        needs_review.append({"field": "交期", "message": f"请确认{order['deadline']}满足{supplier_profile.get('leadTime', '供应商标准交期')}"})
     fields = [(key, LABELS[key]) for key in LABELS if key != "platform"]
     lines = [f"目标平台：{platform['name']}"] + [f"{label}：{order[key] or '未填写'}" for key, label in fields]
     profile = parameter_state(order)
@@ -202,7 +289,10 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
         lines.append("品类参数：")
         lines.extend(f"- {item['label']}：{item['value'] or '未填写'}" for item in profile["parameters"])
     text = "\n".join(lines)
-    return {"platform": platform, "text": text, "productProfile": profile, "requiresHumanConfirmation": True}
+    return {"platform": platform, "text": text, "productProfile": profile,
+            "supplierReadiness": {"supported": supported, "needsReview": needs_review,
+                                  "profile": supplier_profile},
+            "requiresHumanConfirmation": True}
 
 
 @tool
@@ -229,11 +319,19 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     missing = [LABELS[key] for key in required_keys if not order.get(key)]
     warnings = []
     suggestions = []
+    risks = []
     profile = parameter_state(order)
     product_missing = [item["label"] for item in profile["missing"]]
     if order.get("productType") in {"宣传册", "画册"} and not order.get("binding"):
         warnings.append("宣传册/画册尚未确认装订方式")
         suggestions.append("页数少于 48 页可优先考虑骑马钉，页数较多再考虑胶装")
+    page_count = _number(order.get("pages", ""))
+    if (order.get("productType") in {"宣传册", "画册"} and order.get("binding") == "骑马钉"
+            and page_count is not None and page_count >= 48):
+        message = f"{page_count} 页画册使用骑马钉，装订强度和摊平度可能不足"
+        warnings.append(message)
+        suggestions.append("页数达到 48 页或更多时，优先确认胶装、锁线胶装或特殊装订")
+        risks.append({"level": "warning", "message": message, "suggestion": suggestions[-1]})
     if order.get("finishing") in {"烫金", "烫金 / 击凸"}:
         warnings.append("烫金需要确认文件专色、线条粗细和加急交期")
     if order.get("printing") == "双面四色" and order.get("productType") in {"宣传册", "画册"} and not order.get("pages"):
@@ -254,7 +352,7 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     readiness = round((len(required_keys) - len(missing)) / len(required_keys) * 100) if required_keys else 100
     return {"ok": not missing and quantity != 0, "missing": missing, "productMissing": product_missing,
             "productProfile": profile, "warnings": warnings, "suggestions": suggestions,
-            "readiness": readiness, "productReadiness": profile["readiness"]}
+            "risks": risks, "readiness": readiness, "productReadiness": profile["readiness"]}
 
 
 class Agent:
@@ -398,7 +496,13 @@ class Agent:
                 size_bytes = int(payload.get("sizeBytes", 0))
             except (TypeError, ValueError):
                 size_bytes = 0
-            result = self._call(name, str(payload.get("fileName", "")), size_bytes)
+            page_count = payload.get("pageCount")
+            try:
+                page_count = int(page_count) if page_count is not None else None
+            except (TypeError, ValueError):
+                page_count = None
+            result = self._call(name, str(payload.get("fileName", "")), size_bytes, page_count,
+                                payload.get("encrypted") is True, payload.get("readable") is not False)
             if result.get("ok"):
                 self.state["uploadedFile"] = payload.get("fileName")
             return self._tool_reply(result["message"], tool_result=result, remember=remember)
@@ -452,13 +556,14 @@ class Agent:
         self._save()
         return self._result([message], [], [], handoff)
 
-    def upload(self, file_name: str, size_bytes: int) -> dict[str, Any]:
+    def upload(self, file_name: str, size_bytes: int, page_count: int | None = None,
+               encrypted: bool = False, readable: bool = True) -> dict[str, Any]:
         self.trace = []
-        check = self._call("preflight_file", file_name, size_bytes)
+        check = self._call("preflight_file", file_name, size_bytes, page_count, encrypted, readable)
         if check["ok"]:
             self.state["uploadedFile"] = file_name
             self._save()
-        return self._result([check["message"]])
+        return self._result([check["message"]], tool_result=check)
 
     def set_platform(self, platform_id: str) -> dict[str, Any]:
         platform_id = platform_id if platform_id in PLATFORMS else "generic"
@@ -484,7 +589,8 @@ class Agent:
                 "selectedOption": self.state["selectedOption"], "orderGenerated": self.state["orderGenerated"],
                 "uploadedFile": self.state["uploadedFile"], "toolTrace": self.trace,
                 "availableTools": self.available_tools(), "toolResult": tool_result, "handoff": handoff,
-                "history": deepcopy(self.state["messages"]), "readiness": validation["readiness"],
+                "history": deepcopy(self.state["messages"]), "validation": validation,
+                "readiness": validation["readiness"],
                 "missingFields": validation["missing"],
                 "llm": self.planner.public_config() if self.planner and hasattr(self.planner, "public_config") else None,
                 "productProfile": parameter_state(self.state["order"]), "nextAction": self._next_action(validation)}

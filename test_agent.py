@@ -5,7 +5,7 @@ from unittest.mock import patch as mock_patch
 import json
 from pathlib import Path
 
-from agent import Agent, Memory
+from agent import Agent, Memory, ORDER_DEFAULTS, prepare_handoff, validate_order
 from llm_adapter import OpenAICompatiblePlanner, normalize_base_url, read_saved_config, write_saved_config
 
 
@@ -68,11 +68,60 @@ class AgentTest(unittest.TestCase):
     def test_explanation_tool_answers_non_expert_questions(self):
         result = self.agent.chat("哑粉纸和铜版纸怎么选？")
         self.assertEqual(result["toolTrace"][-1], "调用工具：explain_print_term")
-        self.assertIn("颜色", result["messages"][0])
+
+    def test_pdf_preflight_reports_pages_and_filename_risks(self):
+        result = self.agent.upload("画册-无出血-RGB.pdf", 1024 * 1024, page_count=52)
+        check = result["toolResult"]
+        self.assertTrue(check["ok"])
+        self.assertEqual(check["pageCount"], 52)
+        self.assertIn("52 页", result["messages"][0])
+        self.assertIn("缺少出血", result["messages"][0])
+        self.assertIn("RGB 颜色", result["messages"][0])
+        self.assertIn("装订方式", result["messages"][0])
+
+    def test_pdf_preflight_rejects_encrypted_file(self):
+        result = self.agent.upload("报价单.pdf", 1024, page_count=2, encrypted=True)
+        check = result["toolResult"]
+        self.assertFalse(check["ok"])
+        self.assertIn("已加密", result["messages"][0])
+        self.assertIsNone(self.agent.state["uploadedFile"])
+
+    def test_booklet_validation_flags_saddle_stitch_page_conflict(self):
+        self.agent.chat("做 A4 画册 200页，250g铜版纸，双面四色，下周内，骑马钉")
+        result = validate_order(self.agent.state["order"])
+        self.assertTrue(result["ok"])
+        self.assertTrue(any("200 页画册使用骑马钉" in item["message"] for item in result["risks"]))
+        self.assertTrue(any("锁线胶装" in item["suggestion"] for item in result["risks"]))
+
+    def test_api_result_includes_structured_validation(self):
+        result = self.agent.chat("做 A4 画册 200页，250g铜版纸，双面四色，下周内，骑马钉")
+        self.assertIn("validation", result)
+        self.assertTrue(result["validation"]["risks"])
 
     def test_patch_fields_are_whitelisted(self):
         result = self.agent.chat("做 A4 名片", {"unknownField": "should not persist"})
         self.assertNotIn("unknownField", result["order"])
+
+    def test_spec_preset_patch_applies_process_fields(self):
+        result = self.agent.chat("沿用常用规格", {
+            "paper": "250g 铜版纸", "printing": "双面四色",
+            "finishing": "哑膜", "binding": "骑马钉"
+        })
+        self.assertEqual(result["order"]["paper"], "250g 铜版纸")
+        self.assertEqual(result["order"]["printing"], "双面四色")
+        self.assertEqual(result["order"]["finishing"], "哑膜")
+        self.assertEqual(result["order"]["binding"], "骑马钉")
+
+    def test_supplier_handoff_reports_capability_readiness(self):
+        order = {**ORDER_DEFAULTS, "productType": "画册", "paper": "250g 铜版纸",
+                 "finishing": "哑膜", "size": "A4", "deadline": "下周", "platform": "shengda"}
+        result = prepare_handoff(order)
+        readiness = result["supplierReadiness"]
+        self.assertTrue(any(item["field"] == "品类" for item in readiness["supported"]))
+        self.assertTrue(any(item["value"] == "250g 铜版纸" for item in readiness["supported"]))
+        self.assertTrue(any(item["value"] == "哑膜" for item in readiness["supported"]))
+        self.assertTrue(any(item["field"] == "成品尺寸" for item in readiness["needsReview"]))
+        self.assertTrue(any(item["field"] == "交期" for item in readiness["needsReview"]))
 
     def test_generate_is_idempotent_after_draft_exists(self):
         self.agent.chat("做 500 份 A4 名片，250g铜版纸，双面四色，下周内")

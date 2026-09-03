@@ -59,6 +59,17 @@
             </div>
           </section>
 
+          <section class="history-panel" aria-label="订单历史">
+            <div class="tool-panel-heading"><span>订单历史</span><span id="history-count">0 单</span></div>
+            <div class="history-list" id="history-list"></div>
+          </section>
+
+          <section class="preset-panel" aria-label="常用规格">
+            <div class="tool-panel-heading"><span>常用规格</span><span id="preset-count">0 组</span></div>
+            <div class="preset-list" id="preset-list"></div>
+            <button class="preset-save" id="save-preset" type="button">保存当前工艺组合</button>
+          </section>
+
           <section class="catalog-panel" aria-label="产品索引">
             <div class="tool-panel-heading"><span>产品索引</span><span>官网分类</span></div>
             <div class="catalog-list" id="catalog-list"></div>
@@ -175,6 +186,15 @@
                 <div class="field-list" id="process-fields"></div>
               </div>
             </details>
+          </div>
+
+          <div class="risk-panel" id="risk-panel" hidden>
+            <div class="risk-heading">
+              <p class="eyebrow">ORDER RISKS</p>
+              <h3>风险与缺失</h3>
+              <span class="risk-count" id="risk-count">0 项</span>
+            </div>
+            <div class="risk-list" id="risk-list"></div>
           </div>
 
           <div class="recommendations" id="recommendations" hidden>

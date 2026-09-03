@@ -142,7 +142,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "/api/chat": lambda agent: agent.chat(str(body.get("text", "")), body.get("patch")),
                 "/api/choose": lambda agent: agent.choose(str(body.get("optionId", ""))),
                 "/api/generate": lambda agent: agent.generate(),
-                "/api/preflight": lambda agent: agent.upload(str(body.get("fileName", "")), int(body.get("sizeBytes", 0))),
+                "/api/preflight": lambda agent: agent.upload(
+                    str(body.get("fileName", "")), int(body.get("sizeBytes", 0)),
+                    int(body["pageCount"]) if body.get("pageCount") is not None else None,
+                    body.get("encrypted") is True, body.get("readable") is not False),
                 "/api/platform": lambda agent: agent.set_platform(str(body.get("platformId", "generic"))),
                 "/api/tools/call": lambda agent: agent.call_tool(str(body.get("toolName", "")), body.get("payload", {})),
             }

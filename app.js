@@ -60,6 +60,199 @@ let updatedSpecKeys = new Set();
 let suppressOrderDiff = true;
 let fileFeedback = null;
 let pdfPreview = null;
+const orderHistoryKey = "printops_order_history";
+const specPresetKey = "printops_spec_presets";
+
+function loadOrderHistory() {
+  try {
+    const history = JSON.parse(localStorage.getItem(orderHistoryKey) || "[]");
+    return Array.isArray(history) ? history.filter((item) => item?.id && item.order) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOrderHistory(history) {
+  try { localStorage.setItem(orderHistoryKey, JSON.stringify(history.slice(0, 8))); }
+  catch { showToast("订单历史保存空间已满，请清理浏览器数据"); }
+}
+
+function orderHasContent(order = {}) {
+  return Boolean(order.productType || order.quantity || order.orderGenerated);
+}
+
+function orderHistoryTitle(order = {}) {
+  return order.productType || order.quantity ? `${order.productType || "未分类"} · ${order.quantity || "待定数量"}` : "订单草稿";
+}
+
+function formatOrderHistoryTime(timestamp) {
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
+}
+
+function rememberOrderHistory() {
+  if (!sessionId || !orderHasContent(state.order)) return;
+  const history = loadOrderHistory();
+  const record = {
+    id: sessionId,
+    order: structuredClone(state.order || {}),
+    stage: state.stage || "collect",
+    orderGenerated: Boolean(state.orderGenerated),
+    updatedAt: Date.now()
+  };
+  const existingIndex = history.findIndex((item) => item.id === sessionId);
+  if (existingIndex >= 0) history.splice(existingIndex, 1);
+  saveOrderHistory([record, ...history]);
+}
+
+function renderOrderHistory() {
+  const root = $("#history-list");
+  const history = loadOrderHistory();
+  $("#history-count").textContent = `${history.length} 单`;
+  root.innerHTML = "";
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "开始填写后会自动记录。";
+    root.append(empty);
+    return;
+  }
+  history.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.dataset.sessionId = item.id;
+    button.setAttribute("aria-current", String(item.id === sessionId));
+    const title = document.createElement("strong");
+    title.textContent = orderHistoryTitle(item.order);
+    const meta = document.createElement("small");
+    meta.textContent = `${item.orderGenerated ? "已生成" : item.stage === "recommend" ? "已选方案" : "编辑中"} · ${formatOrderHistoryTime(item.updatedAt)}`;
+    button.append(title, meta);
+    root.append(button);
+  });
+}
+
+function loadSpecPresets() {
+  try {
+    const presets = JSON.parse(localStorage.getItem(specPresetKey) || "[]");
+    return Array.isArray(presets) ? presets.filter((item) => item?.id && item.fields) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSpecPresets(presets) {
+  try { localStorage.setItem(specPresetKey, JSON.stringify(presets.slice(0, 8))); }
+  catch { showToast("常用规格保存空间已满，请清理浏览器数据"); }
+}
+
+function currentSpecPresetFields(order = {}) {
+  return {
+    paper: order.paper || "",
+    printing: order.printing || "",
+    finishing: order.finishing || "",
+    binding: order.binding || ""
+  };
+}
+
+function specPresetHasContent(fields = {}) {
+  return Object.values(fields).some((value) => hasValue(value));
+}
+
+function specPresetTitle(fields = {}) {
+  const parts = ["paper", "printing", "finishing", "binding"].map((key) => fields[key]).filter(Boolean);
+  return parts.length ? parts.join(" · ") : "未命名规格";
+}
+
+function renderSpecPresets() {
+  const root = $("#preset-list");
+  const presets = loadSpecPresets();
+  $("#preset-count").textContent = `${presets.length} 组`;
+  $("#save-preset").disabled = !specPresetHasContent(currentSpecPresetFields(state.order));
+  root.innerHTML = "";
+  if (!presets.length) {
+    const empty = document.createElement("p");
+    empty.className = "preset-empty";
+    empty.textContent = "保存后可快速复用。";
+    root.append(empty);
+    return;
+  }
+  presets.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "preset-item";
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "preset-apply";
+    apply.dataset.presetId = item.id;
+    const title = document.createElement("strong");
+    title.textContent = specPresetTitle(item.fields);
+    const meta = document.createElement("small");
+    meta.textContent = formatOrderHistoryTime(item.createdAt);
+    apply.append(title, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "preset-remove";
+    remove.dataset.presetId = item.id;
+    remove.setAttribute("aria-label", `删除规格 ${specPresetTitle(item.fields)}`);
+    remove.textContent = "×";
+    row.append(apply, remove);
+    root.append(row);
+  });
+}
+
+function saveCurrentSpecPreset() {
+  const fields = currentSpecPresetFields(state.order);
+  if (!specPresetHasContent(fields)) {
+    showToast("请先补充纸张、颜色、工艺或装订");
+    return;
+  }
+  const presets = loadSpecPresets();
+  const signature = JSON.stringify(fields);
+  const existingIndex = presets.findIndex((item) => JSON.stringify(item.fields) === signature);
+  if (existingIndex >= 0) presets.splice(existingIndex, 1);
+  presets.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, fields, createdAt: Date.now() });
+  saveSpecPresets(presets);
+  renderSpecPresets();
+  showToast("常用规格已保存");
+}
+
+async function applySpecPreset(presetId) {
+  const preset = loadSpecPresets().find((item) => item.id === presetId);
+  if (!preset || isSending) return;
+  const patch = Object.fromEntries(Object.entries(preset.fields).filter(([, value]) => hasValue(value)));
+  if (!Object.keys(patch).length) return;
+  await sendMessage("沿用常用规格", patch);
+}
+
+function removeSpecPreset(presetId) {
+  saveSpecPresets(loadSpecPresets().filter((item) => item.id !== presetId));
+  renderSpecPresets();
+  showToast("常用规格已删除");
+}
+
+async function switchOrder(orderId) {
+  if (!orderId || orderId === sessionId || isSending) return;
+  setComposerBusy(true);
+  try {
+    const snapshot = await api("/api/session", { sessionId: orderId });
+    $("#chat-feed").innerHTML = "";
+    fileFeedback = null;
+    clearPdfPreview();
+    suppressOrderDiff = true;
+    state = { order: {}, stage: "collect", quickReplies: [], options: [], selectedOption: null, orderGenerated: false, toolTrace: [], availableTools: state.availableTools || [], productProfile: null };
+    render(snapshot, false);
+    $("#platform-select").value = snapshot.order?.platform || "generic";
+    const messages = Array.isArray(snapshot.history) ? snapshot.history : [];
+    if (messages.length) {
+      addMessage("assistant", `已切换到订单 ${orderHistoryTitle(snapshot.order)}。`);
+      messages.forEach((message) => addMessage(message.role === "user" ? "user" : "assistant", message.text || ""));
+    } else addMessage("assistant", "已切换到这个订单。当前没有保存的对话内容，可以直接继续补充。");
+    showToast("订单已切换");
+  } catch (error) {
+    showToast(apiErrorText(error, "订单切换失败，请重试。"));
+  } finally {
+    setComposerBusy(false);
+  }
+}
 
 async function api(path, body, method = "POST", options = {}) {
   const response = await fetch(path, {
@@ -212,11 +405,15 @@ function render(data, showMessages = true) {
     addMessage(typeof message === "string" ? "assistant" : message.role || "assistant", typeof message === "string" ? message : message.text || "");
   });
   renderDraft();
+  renderValidation();
   renderFileState();
   renderQuickReplies();
   renderOptions();
   renderTools();
   renderProgress();
+  rememberOrderHistory();
+  renderOrderHistory();
+  renderSpecPresets();
   $("#agent-trace").textContent = data.toolTrace?.length ? data.toolTrace.join("  /  ") : "等待输入";
   $("#memory-status").textContent = data.nextAction || (data.stage === "confirm" ? "订单记忆已锁定，等待人工确认。" : data.order?.productType ? "订单记忆已保存，可继续补充或修改。" : "等待第一条需求，Agent 将自动建立订单记忆。");
   $("#agent-status").innerHTML = '<span class="status-dot"></span>Agent 在线';
@@ -348,6 +545,34 @@ function renderDraft() {
   syncDraftGroups(Boolean(state.order.productType), fields.process.some((key) => hasValue(getFieldValue(key))) || Boolean(state.selectedOption));
 }
 
+function renderValidation() {
+  const validation = state.validation || { missing: [], risks: [] };
+  const missingRisks = (validation.missing || []).map((field) => ({
+    level: "missing",
+    message: `缺少必填字段：${field}`,
+    suggestion: "可直接发送内容补充，或在订单草稿中查看待补充项。"
+  }));
+  const risks = [...missingRisks, ...(validation.risks || [])];
+  const panel = $("#risk-panel");
+  panel.hidden = risks.length === 0;
+  $("#risk-count").textContent = `${risks.length} 项`;
+  const list = $("#risk-list");
+  list.innerHTML = "";
+  risks.forEach((item) => {
+    const risk = document.createElement("div");
+    risk.className = `risk-item risk-${item.level || "warning"}`;
+    const message = document.createElement("strong");
+    message.textContent = item.message;
+    risk.append(message);
+    if (item.suggestion) {
+      const suggestion = document.createElement("small");
+      suggestion.textContent = `建议：${item.suggestion}`;
+      risk.append(suggestion);
+    }
+    list.appendChild(risk);
+  });
+}
+
 function renderParameterForm(profile) {
   const context = $("#product-context");
   context.hidden = !state.order?.productType;
@@ -476,7 +701,7 @@ function renderFileState() {
   const activePreview = pdfPreview && (!feedback || pdfPreview.fileName === feedback.fileName) ? pdfPreview : null;
   node.hidden = !feedback && !activePreview;
   if (!feedback && !activePreview) return;
-  node.className = `file-state ${feedback.ok ? "ok" : "error"}`;
+  node.className = `file-state ${feedback.ok && activePreview?.preflight?.ok !== false ? "ok" : "error"}`;
   node.innerHTML = "";
   const heading = document.createElement("div");
   heading.className = "file-state-heading";
@@ -511,13 +736,55 @@ function renderFileState() {
     openLink.rel = "noopener";
     openLink.textContent = "在新窗口打开 PDF";
     fallback.append("内置预览不可用时，", openLink);
-    heading.append(meta, viewer, fallback);
+    heading.append(meta);
+    if (activePreview.preflight) {
+      const checks = document.createElement("div");
+      checks.className = "file-checks";
+      activePreview.preflight.checks.forEach((item) => {
+        const check = document.createElement("div");
+        check.className = `file-check check-${item.status}`;
+        const term = document.createElement("span");
+        const detail = document.createElement("strong");
+        term.textContent = item.label;
+        detail.textContent = item.detail;
+        check.append(term, detail);
+        checks.appendChild(check);
+      });
+      if (activePreview.preflight.warnings.length) {
+        const warning = document.createElement("p");
+        warning.className = "file-warning";
+        warning.textContent = `需要确认：${activePreview.preflight.warnings.join("；")}`;
+        checks.append(warning);
+      }
+      heading.append(checks);
+    }
+    heading.append(viewer, fallback);
   } else {
     const detail = document.createElement("small");
     detail.textContent = feedback?.message || "";
     heading.append(detail);
   }
   node.append(heading);
+}
+
+async function inspectPdf(file) {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const decoder = new TextDecoder("windows-1252");
+    const content = decoder.decode(bytes);
+    const header = decoder.decode(bytes.slice(0, 1024));
+    const tail = decoder.decode(bytes.slice(Math.max(0, bytes.length - 2048)));
+    return {
+      readable: true,
+      isPdf: header.startsWith("%PDF-"),
+      pdfVersion: header.match(/^%PDF-(\d\.\d)/)?.[1] || null,
+      pageCount: (content.match(/\/Type\s*\/Page\b/g) || []).length,
+      encrypted: /\/Encrypt\b/.test(content),
+      hasEof: tail.includes("%%EOF")
+    };
+  } catch (error) {
+    return { readable: false, isPdf: false, pdfVersion: null, pageCount: null, encrypted: false, hasEof: false };
+  }
 }
 
 function renderTools() {
@@ -653,6 +920,7 @@ function exportOrder(format) {
       selectedOption: state.selectedOption,
       order: state.order,
       productProfile: state.productProfile,
+      handoff: state.handoff ? { text: state.handoff.text, supplierReadiness: state.handoff.supplierReadiness } : null,
       fields: rows
     }, null, 2);
     contentType = "application/json;charset=utf-8";
@@ -701,18 +969,37 @@ async function uploadFile(file) {
     renderFileState();
     return;
   }
+  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
+  renderFileState();
+  const inspection = await inspectPdf(file);
+  if (!inspection.readable || !inspection.isPdf) {
+    clearPdfPreview();
+    fileFeedback = { ok: false, fileName: file.name, message: "文件不是有效的 PDF，或内容无法读取。" };
+    renderFileState();
+    addMessage("assistant", fileFeedback.message);
+    return;
+  }
   pdfPreview = {
     url: URL.createObjectURL(file),
     fileName: file.name,
     size: file.size,
     type: file.type || "application/pdf",
-    lastModified: file.lastModified
+    lastModified: file.lastModified,
+    inspection
   };
-  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
   renderFileState();
   try {
-    const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size });
+    const data = await api("/api/preflight", {
+      sessionId,
+      fileName: file.name,
+      sizeBytes: file.size,
+      pageCount: inspection.pageCount,
+      encrypted: inspection.encrypted,
+      readable: inspection.readable
+    });
     fileFeedback = null;
+    pdfPreview.preflight = data.toolResult || null;
+    if (data.toolResult && !data.toolResult.ok) fileFeedback = data.toolResult;
     render(data);
   } catch (error) {
     clearPdfPreview();
@@ -739,6 +1026,17 @@ $("#drop-zone").addEventListener("drop", (event) => {
 $("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败")); } });
 $("#sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
 $("#theme-toggle").addEventListener("click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
+$("#history-list").addEventListener("click", (event) => {
+  const item = event.target.closest(".history-item");
+  if (item) switchOrder(item.dataset.sessionId);
+});
+$("#save-preset").addEventListener("click", saveCurrentSpecPreset);
+$("#preset-list").addEventListener("click", (event) => {
+  const apply = event.target.closest(".preset-apply");
+  if (apply) applySpecPreset(apply.dataset.presetId);
+  const remove = event.target.closest(".preset-remove");
+  if (remove) removeSpecPreset(remove.dataset.presetId);
+});
 $("#reset-order").addEventListener("click", async () => {
   chatRequestSeq += 1;
   activeChatController?.abort();
@@ -819,7 +1117,20 @@ async function bootstrap() {
       api("/api/platforms", undefined, "GET"), api("/api/products", undefined, "GET"),
       api("/api/tools", undefined, "GET"), api("/api/settings", undefined, "GET")
     ]);
-    $("#platform-select").innerHTML = platforms.platforms.map((item) => `<option value="${item.id}">${item.name}</option>`).join("");
+    const platformSelect = $("#platform-select");
+    platformSelect.innerHTML = "";
+    platforms.platforms.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      const profile = item.supplierProfile || {};
+      option.title = [
+        `品类：${(profile.categories || []).join("、") || "待补充"}`,
+        `最大尺寸：${profile.maxSize || "待补充"}`,
+        `交期参考：${profile.leadTime || "待补充"}`
+      ].join("\n");
+      platformSelect.appendChild(option);
+    });
     renderCatalog(products.categories || []);
     renderSettings(settings);
     const snapshot = await api("/api/session", sessionId ? { sessionId } : {});
