@@ -59,6 +59,7 @@ let updatedOrderKeys = new Set();
 let updatedSpecKeys = new Set();
 let suppressOrderDiff = true;
 let fileFeedback = null;
+let pdfPreview = null;
 
 async function api(path, body, method = "POST", options = {}) {
   const response = await fetch(path, {
@@ -80,6 +81,23 @@ async function api(path, body, method = "POST", options = {}) {
 function apiErrorText(error, fallback) {
   const base = error?.message || fallback;
   return error?.requestId ? `${base}（请求号 ${error.requestId}）` : base;
+}
+
+function clearPdfPreview() {
+  if (pdfPreview?.url) URL.revokeObjectURL(pdfPreview.url);
+  pdfPreview = null;
+}
+
+function formatFileSize(sizeBytes) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "未知大小";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileTime(timestamp) {
+  if (!timestamp) return "未知时间";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -455,15 +473,51 @@ function renderOptions() {
 function renderFileState() {
   const node = $("#file-state");
   const feedback = fileFeedback || (state.uploadedFile ? { ok: true, fileName: state.uploadedFile, message: "基础检查已通过。" } : null);
-  node.hidden = !feedback;
-  if (!feedback) return;
+  const activePreview = pdfPreview && (!feedback || pdfPreview.fileName === feedback.fileName) ? pdfPreview : null;
+  node.hidden = !feedback && !activePreview;
+  if (!feedback && !activePreview) return;
   node.className = `file-state ${feedback.ok ? "ok" : "error"}`;
   node.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "file-state-heading";
   const name = document.createElement("strong");
-  name.textContent = feedback.fileName || "未命名文件";
-  const detail = document.createElement("small");
-  detail.textContent = feedback.message || "";
-  node.append(name, detail);
+  name.textContent = activePreview?.fileName || feedback?.fileName || "未命名文件";
+  heading.append(name);
+  if (activePreview) {
+    const meta = document.createElement("div");
+    meta.className = "file-meta";
+    [
+      ["大小", formatFileSize(activePreview.size)],
+      ["类型", activePreview.type === "application/pdf" ? "PDF" : activePreview.type || "PDF"],
+      ["修改时间", formatFileTime(activePreview.lastModified)]
+    ].forEach(([label, value]) => {
+      const item = document.createElement("div");
+      const term = document.createElement("span");
+      const detail = document.createElement("strong");
+      term.textContent = label;
+      detail.textContent = value;
+      item.append(term, detail);
+      meta.append(item);
+    });
+    const viewer = document.createElement("iframe");
+    viewer.className = "pdf-viewer";
+    viewer.title = `${activePreview.fileName} 预览`;
+    viewer.src = activePreview.url;
+    const fallback = document.createElement("div");
+    fallback.className = "pdf-preview-fallback";
+    const openLink = document.createElement("a");
+    openLink.href = activePreview.url;
+    openLink.target = "_blank";
+    openLink.rel = "noopener";
+    openLink.textContent = "在新窗口打开 PDF";
+    fallback.append("内置预览不可用时，", openLink);
+    heading.append(meta, viewer, fallback);
+  } else {
+    const detail = document.createElement("small");
+    detail.textContent = feedback?.message || "";
+    heading.append(detail);
+  }
+  node.append(heading);
 }
 
 function renderTools() {
@@ -631,6 +685,7 @@ $("#toggle-draft-groups").addEventListener("click", () => {
 });
 document.querySelectorAll(".draft-group").forEach((group) => group.addEventListener("toggle", updateDraftToggle));
 async function uploadFile(file) {
+  clearPdfPreview();
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".pdf")) {
     fileFeedback = { ok: false, fileName: file.name, message: "MVP 暂只支持 PDF 文件。" };
@@ -640,8 +695,31 @@ async function uploadFile(file) {
     return;
   }
   addMessage("user", `上传文件：${file.name}`);
-  try { const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size }); render(data); }
-  catch (error) { addMessage("assistant", apiErrorText(error, "文件预检调用失败，请重试。")); }
+  if (file.size > 20 * 1024 * 1024) {
+    fileFeedback = { ok: false, fileName: file.name, message: "文件超过 20 MB，请压缩后再上传。" };
+    addMessage("assistant", fileFeedback.message);
+    renderFileState();
+    return;
+  }
+  pdfPreview = {
+    url: URL.createObjectURL(file),
+    fileName: file.name,
+    size: file.size,
+    type: file.type || "application/pdf",
+    lastModified: file.lastModified
+  };
+  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
+  renderFileState();
+  try {
+    const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size });
+    fileFeedback = null;
+    render(data);
+  } catch (error) {
+    clearPdfPreview();
+    fileFeedback = { ok: false, fileName: file.name, message: apiErrorText(error, "文件预检调用失败，请重试。") };
+    renderFileState();
+    addMessage("assistant", fileFeedback.message);
+  }
 }
 $("#upload-button").addEventListener("click", () => $("#file-input").click());
 $("#drop-zone").addEventListener("click", () => $("#file-input").click());
@@ -673,6 +751,7 @@ $("#reset-order").addEventListener("click", async () => {
   sessionId = "";
   suppressOrderDiff = true;
   fileFeedback = null;
+  clearPdfPreview();
   await bootstrap();
 });
 

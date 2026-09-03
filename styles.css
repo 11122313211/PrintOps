@@ -244,10 +244,20 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .drop-zone strong { font-size: 12px; }
 .drop-zone small { color: var(--quiet); font-size: 9px; }
 .drop-zone.is-dragging { background: #fdf0e0; border-color: var(--red); transform: scale(1.01); }
-.file-state { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; padding: 10px; color: var(--ink-soft); background: var(--paper-light); border: 1px solid var(--rule-light); border-radius: var(--radius-sm); font-size: 10px; }
+.file-state { display: block; margin-bottom: 12px; padding: 10px; color: var(--ink-soft); background: var(--paper-light); border: 1px solid var(--rule-light); border-radius: var(--radius-sm); font-size: 10px; }
 .file-state.ok { border-color: rgba(70, 107, 93, .45); }
 .file-state.error { border-color: rgba(163, 74, 62, .55); }
 .file-state small { color: var(--quiet); display: block; margin-top: 3px; }
+.file-state-heading { display: block; }
+.file-state-heading > strong { display: block; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.file-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }
+.file-meta div { display: flex; justify-content: space-between; gap: 7px; padding-bottom: 4px; border-bottom: 1px dashed var(--rule-light); }
+.file-meta span { color: var(--quiet); }
+.file-meta strong { color: var(--ink); font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+.pdf-viewer { width: 100%; height: min(54vh, 420px); margin-top: 9px; background: #ede6da; border: 1px solid var(--rule); border-radius: 6px; }
+.pdf-preview-fallback { margin-top: 7px; color: var(--quiet); }
+.pdf-preview-fallback a { color: var(--red); font-weight: 700; text-underline-offset: 2px; }
+.pdf-preview-fallback a:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 .recommendations { margin-top: 16px; padding-top: 14px; border-top: 3px double var(--rule); }
 .recommendation-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 11px; }
 .recommendation-count { color: var(--quiet); font-family: ui-monospace, monospace; font-size: 9px; }
@@ -333,6 +343,8 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
   .progress-panel { padding-bottom: 17px; }
   .step-list { grid-template-columns: repeat(3,1fr); gap: 6px; margin-top: 18px; }
   .step { display: block; text-align: center; }
+  .file-meta { grid-template-columns: 1fr; }
+  .pdf-viewer { height: min(46vh, 360px); }
   .step-index { margin: 0 auto 7px; }
   .step small, .tip-panel { display: none; }
   .tool-panel { display: block; margin-top: 16px; }
