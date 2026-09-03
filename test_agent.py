@@ -5,7 +5,7 @@ from unittest.mock import patch as mock_patch
 import json
 from pathlib import Path
 
-from agent import Agent, Memory
+from agent import Agent, Memory, validate_order
 from llm_adapter import OpenAICompatiblePlanner, normalize_base_url, read_saved_config, write_saved_config
 
 
@@ -85,6 +85,18 @@ class AgentTest(unittest.TestCase):
         self.assertFalse(check["ok"])
         self.assertIn("已加密", result["messages"][0])
         self.assertIsNone(self.agent.state["uploadedFile"])
+
+    def test_booklet_validation_flags_saddle_stitch_page_conflict(self):
+        self.agent.chat("做 A4 画册 200页，250g铜版纸，双面四色，下周内，骑马钉")
+        result = validate_order(self.agent.state["order"])
+        self.assertTrue(result["ok"])
+        self.assertTrue(any("200 页画册使用骑马钉" in item["message"] for item in result["risks"]))
+        self.assertTrue(any("锁线胶装" in item["suggestion"] for item in result["risks"]))
+
+    def test_api_result_includes_structured_validation(self):
+        result = self.agent.chat("做 A4 画册 200页，250g铜版纸，双面四色，下周内，骑马钉")
+        self.assertIn("validation", result)
+        self.assertTrue(result["validation"]["risks"])
 
     def test_patch_fields_are_whitelisted(self):
         result = self.agent.chat("做 A4 名片", {"unknownField": "should not persist"})

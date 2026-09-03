@@ -284,11 +284,19 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     missing = [LABELS[key] for key in required_keys if not order.get(key)]
     warnings = []
     suggestions = []
+    risks = []
     profile = parameter_state(order)
     product_missing = [item["label"] for item in profile["missing"]]
     if order.get("productType") in {"宣传册", "画册"} and not order.get("binding"):
         warnings.append("宣传册/画册尚未确认装订方式")
         suggestions.append("页数少于 48 页可优先考虑骑马钉，页数较多再考虑胶装")
+    page_count = _number(order.get("pages", ""))
+    if (order.get("productType") in {"宣传册", "画册"} and order.get("binding") == "骑马钉"
+            and page_count is not None and page_count >= 48):
+        message = f"{page_count} 页画册使用骑马钉，装订强度和摊平度可能不足"
+        warnings.append(message)
+        suggestions.append("页数达到 48 页或更多时，优先确认胶装、锁线胶装或特殊装订")
+        risks.append({"level": "warning", "message": message, "suggestion": suggestions[-1]})
     if order.get("finishing") in {"烫金", "烫金 / 击凸"}:
         warnings.append("烫金需要确认文件专色、线条粗细和加急交期")
     if order.get("printing") == "双面四色" and order.get("productType") in {"宣传册", "画册"} and not order.get("pages"):
@@ -309,7 +317,7 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     readiness = round((len(required_keys) - len(missing)) / len(required_keys) * 100) if required_keys else 100
     return {"ok": not missing and quantity != 0, "missing": missing, "productMissing": product_missing,
             "productProfile": profile, "warnings": warnings, "suggestions": suggestions,
-            "readiness": readiness, "productReadiness": profile["readiness"]}
+            "risks": risks, "readiness": readiness, "productReadiness": profile["readiness"]}
 
 
 class Agent:
@@ -546,7 +554,8 @@ class Agent:
                 "selectedOption": self.state["selectedOption"], "orderGenerated": self.state["orderGenerated"],
                 "uploadedFile": self.state["uploadedFile"], "toolTrace": self.trace,
                 "availableTools": self.available_tools(), "toolResult": tool_result, "handoff": handoff,
-                "history": deepcopy(self.state["messages"]), "readiness": validation["readiness"],
+                "history": deepcopy(self.state["messages"]), "validation": validation,
+                "readiness": validation["readiness"],
                 "missingFields": validation["missing"],
                 "llm": self.planner.public_config() if self.planner and hasattr(self.planner, "public_config") else None,
                 "productProfile": parameter_state(self.state["order"]), "nextAction": self._next_action(validation)}

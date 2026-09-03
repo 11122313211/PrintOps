@@ -306,6 +306,7 @@ function render(data, showMessages = true) {
     addMessage(typeof message === "string" ? "assistant" : message.role || "assistant", typeof message === "string" ? message : message.text || "");
   });
   renderDraft();
+  renderValidation();
   renderFileState();
   renderQuickReplies();
   renderOptions();
@@ -442,6 +443,34 @@ function renderDraft() {
   $("#copy-order").disabled = !state.orderGenerated;
   $("#order-export").hidden = !state.orderGenerated;
   syncDraftGroups(Boolean(state.order.productType), fields.process.some((key) => hasValue(getFieldValue(key))) || Boolean(state.selectedOption));
+}
+
+function renderValidation() {
+  const validation = state.validation || { missing: [], risks: [] };
+  const missingRisks = (validation.missing || []).map((field) => ({
+    level: "missing",
+    message: `缺少必填字段：${field}`,
+    suggestion: "可直接发送内容补充，或在订单草稿中查看待补充项。"
+  }));
+  const risks = [...missingRisks, ...(validation.risks || [])];
+  const panel = $("#risk-panel");
+  panel.hidden = risks.length === 0;
+  $("#risk-count").textContent = `${risks.length} 项`;
+  const list = $("#risk-list");
+  list.innerHTML = "";
+  risks.forEach((item) => {
+    const risk = document.createElement("div");
+    risk.className = `risk-item risk-${item.level || "warning"}`;
+    const message = document.createElement("strong");
+    message.textContent = item.message;
+    risk.append(message);
+    if (item.suggestion) {
+      const suggestion = document.createElement("small");
+      suggestion.textContent = `建议：${item.suggestion}`;
+      risk.append(suggestion);
+    }
+    list.appendChild(risk);
+  });
 }
 
 function renderParameterForm(profile) {

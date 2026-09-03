@@ -277,6 +277,17 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .check-unknown strong { color: var(--quiet); }
 .file-warning { grid-column: 1 / -1; margin: 0; font-size: 11px; }
 .recommendations { margin-top: 16px; padding-top: 14px; border-top: 3px double var(--rule); }
+.risk-panel { display: grid; gap: 9px; margin-bottom: 14px; padding: 12px; background: rgba(255, 247, 235, .78); border: 1px solid rgba(190, 128, 70, .34); border-radius: var(--radius-md); }
+.risk-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.risk-heading h3 { margin: 2px 0 0; font-size: 13px; }
+.risk-count { color: #8a5200; font-family: ui-monospace, monospace; font-size: 10px; font-weight: 800; }
+.risk-list { display: grid; gap: 7px; }
+.risk-item { padding: 8px 9px; background: rgba(255, 255, 255, .7); border-left: 3px solid #d19a3d; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.risk-item strong { display: block; color: var(--ink); font-size: 11px; line-height: 1.45; }
+.risk-item small { display: block; margin-top: 3px; color: var(--quiet); font-size: 9px; line-height: 1.45; }
+.risk-missing { border-left-color: var(--red); }
+.risk-warning { border-left-color: #d19a3d; }
+.risk-error { border-left-color: var(--red); }
 .recommendation-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 11px; }
 .recommendation-count { color: var(--quiet); font-family: ui-monospace, monospace; font-size: 9px; }
 .option-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
