@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f6f7f3" />
+    <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20260903-5" />
+    <link rel="stylesheet" href="styles.css?v=20260903-7" />
   </head>
   <body>
     <div class="app-shell">
@@ -24,6 +24,7 @@
             </select>
           </label>
           <span class="connection-status" id="agent-status"><span class="status-dot"></span>正在连接</span>
+          <button class="icon-button" id="theme-toggle" type="button" title="切换高对比模式">高对比</button>
           <button class="icon-button" id="settings-button" type="button" title="配置模型接口">接口设置</button>
           <button class="icon-button" id="reset-order" type="button" title="重置当前订单">重置</button>
         </div>
@@ -124,6 +125,11 @@
             </div>
           </div>
 
+          <button class="drop-zone" id="drop-zone" type="button" aria-label="拖拽或点击上传 PDF 文件">
+            <strong>拖拽 PDF 到这里</strong>
+            <small>或点击选择文件 · 单个文件不超过 20 MB</small>
+          </button>
+
           <div class="draft-groups" id="draft-groups">
             <details class="draft-group" data-draft-group="overview" open>
               <summary>
@@ -135,6 +141,7 @@
               </summary>
               <div class="draft-group-body">
                 <div class="field-list" id="overview-fields"></div>
+                <div class="file-state" id="file-state" hidden></div>
               </div>
             </details>
 
@@ -151,8 +158,8 @@
                   <p id="product-profile-summary"></p>
                   <span class="profile-readiness" id="product-profile-readiness">100%</span>
                 </div>
+                <div class="parameter-form" id="parameter-form" aria-label="产品专属参数"></div>
                 <div class="field-list" id="spec-fields"></div>
-                <div class="profile-params" id="product-profile-params"></div>
               </div>
             </details>
 
@@ -184,6 +191,14 @@
           <div class="order-actions">
             <button class="primary-action" id="generate-order" type="button" disabled>生成订单草稿</button>
             <button class="secondary-action" id="copy-order" type="button" disabled>复制订单信息</button>
+          </div>
+          <div class="order-export" id="order-export" hidden>
+            <span id="export-label">导出订单</span>
+            <div class="export-options" aria-labelledby="export-label">
+              <button class="export-option" type="button" data-format="json">JSON</button>
+              <button class="export-option" type="button" data-format="csv">CSV</button>
+              <button class="export-option" type="button" data-format="markdown">Markdown</button>
+            </div>
           </div>
         </aside>
       </main>
@@ -225,6 +240,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
-    <script src="app.js?v=20260903-5"></script>
+    <script src="app.js?v=20260903-7"></script>
   </body>
 </html>

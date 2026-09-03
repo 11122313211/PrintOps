@@ -54,6 +54,12 @@ let pendingMessage = null;
 let activeChatController = null;
 let chatRequestSeq = 0;
 let sidebarCollapsed = localStorage.getItem("printops_sidebar") === "collapsed";
+let previousOrder = {};
+let updatedOrderKeys = new Set();
+let updatedSpecKeys = new Set();
+let suppressOrderDiff = true;
+let fileFeedback = null;
+let pdfPreview = null;
 
 async function api(path, body, method = "POST", options = {}) {
   const response = await fetch(path, {
@@ -77,6 +83,23 @@ function apiErrorText(error, fallback) {
   return error?.requestId ? `${base}（请求号 ${error.requestId}）` : base;
 }
 
+function clearPdfPreview() {
+  if (pdfPreview?.url) URL.revokeObjectURL(pdfPreview.url);
+  pdfPreview = null;
+}
+
+function formatFileSize(sizeBytes) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "未知大小";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileTime(timestamp) {
+  if (!timestamp) return "未知时间";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
+}
+
 function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = Boolean(collapsed);
   $("#workspace")?.classList.toggle("sidebar-collapsed", sidebarCollapsed);
@@ -87,6 +110,17 @@ function setSidebarCollapsed(collapsed) {
     button.dataset.collapsed = String(sidebarCollapsed);
   }
   localStorage.setItem("printops_sidebar", sidebarCollapsed ? "collapsed" : "expanded");
+}
+
+function setHighContrast(enabled) {
+  document.documentElement.dataset.theme = enabled ? "high-contrast" : "";
+  const button = $("#theme-toggle");
+  if (button) {
+    button.setAttribute("aria-pressed", String(enabled));
+    button.textContent = enabled ? "标准对比" : "高对比";
+    button.title = enabled ? "切换回标准对比模式" : "切换到高对比模式";
+  }
+  localStorage.setItem("printops_theme", enabled ? "high-contrast" : "standard");
 }
 
 function addMessage(role, text) {
@@ -158,7 +192,7 @@ function setComposerBusy(busy) {
   if (upload) upload.disabled = busy;
   const platform = $("#platform-select");
   if (platform) platform.disabled = busy;
-  document.querySelectorAll("#quick-replies button, #tool-list button, #catalog-list button").forEach((button) => { button.disabled = busy; });
+  document.querySelectorAll("#quick-replies button, #tool-list button, #catalog-list button, #parameter-form input").forEach((item) => { item.disabled = busy; });
   if (busy) {
     $("#agent-status").innerHTML = '<span class="status-dot thinking"></span>正在处理';
     $("#agent-trace").textContent = "正在分析需求…";
@@ -167,6 +201,7 @@ function setComposerBusy(busy) {
 
 function render(data, showMessages = true) {
   state = { ...state, ...data, order: data.order || state.order };
+  trackOrderChanges(state.order);
   if (data.llm) renderSettings({ llm: data.llm });
   sessionId = data.sessionId || sessionId;
   if (sessionId) {
@@ -177,6 +212,7 @@ function render(data, showMessages = true) {
     addMessage(typeof message === "string" ? "assistant" : message.role || "assistant", typeof message === "string" ? message : message.text || "");
   });
   renderDraft();
+  renderFileState();
   renderQuickReplies();
   renderOptions();
   renderTools();
@@ -184,6 +220,21 @@ function render(data, showMessages = true) {
   $("#agent-trace").textContent = data.toolTrace?.length ? data.toolTrace.join("  /  ") : "等待输入";
   $("#memory-status").textContent = data.nextAction || (data.stage === "confirm" ? "订单记忆已锁定，等待人工确认。" : data.order?.productType ? "订单记忆已保存，可继续补充或修改。" : "等待第一条需求，Agent 将自动建立订单记忆。");
   $("#agent-status").innerHTML = '<span class="status-dot"></span>Agent 在线';
+}
+
+function trackOrderChanges(order) {
+  if (suppressOrderDiff) {
+    previousOrder = structuredClone(order || {});
+    updatedOrderKeys = new Set();
+    updatedSpecKeys = new Set();
+    suppressOrderDiff = false;
+    return;
+  }
+  const previousSpecs = previousOrder.productSpecs || {};
+  const currentSpecs = order.productSpecs || {};
+  updatedOrderKeys = new Set(Object.keys(order).filter((key) => key !== "productSpecs" && JSON.stringify(previousOrder[key]) !== JSON.stringify(order[key])));
+  updatedSpecKeys = new Set(Object.keys(currentSpecs).filter((key) => previousSpecs[key] !== currentSpecs[key]));
+  previousOrder = structuredClone(order || {});
 }
 
 function renderSettings(data) {
@@ -239,7 +290,7 @@ function renderFieldList(selector, keys) {
     const current = getFieldValue(key);
     const missing = !hasValue(current) && isRequiredField(key);
     const row = document.createElement("div");
-    row.className = `field-row ${missing ? "required-missing" : ""}`;
+    row.className = `field-row ${missing ? "required-missing" : ""} ${updatedOrderKeys.has(key) ? "updated" : ""}`;
     const label = document.createElement("span");
     label.className = "field-label";
     label.textContent = labels[key];
@@ -272,7 +323,7 @@ function renderDraft() {
   renderFieldList("#overview-fields", fields.overview);
   renderFieldList("#spec-fields", fields.specs);
   renderFieldList("#process-fields", fields.process);
-  renderProductProfile(profile);
+  renderParameterForm(profile);
 
   const overviewFilled = fields.overview.filter((key) => hasValue(getFieldValue(key))).length;
   const specFilled = fields.specs.filter((key) => hasValue(getFieldValue(key))).length + parameters.filter((item) => item.filled).length;
@@ -293,31 +344,58 @@ function renderDraft() {
   $("#generate-order").disabled = !readyToGenerate || state.orderGenerated;
   $("#generate-order").textContent = state.orderGenerated ? "订单草稿已生成" : !complete ? "补全信息后生成" : productMissing.length ? "补全规格后生成" : !state.selectedOption ? "选择方案后生成" : "生成订单草稿";
   $("#copy-order").disabled = !state.orderGenerated;
+  $("#order-export").hidden = !state.orderGenerated;
   syncDraftGroups(Boolean(state.order.productType), fields.process.some((key) => hasValue(getFieldValue(key))) || Boolean(state.selectedOption));
 }
 
-function renderProductProfile(profile) {
+function renderParameterForm(profile) {
   const context = $("#product-context");
   context.hidden = !state.order?.productType;
   $("#product-profile-summary").textContent = profile.summary || "先按通用字段收集订单信息。";
   $("#product-profile-readiness").textContent = `${profile.readiness ?? 100}%`;
-  const root = $("#product-profile-params");
+  const root = $("#parameter-form");
   root.innerHTML = "";
+  if (!state.order?.productType) return;
+  const title = document.createElement("p");
+  title.className = "parameter-form-title";
+  title.textContent = `${profile.category || "产品"}参数`;
+  root.appendChild(title);
   (profile.parameters || []).forEach((item) => {
-    const row = document.createElement("div");
-    row.className = `profile-param ${item.filled ? "filled" : item.required ? "missing" : "optional"}`;
-    const main = document.createElement("div");
-    main.className = "profile-param-main";
-    const label = document.createElement("strong");
-    label.textContent = item.label;
-    const status = document.createElement("span");
-    status.className = "profile-param-status";
-    status.textContent = item.filled ? item.value : item.required ? "待确认" : "可选";
-    main.append(label, status);
-    const detail = document.createElement("small");
-    detail.textContent = item.filled ? (item.hint || "已写入订单记忆") : (item.question || item.hint || "可在对话中补充");
-    row.append(main, detail);
-    root.appendChild(row);
+    const field = document.createElement("div");
+    field.className = `parameter-field ${!item.filled && item.required ? "missing" : ""}`;
+    const label = document.createElement("label");
+    label.htmlFor = `parameter-${item.key}`;
+    label.innerHTML = `${item.label}${item.required ? ' <span class="required-mark">*</span>' : ""}`;
+    const input = document.createElement("input");
+    input.id = `parameter-${item.key}`;
+    input.value = item.value || "";
+    input.placeholder = item.question || item.label;
+    input.setAttribute("aria-describedby", `parameter-hint-${item.key}`);
+    if (!item.filled && item.required) input.setAttribute("aria-invalid", "true");
+    input.addEventListener("change", () => {
+      const value = input.value.trim();
+      if (!value) {
+        field.classList.add("missing");
+        input.setAttribute("aria-invalid", "true");
+        showToast(`${item.label}是必填参数`);
+        return;
+      }
+      if (value === item.value) return;
+      field.classList.remove("missing");
+      input.removeAttribute("aria-invalid");
+      sendMessage(`更新${item.label}：${value}`, { productSpecs: { [item.key]: value } });
+    });
+    input.addEventListener("input", () => {
+      if (!input.value.trim()) return;
+      field.classList.remove("missing");
+      input.removeAttribute("aria-invalid");
+    });
+    const hint = document.createElement("small");
+    hint.className = "parameter-hint";
+    hint.id = `parameter-hint-${item.key}`;
+    hint.textContent = item.hint || (item.required ? "必填参数" : "可选参数");
+    field.append(label, input, hint);
+    root.appendChild(field);
   });
 }
 
@@ -353,14 +431,34 @@ function renderOptions() {
   options.forEach((option, index) => {
     const card = document.createElement("article");
     card.className = `option-card ${state.selectedOption === option.id ? "selected" : ""}`;
-    card.innerHTML = `${option.score === "综合推荐" || index === 1 ? '<span class="option-badge">推荐</span>' : ""}<div class="option-card-heading"><h4></h4><span class="option-score"></span></div><p></p><div class="option-meta"><span></span><span></span></div><div class="option-reason"></div><div class="option-risk"></div>`;
+    card.innerHTML = `${option.score === "综合推荐" || index === 1 ? '<span class="option-badge">推荐</span>' : ""}<div class="option-card-heading"><h4></h4><span class="option-score"></span></div><p></p><dl class="option-grid"></dl><button class="option-details-toggle" type="button">展开推荐理由</button><div class="option-details" hidden></div>`;
     card.querySelector("h4").textContent = option.title;
     card.querySelector(".option-score").textContent = option.score || "";
     card.querySelector("p").textContent = option.description;
-    card.querySelector(".option-meta span:first-child").textContent = option.cost;
-    card.querySelector(".option-meta span:last-child").textContent = option.lead;
-    card.querySelector(".option-reason").textContent = option.reason ? `适合：${option.reason}` : "";
-    card.querySelector(".option-risk").textContent = option.risk ? `注意：${option.risk}` : "";
+    [["成本", option.cost], ["交期", option.lead], ["材料", option.paper], ["工艺", option.finishing], ["装订", option.binding]].forEach(([name, value]) => {
+      if (!value) return;
+      const row = document.createElement("div");
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = name;
+      detail.textContent = value;
+      row.append(term, detail);
+      card.querySelector(".option-grid").appendChild(row);
+    });
+    const toggle = card.querySelector(".option-details-toggle");
+    const details = card.querySelector(".option-details");
+    details.innerHTML = "";
+    const reason = document.createElement("p");
+    reason.textContent = option.reason ? `适合：${option.reason}` : "";
+    const risk = document.createElement("p");
+    risk.textContent = option.risk ? `注意：${option.risk}` : "";
+    details.append(reason, risk);
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const visible = details.hidden;
+      details.hidden = !visible;
+      toggle.textContent = visible ? "收起推荐理由" : "展开推荐理由";
+    });
     card.addEventListener("click", async () => {
       try { render(await api("/api/choose", { sessionId, optionId: option.id })); }
       catch (error) { addMessage("assistant", apiErrorText(error, "方案选择暂时失败，请重试。")); }
@@ -370,6 +468,56 @@ function renderOptions() {
   if (options.length && state.stage === "recommend" && !state.orderGenerated) {
     requestAnimationFrame(() => recommendations.closest(".order-section")?.scrollTo({ top: Math.max(0, recommendations.offsetTop - 12), behavior: "smooth" }));
   }
+}
+
+function renderFileState() {
+  const node = $("#file-state");
+  const feedback = fileFeedback || (state.uploadedFile ? { ok: true, fileName: state.uploadedFile, message: "基础检查已通过。" } : null);
+  const activePreview = pdfPreview && (!feedback || pdfPreview.fileName === feedback.fileName) ? pdfPreview : null;
+  node.hidden = !feedback && !activePreview;
+  if (!feedback && !activePreview) return;
+  node.className = `file-state ${feedback.ok ? "ok" : "error"}`;
+  node.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "file-state-heading";
+  const name = document.createElement("strong");
+  name.textContent = activePreview?.fileName || feedback?.fileName || "未命名文件";
+  heading.append(name);
+  if (activePreview) {
+    const meta = document.createElement("div");
+    meta.className = "file-meta";
+    [
+      ["大小", formatFileSize(activePreview.size)],
+      ["类型", activePreview.type === "application/pdf" ? "PDF" : activePreview.type || "PDF"],
+      ["修改时间", formatFileTime(activePreview.lastModified)]
+    ].forEach(([label, value]) => {
+      const item = document.createElement("div");
+      const term = document.createElement("span");
+      const detail = document.createElement("strong");
+      term.textContent = label;
+      detail.textContent = value;
+      item.append(term, detail);
+      meta.append(item);
+    });
+    const viewer = document.createElement("iframe");
+    viewer.className = "pdf-viewer";
+    viewer.title = `${activePreview.fileName} 预览`;
+    viewer.src = activePreview.url;
+    const fallback = document.createElement("div");
+    fallback.className = "pdf-preview-fallback";
+    const openLink = document.createElement("a");
+    openLink.href = activePreview.url;
+    openLink.target = "_blank";
+    openLink.rel = "noopener";
+    openLink.textContent = "在新窗口打开 PDF";
+    fallback.append("内置预览不可用时，", openLink);
+    heading.append(meta, viewer, fallback);
+  } else {
+    const detail = document.createElement("small");
+    detail.textContent = feedback?.message || "";
+    heading.append(detail);
+  }
+  node.append(heading);
 }
 
 function renderTools() {
@@ -472,8 +620,14 @@ $("#message-form").addEventListener("submit", (event) => { event.preventDefault(
 $("#message-input").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#message-form").requestSubmit(); } });
 $("#generate-order").addEventListener("click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { addMessage("assistant", apiErrorText(error, "订单生成失败，请重试。")); } });
 $("#copy-order").addEventListener("click", async () => {
+  const groups = getOrderGroups();
+  const lines = groups.filter(([, items]) => items.length).flatMap(([title, items]) => [`【${title}】`, ...items.map(([label, value]) => `${label}：${value}`), ""]);
+  try { await navigator.clipboard.writeText(lines.join("\n")); showToast("订单信息已复制"); } catch { showToast("当前浏览器不支持自动复制"); }
+});
+
+function getOrderGroups() {
   const fields = getDraftFieldSets();
-  const groups = [
+  return [
     ["订单概览", fields.overview.map((key) => [labels[key], getFieldValue(key)]).filter(([, value]) => hasValue(value))],
     ["产品规格", [
       ...fields.specs.map((key) => [labels[key], getFieldValue(key)]).filter(([, value]) => hasValue(value)),
@@ -481,9 +635,48 @@ $("#copy-order").addEventListener("click", async () => {
     ]],
     ["生产工艺", fields.process.map((key) => [labels[key], getFieldValue(key)]).filter(([, value]) => hasValue(value))]
   ];
-  const lines = groups.filter(([, items]) => items.length).flatMap(([title, items]) => [`【${title}】`, ...items.map(([label, value]) => `${label}：${value}`), ""]);
-  try { await navigator.clipboard.writeText(lines.join("\n")); showToast("订单信息已复制"); } catch { showToast("当前浏览器不支持自动复制"); }
-});
+}
+
+function exportOrder(format) {
+  const groups = getOrderGroups();
+  const rows = groups.flatMap(([section, items]) => items.map(([label, value]) => ({ section, label, value })));
+  const fileBase = `printops-order-${sessionId || "draft"}`;
+  let content = "";
+  let contentType = "text/plain;charset=utf-8";
+  let extension = "txt";
+  if (format === "json") {
+    content = JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      sessionId,
+      platform: state.order.platform || "generic",
+      stage: state.stage,
+      selectedOption: state.selectedOption,
+      order: state.order,
+      productProfile: state.productProfile,
+      fields: rows
+    }, null, 2);
+    contentType = "application/json;charset=utf-8";
+    extension = "json";
+  } else if (format === "csv") {
+    const escapeCsv = (value) => `"${String(value).replaceAll('"', '""')}"`;
+    content = ["Section,Field,Value", ...rows.map((row) => [row.section, row.label, row.value].map(escapeCsv).join(","))].join("\n");
+    contentType = "text/csv;charset=utf-8";
+    extension = "csv";
+  } else {
+    content = ["# PrintOps 订单", ...groups.filter(([, items]) => items.length).flatMap(([title, items]) => [`## ${title}`, ...items.map(([label, value]) => `- **${label}**：${value}`), ""])].join("\n");
+    contentType = "text/markdown;charset=utf-8";
+    extension = "md";
+  }
+  const url = URL.createObjectURL(new Blob([`\ufeff${content}`], { type: contentType }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${fileBase}.${extension}`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast(`订单已导出为 ${extension.toUpperCase()}`);
+}
+
+document.querySelectorAll(".export-option").forEach((button) => button.addEventListener("click", () => exportOrder(button.dataset.format)));
 $("#toggle-draft-groups").addEventListener("click", () => {
   const groups = [...document.querySelectorAll(".draft-group")];
   const open = !groups.every((group) => group.open);
@@ -491,17 +684,61 @@ $("#toggle-draft-groups").addEventListener("click", () => {
   updateDraftToggle();
 });
 document.querySelectorAll(".draft-group").forEach((group) => group.addEventListener("toggle", updateDraftToggle));
-$("#upload-button").addEventListener("click", () => $("#file-input").click());
-$("#file-input").addEventListener("change", async () => {
-  const file = $("#file-input").files[0];
+async function uploadFile(file) {
+  clearPdfPreview();
   if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".pdf")) {
+    fileFeedback = { ok: false, fileName: file.name, message: "MVP 暂只支持 PDF 文件。" };
+    addMessage("user", `上传文件：${file.name}`);
+    addMessage("assistant", fileFeedback.message);
+    renderFileState();
+    return;
+  }
   addMessage("user", `上传文件：${file.name}`);
-  try { const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size }); render(data); }
-  catch (error) { addMessage("assistant", apiErrorText(error, "文件预检调用失败，请重试。")); }
+  if (file.size > 20 * 1024 * 1024) {
+    fileFeedback = { ok: false, fileName: file.name, message: "文件超过 20 MB，请压缩后再上传。" };
+    addMessage("assistant", fileFeedback.message);
+    renderFileState();
+    return;
+  }
+  pdfPreview = {
+    url: URL.createObjectURL(file),
+    fileName: file.name,
+    size: file.size,
+    type: file.type || "application/pdf",
+    lastModified: file.lastModified
+  };
+  fileFeedback = { ok: true, fileName: file.name, message: "文件已加载，正在做基础预检。" };
+  renderFileState();
+  try {
+    const data = await api("/api/preflight", { sessionId, fileName: file.name, sizeBytes: file.size });
+    fileFeedback = null;
+    render(data);
+  } catch (error) {
+    clearPdfPreview();
+    fileFeedback = { ok: false, fileName: file.name, message: apiErrorText(error, "文件预检调用失败，请重试。") };
+    renderFileState();
+    addMessage("assistant", fileFeedback.message);
+  }
+}
+$("#upload-button").addEventListener("click", () => $("#file-input").click());
+$("#drop-zone").addEventListener("click", () => $("#file-input").click());
+$("#file-input").addEventListener("change", async () => {
+  await uploadFile($("#file-input").files[0]);
   $("#file-input").value = "";
+});
+["dragenter", "dragover"].forEach((type) => $("#drop-zone").addEventListener(type, (event) => {
+  event.preventDefault();
+  $("#drop-zone").classList.add("is-dragging");
+}));
+["dragleave", "drop"].forEach((type) => $("#drop-zone").addEventListener(type, () => $("#drop-zone").classList.remove("is-dragging")));
+$("#drop-zone").addEventListener("drop", (event) => {
+  event.preventDefault();
+  uploadFile(event.dataTransfer?.files?.[0]);
 });
 $("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败")); } });
 $("#sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
+$("#theme-toggle").addEventListener("click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
 $("#reset-order").addEventListener("click", async () => {
   chatRequestSeq += 1;
   activeChatController?.abort();
@@ -512,6 +749,9 @@ $("#reset-order").addEventListener("click", async () => {
   localStorage.removeItem("printops_session");
   $("#chat-feed").innerHTML = "";
   sessionId = "";
+  suppressOrderDiff = true;
+  fileFeedback = null;
+  clearPdfPreview();
   await bootstrap();
 });
 
@@ -601,3 +841,4 @@ async function bootstrap() {
 
 bootstrap();
 setSidebarCollapsed(sidebarCollapsed);
+setHighContrast(localStorage.getItem("printops_theme") === "high-contrast");
