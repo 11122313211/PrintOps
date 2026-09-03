@@ -60,6 +60,100 @@ let updatedSpecKeys = new Set();
 let suppressOrderDiff = true;
 let fileFeedback = null;
 let pdfPreview = null;
+const orderHistoryKey = "printops_order_history";
+
+function loadOrderHistory() {
+  try {
+    const history = JSON.parse(localStorage.getItem(orderHistoryKey) || "[]");
+    return Array.isArray(history) ? history.filter((item) => item?.id && item.order) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOrderHistory(history) {
+  try { localStorage.setItem(orderHistoryKey, JSON.stringify(history.slice(0, 8))); }
+  catch { showToast("订单历史保存空间已满，请清理浏览器数据"); }
+}
+
+function orderHasContent(order = {}) {
+  return Boolean(order.productType || order.quantity || order.orderGenerated);
+}
+
+function orderHistoryTitle(order = {}) {
+  return order.productType || order.quantity ? `${order.productType || "未分类"} · ${order.quantity || "待定数量"}` : "订单草稿";
+}
+
+function formatOrderHistoryTime(timestamp) {
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
+}
+
+function rememberOrderHistory() {
+  if (!sessionId || !orderHasContent(state.order)) return;
+  const history = loadOrderHistory();
+  const record = {
+    id: sessionId,
+    order: structuredClone(state.order || {}),
+    stage: state.stage || "collect",
+    orderGenerated: Boolean(state.orderGenerated),
+    updatedAt: Date.now()
+  };
+  const existingIndex = history.findIndex((item) => item.id === sessionId);
+  if (existingIndex >= 0) history.splice(existingIndex, 1);
+  saveOrderHistory([record, ...history]);
+}
+
+function renderOrderHistory() {
+  const root = $("#history-list");
+  const history = loadOrderHistory();
+  $("#history-count").textContent = `${history.length} 单`;
+  root.innerHTML = "";
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "开始填写后会自动记录。";
+    root.append(empty);
+    return;
+  }
+  history.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.dataset.sessionId = item.id;
+    button.setAttribute("aria-current", String(item.id === sessionId));
+    const title = document.createElement("strong");
+    title.textContent = orderHistoryTitle(item.order);
+    const meta = document.createElement("small");
+    meta.textContent = `${item.orderGenerated ? "已生成" : item.stage === "recommend" ? "已选方案" : "编辑中"} · ${formatOrderHistoryTime(item.updatedAt)}`;
+    button.append(title, meta);
+    root.append(button);
+  });
+}
+
+async function switchOrder(orderId) {
+  if (!orderId || orderId === sessionId || isSending) return;
+  setComposerBusy(true);
+  try {
+    const snapshot = await api("/api/session", { sessionId: orderId });
+    $("#chat-feed").innerHTML = "";
+    fileFeedback = null;
+    clearPdfPreview();
+    suppressOrderDiff = true;
+    state = { order: {}, stage: "collect", quickReplies: [], options: [], selectedOption: null, orderGenerated: false, toolTrace: [], availableTools: state.availableTools || [], productProfile: null };
+    render(snapshot, false);
+    $("#platform-select").value = snapshot.order?.platform || "generic";
+    const messages = Array.isArray(snapshot.history) ? snapshot.history : [];
+    if (messages.length) {
+      addMessage("assistant", `已切换到订单 ${orderHistoryTitle(snapshot.order)}。`);
+      messages.forEach((message) => addMessage(message.role === "user" ? "user" : "assistant", message.text || ""));
+    } else addMessage("assistant", "已切换到这个订单。当前没有保存的对话内容，可以直接继续补充。");
+    showToast("订单已切换");
+  } catch (error) {
+    showToast(apiErrorText(error, "订单切换失败，请重试。"));
+  } finally {
+    setComposerBusy(false);
+  }
+}
 
 async function api(path, body, method = "POST", options = {}) {
   const response = await fetch(path, {
@@ -217,6 +311,8 @@ function render(data, showMessages = true) {
   renderOptions();
   renderTools();
   renderProgress();
+  rememberOrderHistory();
+  renderOrderHistory();
   $("#agent-trace").textContent = data.toolTrace?.length ? data.toolTrace.join("  /  ") : "等待输入";
   $("#memory-status").textContent = data.nextAction || (data.stage === "confirm" ? "订单记忆已锁定，等待人工确认。" : data.order?.productType ? "订单记忆已保存，可继续补充或修改。" : "等待第一条需求，Agent 将自动建立订单记忆。");
   $("#agent-status").innerHTML = '<span class="status-dot"></span>Agent 在线';
@@ -739,6 +835,10 @@ $("#drop-zone").addEventListener("drop", (event) => {
 $("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败")); } });
 $("#sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
 $("#theme-toggle").addEventListener("click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
+$("#history-list").addEventListener("click", (event) => {
+  const item = event.target.closest(".history-item");
+  if (item) switchOrder(item.dataset.sessionId);
+});
 $("#reset-order").addEventListener("click", async () => {
   chatRequestSeq += 1;
   activeChatController?.abort();
