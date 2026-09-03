@@ -1,0 +1,16 @@
+# Local runtime state. Never commit sessions, logs, or model credentials.
+data/*
+!data/.gitkeep
+
+# Python and local environments.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets and OS/editor files.
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
