@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#eee5d5" />
+    <title>PrintOps | 印刷订单智能体</title>
+    <link rel="stylesheet" href="styles.css?v=20260904-4" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">PO</div>
+          <div>
+            <p class="eyebrow">PRINT OPERATIONS AGENT</p>
+            <h1>印刷订单智能体</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="platform-control">目标平台
+            <select id="platform-select" aria-label="选择目标印刷平台">
+              <option value="generic">通用印刷平台</option>
+            </select>
+          </label>
+          <span class="connection-status" id="agent-status"><span class="status-dot"></span>正在连接</span>
+          <button class="icon-button" id="theme-toggle" type="button" title="切换高对比模式">高对比</button>
+          <button class="icon-button" id="settings-button" type="button" title="配置模型接口">接口设置</button>
+          <button class="icon-button" id="reset-order" type="button" title="重置当前订单">重置</button>
+        </div>
+      </header>
+
+      <main class="workspace" id="workspace">
+        <aside class="sidebar" aria-label="订单进度">
+          <div class="sidebar-heading">
+            <span>当前订单</span>
+            <span class="order-number" id="order-number">SESSION ----</span>
+          </div>
+
+          <section class="progress-panel">
+            <div class="progress-line"><span id="progress-bar"></span></div>
+            <div class="progress-labels">
+              <span id="progress-stage">需求收集</span>
+              <strong id="progress-percent">0%</strong>
+            </div>
+            <div class="step-list" id="step-list">
+              <div class="step active" data-step="collect">
+                <span class="step-index">01</span>
+                <div><strong>收集需求</strong><small>告诉我想印什么</small></div>
+              </div>
+              <div class="step" data-step="recommend">
+                <span class="step-index">02</span>
+                <div><strong>选择方案</strong><small>比较效果与成本</small></div>
+              </div>
+              <div class="step" data-step="confirm">
+                <span class="step-index">03</span>
+                <div><strong>确认订单</strong><small>生成可执行草稿</small></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="history-panel" aria-label="订单历史">
+            <div class="tool-panel-heading"><span>订单历史</span><span id="history-count">0 单</span></div>
+            <div class="history-list" id="history-list"></div>
+          </section>
+
+          <section class="preset-panel" aria-label="常用规格">
+            <div class="tool-panel-heading"><span>常用规格</span><span id="preset-count">0 组</span></div>
+            <div class="preset-list" id="preset-list"></div>
+            <button class="preset-save" id="save-preset" type="button">保存当前工艺组合</button>
+          </section>
+
+          <section class="catalog-panel" aria-label="产品索引">
+            <div class="tool-panel-heading"><span>产品索引</span><span>官网分类</span></div>
+            <div class="catalog-list" id="catalog-list"></div>
+          </section>
+
+          <section class="tip-panel">
+            <span class="tip-label">AGENT 运行状态</span>
+            <p id="memory-status">正在恢复会话记忆与工具状态。</p>
+          </section>
+
+          <section class="decision-panel" aria-label="当前决策">
+            <div class="tool-panel-heading"><span>当前决策</span><span id="decision-confidence">可解释</span></div>
+            <strong id="workflow-label">需求收集</strong>
+            <p id="decision-reason">等待第一条需求。</p>
+            <small id="decision-run">本次运行尚未开始</small>
+          </section>
+
+          <section class="tool-panel" aria-label="Agent 工具箱">
+            <div class="tool-panel-heading"><span>工具箱</span><span id="tool-count">0 项</span></div>
+            <div class="tool-list" id="tool-list"></div>
+            <details class="run-panel" id="run-panel">
+              <summary><span>本次运行记录</span><small id="run-id">等待运行</small></summary>
+              <div class="run-trace-list" id="run-trace-list"></div>
+            </details>
+          </section>
+        </aside>
+
+        <section class="chat-section" aria-label="智能订单对话">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">ORDER INTAKE</p>
+              <h2>把想法说出来</h2>
+            </div>
+            <div class="section-title-actions">
+              <span class="section-note" id="agent-trace">等待输入</span>
+              <button class="panel-toggle" id="sidebar-toggle" type="button" aria-label="收起导航栏" title="收起导航栏">
+                <span class="panel-toggle-glyph" aria-hidden="true"></span>
+                <span class="panel-toggle-label">导航</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="chat-feed" id="chat-feed" aria-live="polite"></div>
+
+          <div class="quick-replies" id="quick-replies" aria-label="快捷回答"></div>
+
+          <form class="composer" id="message-form">
+            <label class="sr-only" for="message-input">输入印刷需求</label>
+            <textarea id="message-input" rows="2" placeholder="例如：我要做 500 份 A4 宣传册，下周一要用……"></textarea>
+            <div class="composer-footer">
+              <div class="composer-tools">
+                <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
+                <button class="tool-button" id="upload-button" type="button" title="上传 PDF 文件">上传文件</button>
+                <span class="tool-hint">支持 PDF，单个文件不超过 20 MB</span>
+              </div>
+              <button class="send-button" type="submit">
+                <span class="send-label">发送</span>
+                <span class="send-icon" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="order-section" aria-label="订单草稿">
+          <div class="section-title order-title">
+            <div>
+              <p class="eyebrow">ORDER DRAFT</p>
+              <h2>订单草稿</h2>
+            </div>
+            <div class="draft-title-actions">
+              <span class="draft-status" id="draft-status">待补充</span>
+              <button class="draft-expand-button" id="toggle-draft-groups" type="button" aria-label="展开全部订单分组" title="展开全部订单分组">
+                <span class="expand-all-glyph" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+
+          <button class="drop-zone" id="drop-zone" type="button" aria-label="拖拽或点击上传 PDF 文件">
+            <strong>拖拽 PDF 到这里</strong>
+            <small>或点击选择文件 · 单个文件不超过 20 MB</small>
+          </button>
+
+          <div class="draft-groups" id="draft-groups">
+            <details class="draft-group" data-draft-group="overview" open>
+              <summary>
+                <span class="draft-group-heading">
+                  <span class="draft-group-index">01</span>
+                  <span><strong>订单概览</strong><small id="overview-meta">0 / 6 已填写</small></span>
+                </span>
+                <span class="draft-group-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="draft-group-body">
+                <div class="field-list" id="overview-fields"></div>
+                <div class="file-state" id="file-state" hidden></div>
+              </div>
+            </details>
+
+            <details class="draft-group" data-draft-group="specs">
+              <summary>
+                <span class="draft-group-heading">
+                  <span class="draft-group-index">02</span>
+                  <span><strong>产品规格</strong><small id="specs-meta">待识别品类</small></span>
+                </span>
+                <span class="draft-group-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="draft-group-body">
+                <div class="multi-product-panel" id="multi-product-panel" hidden>
+                  <div class="multi-product-heading">
+                    <span>独立产品项</span>
+                    <span class="multi-product-count" id="multi-product-count">0 项</span>
+                  </div>
+                  <p class="multi-product-note">每个产品的数量、尺寸和工艺需要分别确认，完成拆分前不会合并报价。</p>
+                  <div class="multi-product-list" id="multi-product-list"></div>
+                </div>
+                <div class="product-context" id="product-context" hidden>
+                  <p id="product-profile-summary"></p>
+                  <span class="profile-readiness" id="product-profile-readiness">100%</span>
+                </div>
+                <div class="parameter-form" id="parameter-form" aria-label="产品专属参数"></div>
+                <div class="field-list" id="spec-fields"></div>
+              </div>
+            </details>
+
+            <details class="draft-group" data-draft-group="process">
+              <summary>
+                <span class="draft-group-heading">
+                  <span class="draft-group-index">03</span>
+                  <span><strong>生产工艺</strong><small id="process-meta">0 / 4 已填写</small></span>
+                </span>
+                <span class="draft-group-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="draft-group-body">
+                <div class="field-list" id="process-fields"></div>
+              </div>
+            </details>
+          </div>
+
+          <div class="risk-panel" id="risk-panel" hidden>
+            <div class="risk-heading">
+              <p class="eyebrow">ORDER RISKS</p>
+              <h3>风险与缺失</h3>
+              <span class="risk-count" id="risk-count">0 项</span>
+            </div>
+            <div class="risk-list" id="risk-list"></div>
+          </div>
+
+          <div class="recommendations" id="recommendations" hidden>
+            <div class="recommendation-heading">
+              <div>
+                <p class="eyebrow">PROCESS OPTIONS</p>
+                <h3>推荐工艺方案</h3>
+              </div>
+              <span class="recommendation-count" id="recommendation-count">0 个方案</span>
+            </div>
+            <div class="option-list" id="option-list"></div>
+          </div>
+
+          <div class="quote-panel" id="quote-panel" hidden>
+            <div class="quote-heading">
+              <div>
+                <p class="eyebrow">QUOTE REQUEST</p>
+                <h3>供应商询价</h3>
+              </div>
+              <span class="quote-status" id="quote-status">暂无请求</span>
+            </div>
+            <p class="quote-message" id="quote-message"></p>
+            <div class="quote-meta">
+              <span>请求编号</span>
+              <code id="quote-request-id">--</code>
+            </div>
+            <div class="quote-actions">
+              <button class="secondary-action" id="quote-refresh" type="button">刷新状态</button>
+              <button class="secondary-action" id="quote-cancel" type="button">取消询价</button>
+            </div>
+          </div>
+
+          <div class="order-actions">
+            <button class="primary-action" id="generate-order" type="button" disabled>生成订单草稿</button>
+            <button class="secondary-action" id="confirm-order" type="button" hidden>确认交接单</button>
+            <button class="secondary-action" id="copy-order" type="button" disabled>复制订单信息</button>
+          </div>
+          <div class="order-export" id="order-export" hidden>
+            <span id="export-label">导出订单</span>
+            <div class="export-options" aria-labelledby="export-label">
+              <button class="export-option" type="button" data-format="json">JSON</button>
+              <button class="export-option" type="button" data-format="csv">CSV</button>
+              <button class="export-option" type="button" data-format="markdown">Markdown</button>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+      <form class="settings-card" id="settings-form">
+        <div class="settings-heading">
+          <div>
+            <p class="eyebrow">MODEL CONNECTION</p>
+            <h2 id="settings-title">接口设置</h2>
+          </div>
+          <button class="settings-close" id="settings-cancel" type="button" aria-label="关闭接口设置" title="关闭">×</button>
+        </div>
+        <p class="settings-state" id="settings-state">当前使用规则模式</p>
+        <div class="settings-fields">
+          <label class="settings-field" for="settings-url">
+            <span>API URL</span>
+            <input id="settings-url" type="url" inputmode="url" autocomplete="url" placeholder="https://your-endpoint.example/v1" />
+          </label>
+          <label class="settings-field" for="settings-model">
+            <span>模型名称</span>
+            <input id="settings-model" type="text" autocomplete="off" placeholder="例如：gpt-5.6-sol" />
+          </label>
+          <label class="settings-field" for="settings-key">
+            <span>API Key <small>可选</small></span>
+            <input id="settings-key" type="password" autocomplete="new-password" placeholder="留空保持当前 Key" />
+          </label>
+        </div>
+        <p class="settings-note">Key 仅由本机服务保存，不会显示在页面或接口响应中。URL 与模型留空即可继续使用规则模式。</p>
+        <div class="settings-actions">
+          <button class="secondary-action settings-clear" id="settings-clear" type="button">清空配置</button>
+          <span class="settings-action-spacer"></span>
+          <button class="secondary-action" id="settings-test" type="button">测试连接</button>
+          <button class="secondary-action" id="settings-cancel-secondary" type="button">取消</button>
+          <button class="primary-action" id="settings-save" type="submit">保存设置</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="app.js?v=20260904-5"></script>
+  </body>
+</html>
