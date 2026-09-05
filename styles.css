@@ -198,7 +198,7 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .icon-button:hover { color: white; border-color: var(--line-strong); }
 
 /* 三栏工作台：可拖动分隔条占位 */
-.workspace { position: relative; height: calc(100dvh - 68px); min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr) var(--splitter-w) var(--order-w); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.workspace { height: calc(100dvh - 68px); min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr) var(--splitter-w) var(--order-w); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .workspace.sidebar-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) var(--splitter-w) var(--order-w); }
 .workspace.order-collapsed { grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr) 0 0; }
 .workspace.sidebar-collapsed.order-collapsed { grid-template-columns: 0 0 minmax(0, 1fr) 0 0; }
@@ -212,12 +212,6 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .workspace.order-collapsed .pane-splitter[data-pane="order"] { display: none; }
 .workspace.order-collapsed .order-section { display: none; }
 
-/* 收起后的边缘把手：原位置保留一个可点击的竖条，点击即展开 */
-.edge-rail { position: absolute; top: 0; bottom: 0; width: 20px; z-index: 6; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--ink-soft); background: var(--paper-deep); font-size: var(--font-xs); font-weight: 800; letter-spacing: .3em; writing-mode: vertical-rl; transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
-.edge-rail-sidebar { left: 0; border-right: 1px solid var(--rule); }
-.edge-rail-order { right: 0; border-left: 1px solid var(--rule); }
-.edge-rail:hover { color: var(--red-deep); background: var(--red-pale); }
-.edge-rail:focus-visible { outline: 2px solid var(--red); outline-offset: -2px; }
 .workspace-backdrop { display: none; }
 .pane-splitter { position: relative; cursor: col-resize; background: transparent; border-left: 1px solid var(--rule); border-right: 1px solid var(--rule); touch-action: none; }
 .pane-splitter::after { content: ""; position: absolute; top: 50%; left: 50%; width: 2px; height: 34px; transform: translate(-50%, -50%); background: var(--rule); border-radius: var(--radius-pill); transition: background var(--duration-fast) ease, width var(--duration-fast) ease; }
@@ -565,7 +559,7 @@ body.is-resizing { user-select: none; cursor: col-resize; }
 /* 移动端抽屉 + 响应式 */
 @media (max-width: 1050px) {
   .workspace { display: block; height: auto; min-height: calc(100dvh - 68px); overflow: visible; }
-  .pane-splitter, .edge-rail { display: none; }
+  .pane-splitter { display: none; }
   .workspace.order-collapsed .order-section { display: none; }
   .sidebar { position: fixed; top: 68px; bottom: 0; left: 0; z-index: 30; width: min(320px, 84vw); padding: 20px 18px; background: var(--paper); border-right: 1px solid var(--rule); box-shadow: var(--shadow-soft); transform: translateX(0); transition: transform var(--duration-base) ease; }
   .sidebar-collapsed .sidebar { transform: translateX(-102%); box-shadow: none; }

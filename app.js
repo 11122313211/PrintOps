@@ -173,15 +173,6 @@ function updateBackdrop() {
   const drawerOpen = !DESKTOP_QUERY.matches && !sidebarCollapsed;
   backdrop.hidden = !drawerOpen;
   document.body.classList.toggle("drawer-open", drawerOpen);
-  updateRails();
-}
-
-/* 收起后原位置保留边缘把手，点击展开 */
-function updateRails() {
-  const railSidebar = $("#sidebar-rail");
-  const railOrder = $("#order-rail");
-  if (railSidebar) railSidebar.hidden = !(DESKTOP_QUERY.matches && sidebarCollapsed);
-  if (railOrder) railOrder.hidden = !(DESKTOP_QUERY.matches && layout.orderCollapsed);
 }
 
 let layout = loadLayout();
@@ -1794,12 +1785,6 @@ async function bootstrap() {
   }
 }
 
-$("#sidebar-rail").addEventListener("click", () => setSidebarCollapsed(false));
-$("#order-rail").addEventListener("click", () => {
-  layout.orderCollapsed = false;
-  applyLayout();
-  saveLayout();
-});
 setupSplitters();
 applyLayout();
 autoGrowComposer();
