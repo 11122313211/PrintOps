@@ -101,6 +101,9 @@ PRINTOPS_PORT=4174 python3 server.py
   - `dimensions.expandedSize`：折叠或包装展开尺寸。
   - `dimensions.dieCutSize`：刀模尺寸。
   - `dimensions.packageSize`：包装长、宽、高等三维尺寸。
+- 规则感知按证据强度为每个字段记录置信度；低置信度的生产字段必须人工确认后才能生成交接单。
+- 工艺推荐区分合版/专版并说明批次色差与颜色可控性；低于品类常规起印量时给出提示。
+- 交接文本附“开数参考”（大度/正度整裁数与纸张利用率）；费用估算基于带版本的示例价格参数表，只作量级参考。
 - 支持多产品订单，使用稳定 `itemId` 隔离每一项的数量、规格、文件、方案和交接状态。
 - 根据预算、用途、交期和生产约束生成可解释的经济、平衡、质感方案。
 - 支持自然语言修改和否定，例如“数量改成 1200 张”“不要覆膜”。
@@ -166,17 +169,22 @@ API 错误统一返回 `code`、`message`、`requestId`，响应头包含 `X-Req
 
 ```text
 .
-├── agent.py                 # Agent 状态、记忆、规则、工作流和工具网关
+├── agent.py                 # Agent 状态机、会话记忆、工作流和工具网关
+├── order_model.py           # 订单数据契约、数量/尺寸规范化与 schema 迁移
+├── nlu.py                   # 规则感知：字段抽取与置信度分级
+├── tools.py                 # 白名单工具注册表与工具契约
 ├── server.py                # 本地静态服务与 JSON API，默认端口 4174
 ├── llm_adapter.py           # OpenAI 兼容模型适配器和本地配置读写
-├── product_knowledge.py     # 品类目录、专属参数和印刷知识
-├── supplier_adapters.py     # 与供应商平台无关的字段映射协议
+├── product_knowledge.py     # 品类目录、专属参数、印刷知识与示例价格参数表
+├── supplier_adapters.py     # 平台能力档案与按品类分层的字段映射协议
 ├── index.html               # 浏览器入口和订单工作台结构
 ├── app.js                   # UI 状态、对话和 API 交互
 ├── styles.css               # 工业感界面样式
 ├── start_mac.sh             # macOS / Linux 启动脚本
 ├── start_windows.bat        # Windows CMD 启动脚本
 ├── start_windows.ps1        # Windows PowerShell 启动脚本
+├── tools/
+│   └── secret_scan.py       # 发布前敏感信息扫描
 ├── docs/
 │   ├── ARCHITECTURE.md      # 架构、数据契约和安全边界
 │   ├── ROADMAP.md           # 版本路线图和持续目标
@@ -184,6 +192,7 @@ API 错误统一返回 `code`、`message`、`requestId`，响应头包含 `X-Req
 ├── tests/
 │   ├── test_agent.py        # Agent 单元测试
 │   ├── test_server.py       # API 契约测试
+│   ├── test_v09_features.py # v0.9.0 特性测试
 │   └── evaluate_agent.py    # 脱敏订单评测
 └── data/.gitkeep             # 运行时数据目录占位文件
 ```
@@ -196,17 +205,22 @@ API 错误统一返回 `code`、`message`、`requestId`，响应头包含 `X-Req
 python3 -m unittest discover -s tests -p 'test_*.py'
 PYTHONPATH=. python3 tests/evaluate_agent.py
 PYTHONPATH=. python3 tests/evaluate_agent.py --json
-python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py
+python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py order_model.py nlu.py tools.py
+python3 tools/secret_scan.py
 git diff --check
 ```
+
+以上命令由 `.github/workflows/ci.yml` 在每次 push / PR 时自动执行（Ubuntu 与 Windows × Python 3.9/3.12）。
 
 发布前至少确认：字段准确率不低于 95%、基础订单完整率达标、多产品之间没有字段污染、模型异常能回退、刷新能恢复会话、等待和错误状态可见，并通过敏感信息扫描。
 
 ## 安全边界与已知限制
 
 - 当前供应商档案是静态能力示例，不代表实时价格、产能或交期。
+- 费用估算来自内置示例价格参数表（带版本），仅用于量级参考，不构成报价。
 - 当前不会向盛大印刷或其他平台发起真实报价、下单或上传文件请求。
 - PDF 预检是浏览器本地的轻量检查，不能替代 Acrobat、PitStop 或印刷厂正式印前检查。
+- 开数参考是纯几何估算，实际拼版以供应商为准。
 - 外部提交必须在后续适配器中实现人工确认、幂等、超时、重试、取消和审计。
 - 规则和知识版本会随版本更新；订单响应会携带知识版本，便于追溯一次推荐使用的依据。
 
@@ -217,7 +231,11 @@ git diff --check
 - [开源选型参考](docs/OPEN_SOURCE_OPTIONS.md)
 - [版本变更记录](CHANGELOG.md)
 
-当前版本以根目录 `VERSION` 文件为准，当前为 `v0.8.2`。macOS 与 Windows 只更换启动脚本，订单逻辑和 UI 不分叉。
+当前版本以根目录 `VERSION` 文件为准，当前为 `v0.9.0`。macOS 与 Windows 只更换启动脚本，订单逻辑和 UI 不分叉。
+
+## License
+
+本项目以 [MIT License](LICENSE) 发布。
 
 ## GitHub 发布
 

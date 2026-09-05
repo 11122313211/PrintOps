@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile check
+        run: python -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py order_model.py nlu.py tools.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Evaluation suite
+        run: python tests/evaluate_agent.py
+      - name: Secret scan
+        run: python tools/secret_scan.py
+      - name: Whitespace check
+        run: git diff --check

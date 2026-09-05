@@ -114,14 +114,15 @@ class AgentTest(unittest.TestCase):
 
     def test_low_confidence_field_requires_user_confirmation_before_generation(self):
         self.agent.chat("做 500 份 A4 名片，250g铜版纸，双面四色，下周内")
-        self.agent._update_order({"budget": "优先视觉质感"}, source="model", confidence=0.68)
+        # Only production fields block generation; use size (not budget).
+        self.agent._update_order({"size": "90×54mm"}, source="model", confidence=0.68)
         self.agent.choose("balanced")
         blocked = self.agent.generate()
         self.assertFalse(blocked["orderGenerated"])
         self.assertIn("低置信度字段", blocked["messages"][0])
-        confirmed = self.agent.chat("确认预算偏好", {"budget": "优先视觉质感"})
-        self.assertEqual(confirmed["fieldMeta"]["budget"]["source"], "user")
-        self.assertEqual(confirmed["fieldMeta"]["budget"]["confidence"], 1.0)
+        confirmed = self.agent.chat("确认尺寸", {"size": "90×54mm"})
+        self.assertEqual(confirmed["fieldMeta"]["size"]["source"], "user")
+        self.assertEqual(confirmed["fieldMeta"]["size"]["confidence"], 1.0)
 
     def test_runtime_stage_reflects_quote_and_file_preflight_tools(self):
         quote = self.agent.call_tool("estimate_price")

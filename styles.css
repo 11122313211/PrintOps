@@ -4,7 +4,7 @@
   --paper-deep: #e3d6c0;
   --ink: #292722;
   --ink-soft: #514b43;
-  --quiet: #82786b;
+  --quiet: #6f6558;
   --rule: #c8b89c;
   --rule-light: #dfd3bd;
   --red: #a34a3e;
@@ -267,6 +267,10 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
 .field-source { color: var(--quiet); font-family: ui-monospace, monospace; font-size: 8px; font-weight: 500; overflow-wrap: anywhere; }
 .field-source.low-confidence { color: var(--warning); font-weight: 800; }
 .field-source.empty { color: #b2a58f; }
+.field-input { width: 100%; min-width: 0; padding: 3px 7px; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); font: inherit; font-size: 12px; font-weight: 700; text-align: left; transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease, box-shadow var(--duration-fast) ease; }
+.field-row:hover .field-input:not(:focus), .field-input:hover:not(:focus) { border-color: var(--rule-light); background: var(--paper-light); }
+.field-input:focus { outline: none; border-color: var(--red); background: var(--paper-light); box-shadow: var(--focus-ring); }
+.field-input.empty { color: #ac9e89; font-weight: 500; }
 .product-context { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 2px 0 8px; padding: 9px 0 9px 10px; border-left: 2px solid var(--brass); }
 .product-context p { margin: 0; color: var(--ink-soft); font-size: 10px; line-height: 1.55; }
 .profile-readiness { color: var(--green); font-family: ui-monospace, monospace; font-size: 10px; font-weight: 800; }
@@ -492,3 +496,18 @@ h3 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; fon
   .settings-action-spacer { display: none; }
   .settings-clear { margin-right: auto; }
 }
+
+/* v0.9.0 sidebar noise reduction: collapsed panels, calmer labels, readable sizes. */
+.side-fold { margin-top: 18px; }
+.side-fold > summary { cursor: pointer; list-style: none; }
+.side-fold > summary::-webkit-details-marker { display: none; }
+.side-fold > summary::after { content: "＋"; color: var(--quiet); font-size: 11px; }
+.side-fold[open] > summary::after { content: "－"; }
+.side-fold > .catalog-list, .side-fold > .tool-list { display: grid; gap: 7px; margin-top: 10px; }
+.decision-panel { gap: 6px; }
+.decision-panel #memory-status { border-top: 1px dashed var(--rule-light); padding-top: 6px; }
+.bubble { font-size: 13.5px; line-height: 1.65; }
+.field-row { font-size: 12px; }
+.field-input { font-size: 12.5px; }
+.decision-panel > strong { font-size: 15px; }
+.message-meta { font-size: 10px; }

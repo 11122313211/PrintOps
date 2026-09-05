@@ -4,10 +4,7 @@ Flow: perceive -> remember -> plan -> call tools -> respond.
 The contracts are intentionally compatible with a future LangGraph/FastAPI layer.
 """
 
-from __future__ import annotations
-
 from contextlib import closing, contextmanager
-import hashlib
 import json
 import re
 import sqlite3
@@ -17,29 +14,26 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, alias_map, find_product, parameter_state, profile_for
-from supplier_adapters import get_adapter
+from nlu import _extract_labeled_size, _extract_product_specs, _extract_sizes, perceive
+from order_model import (DIMENSION_DEFAULTS, DIMENSION_LABELS, ITEM_DEFAULTS, LABELS,
+                         MATERIAL_SPEC_PRODUCTS, ORDER_DEFAULTS, PACKAGE_DIMENSION_PRODUCTS,
+                         QUANTITY_CAPTURE, QUANTITY_MULTIPLIERS, QUANTITY_UNIT_ALIASES,
+                         DEFAULT_QUANTITY_UNITS, RECOMMENDATION_FIELDS, REQUIRED,
+                         STATE_SCHEMA_VERSION, _is_three_dimensional_size, _multi_product_info,
+                         _number, _parse_max_size, _parse_size_mm, default_quantity_unit,
+                         merge_dimension_patch, migrate_dimension_field_meta,
+                         normalize_order_dimensions, normalize_order_items,
+                         normalize_order_quantity, normalize_state, parse_quantity,
+                         quote_idempotency_key, required_order_keys)
+from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, parameter_state
+from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
+                               get_adapter)
+from tools import (TOOLS, TOOL_META, TOOL_SCHEMAS, estimate_price, explain_print_term,
+                   match_supplier_capability, preflight_file, prepare_handoff,
+                   recommend_processes, request_supplier_quote, validate_order)
 
-
-DIMENSION_DEFAULTS = {
-    "finishedSize": "", "expandedSize": "", "dieCutSize": "", "packageSize": "",
-}
-PACKAGE_DIMENSION_PRODUCTS = {"包装盒", "手提袋"}
-ORDER_DEFAULTS = {
-    "productType": "", "productTypes": [], "items": [], "purpose": "", "quantity": "", "quantityValue": None, "quantityUnit": "", "size": "",
-    "dimensions": deepcopy(DIMENSION_DEFAULTS),
-    "pages": "", "orientation": "", "paper": "", "printing": "", "finishing": "", "binding": "",
-    "deadline": "", "budget": "", "platform": "generic", "productSpecs": {},
-}
-ITEM_DEFAULTS = {
-    "itemId": "", "productType": "", "purpose": "", "quantity": "", "quantityValue": None,
-    "quantityUnit": "", "size": "", "dimensions": deepcopy(DIMENSION_DEFAULTS), "pages": "", "orientation": "", "paper": "",
-    "printing": "", "finishing": "", "binding": "", "deadline": "", "budget": "",
-    "productSpecs": {}, "selectedOption": None, "orderGenerated": False, "uploadedFile": None,
-}
-REQUIRED = ["productType", "quantity", "size", "paper", "printing", "deadline"]
 HISTORY_LIMIT = 80
 MAX_PLANNER_TOOL_ROUNDS = 2
 MAX_RUN_EVENTS = 64
@@ -47,7 +41,6 @@ MAX_RUN_HISTORY = 20
 MAX_QUOTE_REQUESTS = 40
 QUOTE_ACTIVE_STATUSES = {"awaiting_human_confirmation", "confirmed"}
 QUOTE_TERMINAL_STATUSES = {"cancelled", "stale", "submitted", "failed"}
-RECOMMENDATION_FIELDS = {"productType", "productTypes", "items", "purpose", "quantity", "quantityValue", "quantityUnit", "size", "dimensions", "pages", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget", "productSpecs"}
 WORKFLOW_LABELS = {
     "collect": "需求收集", "clarify": "品类澄清", "recommend": "方案选择",
     "preflight": "文件预检", "quote": "报价准备", "confirm": "订单确认",
@@ -57,222 +50,6 @@ FIELD_SOURCE_LABELS = {
     "user": "用户输入", "rule": "规则识别", "model": "模型推断",
     "recommendation": "方案带入", "system": "系统默认",
 }
-LABELS = {
-    "productType": "印刷品", "purpose": "使用场景", "quantity": "数量",
-    "size": "成品尺寸", "pages": "页数", "orientation": "版式方向", "paper": "纸张/材料", "printing": "印刷颜色",
-    "finishing": "表面工艺", "binding": "装订/后道", "deadline": "交期",
-    "budget": "预算偏好", "platform": "目标平台",
-}
-DIMENSION_LABELS = {
-    "finishedSize": "成品尺寸", "expandedSize": "展开尺寸",
-    "dieCutSize": "刀模尺寸", "packageSize": "包装三维尺寸",
-}
-MATERIAL_SPEC_PRODUCTS = {"标签", "手提袋", "纸杯", "海报", "喷画", "PVC", "PVC卡"}
-
-
-def quote_idempotency_key(order: dict[str, Any], platform_id: str, item_id: str | None = None) -> str:
-    """Build a stable key from the order data that affects a supplier quote."""
-    def normalize(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {str(key): normalize(value[key]) for key in sorted(value)}
-        if isinstance(value, list):
-            return [normalize(item) for item in value]
-        if isinstance(value, str):
-            return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).strip())
-        return value
-
-    payload = {
-        "platformId": str(platform_id or "generic"),
-        "itemId": str(item_id) if item_id else None,
-        "order": {key: normalize(order.get(key)) for key in sorted(RECOMMENDATION_FIELDS) if key != "items"},
-    }
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return f"quote:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
-
-QUANTITY_MULTIPLIERS = {"万": 10000, "千": 1000, "百": 100}
-QUANTITY_UNIT_ALIASES = {
-    "份": "份", "本": "本", "册": "册", "张": "张", "个": "个", "件": "件", "盒": "盒",
-    "套": "套", "包": "包", "箱": "箱", "杯": "杯", "块": "块", "枚": "枚",
-    "平方米": "平方米", "平米": "平方米", "㎡": "平方米",
-}
-QUANTITY_CAPTURE = (
-    r"(\d[\d,]*(?:\.\d+)?)\s*(?:(万|千|百)\s*)?"
-    r"(平方米|平米|㎡|份|本|册|张|个|件|盒|套|包|箱|杯|块|枚)?"
-)
-DEFAULT_QUANTITY_UNITS = {
-    "名片": "张", "单页": "张", "折页": "张", "标签": "张", "吊牌": "张", "海报": "张",
-    "喷画": "张", "PVC": "块", "PVC卡": "张", "包装盒": "个", "手提袋": "个", "纸杯": "个",
-    "信封封套": "个", "宣传册": "本", "画册": "本", "联单": "本", "数码印刷": "份",
-}
-
-
-def default_quantity_unit(product: str | None) -> str:
-    """Choose a display unit only when the user did not provide one."""
-    return DEFAULT_QUANTITY_UNITS.get(product or "", "份")
-
-
-def parse_quantity(value: Any, product: str | None = None, unit_hint: str = "") -> tuple[str, int | float, str] | None:
-    """Return a stable display value, numeric value and unit for an order quantity."""
-    if value in (None, ""):
-        return None
-    text = unicodedata.normalize("NFKC", str(value)).strip()
-    match = re.search(
-        r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:(万|千|百)\s*)?"
-        r"(平方米|平米|㎡|份|本|册|张|个|件|盒|套|包|箱|杯|块|枚)?",
-        text,
-    )
-    if not match:
-        return None
-    number = float(match.group(1).replace(",", ""))
-    count = number * QUANTITY_MULTIPLIERS.get(match.group(2) or "", 1)
-    # An explicit unit in the display text is authoritative; the hint is for
-    # numeric-only patches and legacy records that lack a unit.
-    raw_unit = match.group(3) or unit_hint or ""
-    unit = QUANTITY_UNIT_ALIASES.get(raw_unit, raw_unit) or default_quantity_unit(product)
-    numeric: int | float = int(count) if count.is_integer() else round(count, 3)
-    count_text = str(numeric)
-    return f"{count_text} {unit}", numeric, unit
-
-
-def normalize_order_quantity(order: dict[str, Any]) -> None:
-    """Migrate old sessions and keep quantity display/number/unit in sync."""
-    parsed = parse_quantity(order.get("quantity"), order.get("productType"), str(order.get("quantityUnit") or ""))
-    if not parsed:
-        return
-    display, numeric, unit = parsed
-    order["quantity"] = display
-    order["quantityValue"] = numeric
-    order["quantityUnit"] = unit
-
-
-def _is_three_dimensional_size(value: Any) -> bool:
-    """Identify a structural L×W×H value without guessing its unit."""
-    return len(re.findall(r"×", unicodedata.normalize("NFKC", str(value or "")))) >= 2
-
-
-def normalize_order_dimensions(order: dict[str, Any]) -> None:
-    """Keep explicit dimension meanings while migrating legacy ``size`` data."""
-    raw = order.get("dimensions") if isinstance(order.get("dimensions"), dict) else {}
-    dimensions = deepcopy(DIMENSION_DEFAULTS)
-    for key in DIMENSION_DEFAULTS:
-        value = raw.get(key)
-        if value not in (None, ""):
-            dimensions[key] = str(value).strip()
-
-    specs = order.get("productSpecs") if isinstance(order.get("productSpecs"), dict) else {}
-    # Dimension meanings have a single canonical home. Remove aliases that
-    # may have been written by an older client or an unconstrained model.
-    if isinstance(order.get("productSpecs"), dict):
-        order["productSpecs"] = {key: value for key, value in specs.items() if key not in DIMENSION_DEFAULTS}
-        specs = order["productSpecs"]
-    if not dimensions["packageSize"]:
-        dimensions["packageSize"] = str(specs.get("boxSize") or specs.get("bagSize") or "").strip()
-    if not dimensions["expandedSize"]:
-        dimensions["expandedSize"] = str(specs.get("expandedSize") or "").strip()
-    if not dimensions["dieCutSize"]:
-        dimensions["dieCutSize"] = str(specs.get("dieCutSize") or "").strip()
-
-    legacy_size = str(order.get("size") or "").strip()
-    if legacy_size:
-        if _is_three_dimensional_size(legacy_size) or order.get("productType") in PACKAGE_DIMENSION_PRODUCTS:
-            if not dimensions["packageSize"]:
-                dimensions["packageSize"] = legacy_size
-        elif not dimensions["finishedSize"]:
-            dimensions["finishedSize"] = legacy_size
-    order["dimensions"] = dimensions
-
-
-def merge_dimension_patch(current: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, str]:
-    """Merge only the four dimension meanings accepted by the order model."""
-    dimensions = deepcopy(DIMENSION_DEFAULTS)
-    if isinstance(current, dict):
-        dimensions.update({key: str(current.get(key) or "").strip() for key in DIMENSION_DEFAULTS})
-    for key, value in patch.items():
-        if key in DIMENSION_DEFAULTS:
-            dimensions[key] = str(value).strip() if value is not None else ""
-    return dimensions
-
-
-def migrate_dimension_field_meta(state: dict[str, Any]) -> None:
-    """Move legacy product-spec provenance keys to the canonical dimensions path."""
-    metadata = state.get("fieldMeta") if isinstance(state.get("fieldMeta"), dict) else {}
-    for field in list(metadata):
-        parts = str(field).split(".")
-        target = ""
-        if len(parts) == 2 and parts[0] == "productSpecs" and parts[1] in DIMENSION_DEFAULTS:
-            target = f"dimensions.{parts[1]}"
-        elif len(parts) == 4 and parts[0] == "items" and parts[2] == "productSpecs" and parts[3] in DIMENSION_DEFAULTS:
-            target = f"items.{parts[1]}.dimensions.{parts[3]}"
-        if not target:
-            continue
-        if target not in metadata:
-            metadata[target] = metadata[field]
-        metadata.pop(field, None)
-    state["fieldMeta"] = metadata
-
-
-def normalize_order_items(order: dict[str, Any]) -> None:
-    """Normalize multi-product items while preserving stable IDs and legacy fields."""
-    raw_items = order.get("items")
-    if not isinstance(raw_items, list):
-        order["items"] = []
-        return
-    normalized: list[dict[str, Any]] = []
-    for index, raw in enumerate(raw_items):
-        if not isinstance(raw, dict):
-            continue
-        item = deepcopy(ITEM_DEFAULTS)
-        item.update({key: deepcopy(value) for key, value in raw.items() if key in ITEM_DEFAULTS or key == "itemId"})
-        item["itemId"] = str(raw.get("itemId") or f"item-{index + 1}").strip() or f"item-{index + 1}"
-        item["productSpecs"] = dict(raw.get("productSpecs") or {}) if isinstance(raw.get("productSpecs"), dict) else {}
-        normalize_order_quantity(item)
-        normalize_order_dimensions(item)
-        normalized.append(item)
-    order["items"] = normalized
-    product_types = list(dict.fromkeys(str(item["productType"]) for item in normalized if item.get("productType")))
-    if len(product_types) > 1:
-        order["productTypes"] = product_types
-        if not order.get("productType"):
-            order["productType"] = product_types[0]
-
-
-def required_order_keys(order: dict[str, Any]) -> list[str]:
-    """Return base fields that make sense for the selected product family."""
-    product = order.get("productType")
-    return [key for key in REQUIRED if not (key == "paper" and product in MATERIAL_SPEC_PRODUCTS)]
-
-
-def _multi_product_info(order: dict[str, Any]) -> list[str]:
-    """Return labels when an order contains multiple independent order items."""
-    product_types = order.get("productTypes") if isinstance(order.get("productTypes"), list) else []
-    items = order.get("items") if isinstance(order.get("items"), list) else []
-    labels: list[str] = []
-    for value in product_types:
-        if value and str(value) not in labels:
-            labels.append(str(value))
-    for item in items:
-        if isinstance(item, dict) and item.get("productType"):
-            value = str(item["productType"])
-            if value not in labels:
-                labels.append(value)
-    if len(product_types) > 1 or len(items) > 1 or len(labels) > 1:
-        return labels or ["多个订单项"]
-    return []
-
-
-def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
-    """Find non-overlapping catalog mentions so multi-product requests are explicit."""
-    normalized = unicodedata.normalize("NFKC", text or "")
-    candidates = []
-    for alias, product in sorted(alias_map().items(), key=lambda item: len(item[0]), reverse=True):
-        for match in re.finditer(re.escape(alias), normalized, re.IGNORECASE):
-            candidates.append((match.start(), match.end(), product))
-    accepted: list[tuple[str, int, int]] = []
-    for start, end, product in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
-        if any(start < other_end and end > other_start for _, other_start, other_end in accepted):
-            continue
-        accepted.append((product, start, end))
-    return sorted(accepted, key=lambda item: item[1])
 
 
 class Memory:
@@ -289,32 +66,7 @@ class Memory:
             row = db.execute("SELECT state FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if not row:
             return self.fresh_state()
-        state = json.loads(row[0])
-        order = deepcopy(ORDER_DEFAULTS)
-        order.update(state.get("order") or {})
-        normalize_order_quantity(order)
-        normalize_order_dimensions(order)
-        normalize_order_items(order)
-        state["order"] = order
-        state.setdefault("messages", [])
-        state.setdefault("stage", "collect")
-        state.setdefault("selectedOption", None)
-        state.setdefault("orderGenerated", False)
-        state.setdefault("uploadedFile", None)
-        state.setdefault("uploadedFiles", [])
-        state.setdefault("handoff", None)
-        state.setdefault("confirmation", {"status": "not_ready"})
-        state.setdefault("fieldMeta", {})
-        migrate_dimension_field_meta(state)
-        state.setdefault("conflicts", [])
-        state.setdefault("lastRun", None)
-        state.setdefault("runHistory", [])
-        state.setdefault("workflowStage", state.get("stage", "collect"))
-        state.setdefault("activeItemIndex", None)
-        state.setdefault("itemOptions", {})
-        state.setdefault("quoteRequests", [])
-        state.setdefault("activeQuoteRequestId", None)
-        return state
+        return normalize_state(json.loads(row[0]))
 
     def save(self, session_id: str, state: dict[str, Any]) -> None:
         data = json.dumps(state, ensure_ascii=False)
@@ -332,661 +84,13 @@ class Memory:
                 "handoff": None, "confirmation": {"status": "not_ready"},
                 "fieldMeta": {}, "conflicts": [], "lastRun": None, "runHistory": [],
                 "workflowStage": "collect", "activeItemIndex": None, "itemOptions": {},
-                "quoteRequests": [], "activeQuoteRequestId": None}
+                "quoteRequests": [], "activeQuoteRequestId": None,
+                "schemaVersion": STATE_SCHEMA_VERSION}
 
     @contextmanager
     def _db(self):
         with closing(sqlite3.connect(self.path)) as db, db:
             yield db
-
-
-PLATFORMS = {
-    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"],
-                "supplierProfile": {"categories": ["全品类"], "maxSize": "按供应商确认", "papers": ["按供应商确认"], "finishing": ["按供应商确认"], "leadTime": "按供应商确认"}},
-    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"],
-                "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册", "标签", "包装盒"], "maxSize": "1200×900mm", "papers": ["铜版纸", "哑粉纸", "白卡纸", "牛皮纸"], "finishing": ["覆膜", "哑膜", "亮膜", "烫金", "局部UV"], "leadTime": "1-5 天"}},
-    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
-                   "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册"], "maxSize": "A3+", "papers": ["铜版纸", "哑粉纸"], "finishing": ["覆膜", "哑膜", "亮膜"], "leadTime": "2-6 天"}},
-    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
-                   "supplierProfile": {"categories": ["名片", "标签", "手提袋", "包装盒"], "maxSize": "900×600mm", "papers": ["白卡纸", "牛皮纸", "不干胶"], "finishing": ["烫金", "击凸", "局部UV"], "leadTime": "3-7 天"}},
-    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"],
-                 "supplierProfile": {"categories": ["待补充"], "maxSize": "待补充", "papers": ["待补充"], "finishing": ["待补充"], "leadTime": "待补充"}},
-}
-SUPPLIER_PROFILE_VERSION = "2026.09.04"
-
-Tool = Callable[..., Any]
-TOOLS: dict[str, Tool] = {}
-TOOL_META: dict[str, dict[str, Any]] = {}
-
-# A small, provider-neutral contract.  The UI can render these contracts and
-# an eventual LangGraph/MCP adapter can pass them to a model without coupling
-# the core agent to one SDK.
-TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
-    "recommend_processes": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}}, "required": ["order"]},
-        "output": {"type": "array", "items": {"type": "object"}},
-    },
-    "explain_print_term": {
-        "input": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]},
-        "output": {"type": "object", "properties": {"topic": {"type": "string"}, "answer": {"type": "string"}}},
-    },
-    "preflight_file": {
-        "input": {"type": "object", "properties": {"fileName": {"type": "string"}, "sizeBytes": {"type": "integer"}, "pageCount": {"type": ["integer", "null"]}, "inspection": {"type": ["object", "null"]}, "expectedSize": {"type": ["string", "null"]}, "itemIndex": {"type": ["integer", "null"]}}, "required": ["fileName", "sizeBytes"]},
-        "output": {"type": "object", "properties": {"ok": {"type": "boolean"}, "warnings": {"type": "array"}}},
-    },
-    "validate_order": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}}, "required": ["order"]},
-        "output": {"type": "object", "properties": {"ok": {"type": "boolean"}, "missing": {"type": "array"}, "risks": {"type": "array"}}},
-    },
-    "estimate_price": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}, "itemIndex": {"type": ["integer", "null"]}}, "required": ["order"]},
-        "output": {"type": "object", "properties": {"range": {"type": "string"}, "missing": {"type": "array"}}},
-    },
-    "prepare_handoff": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}, "itemIndex": {"type": ["integer", "null"]}}, "required": ["order"]},
-        "output": {"type": "object", "properties": {"text": {"type": "string"}, "supplierReadiness": {"type": "object"}}},
-    },
-    "match_supplier_capability": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}, "platformId": {"type": "string"}, "itemIndex": {"type": ["integer", "null"]}}, "required": ["order"]},
-        "output": {"type": "object", "properties": {"status": {"type": "string"}, "supported": {"type": "array"}, "needsReview": {"type": "array"}, "unsupported": {"type": "array"}}},
-    },
-    "request_supplier_quote": {
-        "input": {"type": "object", "properties": {"order": {"type": "object"}, "platformId": {"type": "string"}, "itemIndex": {"type": ["integer", "null"]}}, "required": ["order"]},
-        "output": {"type": "object", "properties": {"status": {"type": "string"}, "requestId": {"type": "string"}, "mappedOrder": {"type": "object"}, "requiresHumanConfirmation": {"type": "boolean"}}},
-    },
-}
-
-
-def tool(fn: Tool) -> Tool:
-    TOOLS[fn.__name__] = fn
-    TOOL_META[fn.__name__] = {"name": fn.__name__, "description": (fn.__doc__ or "").strip()}
-    return fn
-
-
-@tool
-def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
-    """根据用途、预算、交期和工艺约束生成可比较的候选方案。"""
-    if _multi_product_info(order):
-        # Keep the low-level tool contract as an array for existing callers;
-        # Agent.call_tool adds the structured blocked response and explanation.
-        return []
-    product = order.get("productType") or "印刷品"
-    profile = profile_for(product)
-    premium = order.get("budget") == "优先视觉质感" or product in {"包装盒", "邀请函"}
-    fast = order.get("budget") == "优先交期" or order.get("deadline") in {"今天", "明天", "后天", "一周内"}
-    known_paper = order.get("paper") or ""
-    printing = order.get("printing") or "四色印刷"
-    format_note = f"{order.get('size')}，{order.get('pages')}" if order.get("size") and order.get("pages") else order.get("size") or "按成品尺寸确认"
-    binding = order.get("binding") or profile.get("defaultBinding", "无需装订")
-    profile_note = profile.get("recommendation", "先确认用途、尺寸、材料、颜色、数量和交期。")
-    specs = order.get("productSpecs") or {}
-    material_profiles = {
-        "标签": (specs.get("labelMaterial") or "铜版不干胶", ("无特殊表面工艺", "按面材适配上光 / 覆膜", "白墨 / 专色")),
-        "手提袋": (specs.get("bagMaterial") or "250g 白卡纸", ("无特殊表面工艺", "覆膜", "烫金 / 专色")),
-        "纸杯": (specs.get("cupMaterial") or "食品级淋膜纸", ("无特殊表面工艺", "食品级上光", "专色")),
-        "海报": (specs.get("displayMaterial") or "海报纸 / 背胶", ("无特殊表面工艺", "覆膜", "高精度输出")),
-        "喷画": (specs.get("displayMaterial") or "户外灯布", ("无特殊表面工艺", "户外防护", "高精度输出")),
-        "PVC": ("PVC 板材", ("无特殊表面工艺", "覆面 / 背胶", "高精度输出")),
-        "PVC卡": ("PVC 卡基", ("无特殊表面工艺", "覆膜", "专色 / 编码")),
-    }
-    if product in material_profiles:
-        material, finishes = material_profiles[product]
-        materials = (material, material, material)
-    elif product == "包装盒":
-        material = known_paper if known_paper not in {"", "待推荐"} else "350g 白卡纸"
-        materials = (material, material, material)
-        finishes = ("无特殊表面工艺", "哑膜", "烫金 / 击凸")
-    else:
-        material = known_paper if known_paper not in {"", "待推荐"} else "157g 哑粉纸"
-        materials = (material, "200g 铜版纸", "特种纸" if premium else "高克重纸张")
-        finishes = ("无特殊工艺", "哑膜", "烫金 / 击凸")
-    return [
-        {"id": "economy", "title": "经济方案", "description": f"{materials[0]} + {printing}，{format_note}，{finishes[0]}，{binding}。",
-         "cost": "成本较低", "lead": "交期较快" if fast else "交期稳定", "score": "适合控预算",
-         "reason": f"{profile_note}适合预算敏感的项目。", "risk": "视觉层次和耐磨性相对基础。",
-         "paper": materials[0], "finishing": finishes[0], "binding": binding},
-        {"id": "balanced", "title": "平衡方案", "description": f"{materials[1]} + {printing}，{finishes[1]}，{binding}，兼顾效果与生产稳定性。",
-         "cost": "成本中等", "lead": "交期稳定", "score": "综合推荐",
-         "reason": f"{profile_note}在颜色表现、手感和成本之间取平衡。", "risk": "覆膜或复杂后道会增加少量加工时间和费用。",
-         "paper": materials[1], "finishing": finishes[1], "binding": binding},
-        {"id": "premium", "title": "质感方案", "description": f"{materials[2]} + {printing}，{finishes[2]}，{binding}，强化品牌表现。",
-         "cost": "成本较高", "lead": "需要确认加急" if fast else "交期较长", "score": "视觉优先",
-         "reason": f"{profile_note}适合品牌发布和需要触感记忆点的物料。", "risk": "需要专色、打样、结构或后道工艺确认。",
-         "paper": materials[2], "finishing": finishes[2], "binding": binding},
-    ]
-
-
-def _number(value: str) -> int | None:
-    match = re.search(r"\d[\d,]*(?:\.\d+)?", value or "")
-    return int(float(match.group(0).replace(",", ""))) if match else None
-
-
-@tool
-def explain_print_term(question: str) -> dict[str, str]:
-    """解释常见印刷术语，帮助非专业用户做选择。"""
-    text = question.lower()
-    if any(term in text for term in ("哑粉", "铜版", "纸张", "纸怎么选", "纸材")):
-        answer = "哑粉纸颜色柔和、反光少，适合阅读型宣传册；铜版纸色彩更鲜亮、表面更光滑，适合图片和营销物料；不确定时可先用平衡方案。"
-        topic = "纸张选择"
-    elif any(term in text for term in ("出血", "安全边", "裁切")):
-        answer = "出血是画面超出成品裁切线的区域，常规建议四边各 3mm；文字和标志要放在安全边距内，避免裁切后贴边。"
-        topic = "出血与安全边"
-    elif any(term in text for term in ("覆膜", "哑膜", "亮膜")):
-        answer = "哑膜触感细腻、反光少，适合高端和阅读场景；亮膜颜色更亮、耐磨性好，适合促销物料。覆膜会增加一点成本和交期。"
-        topic = "覆膜选择"
-    elif any(term in text for term in ("四色", "专色", "印刷颜色", "黑白")):
-        answer = "四色印刷适合大多数彩色文件；专色适合品牌色和高一致性要求；黑白/单色成本较低，适合文字资料。"
-        topic = "颜色模式"
-    elif any(term in text for term in ("装订", "骑马钉", "胶装")):
-        answer = "骑马钉适合页数较少的宣传册，摊平性好；胶装适合页数较多、需要更正式的画册；包装盒通常需要糊盒而不是书刊装订。"
-        topic = "装订方式"
-    else:
-        answer = "我可以解释纸张、出血、颜色、覆膜和装订。你也可以直接告诉我用途、数量、尺寸和交期，我会替你做选择。"
-        topic = "印刷基础"
-    return {"topic": topic, "answer": answer, "next": "如果愿意，我可以把这个偏好直接写入当前订单。"}
-
-
-@tool
-def preflight_file(file_name: str, size_bytes: int, page_count: int | None = None,
-                   encrypted: bool = False, readable: bool = True,
-                   inspection: dict[str, Any] | None = None,
-                   expected_size: str | None = None) -> dict[str, Any]:
-    """检查文件类型、大小和浏览器本地解析出的印前线索。"""
-    checks = []
-    errors = []
-    warnings = []
-    suggestions = []
-    if not file_name.lower().endswith(".pdf"):
-        errors.append("MVP 暂只支持 PDF 文件。")
-        checks.append({"label": "文件类型", "status": "error", "detail": "仅支持 PDF"})
-    else:
-        checks.append({"label": "文件类型", "status": "ok", "detail": "PDF"})
-    if size_bytes <= 0:
-        errors.append("文件大小无效，请重新选择文件。")
-        checks.append({"label": "文件大小", "status": "error", "detail": "大小无效"})
-    elif size_bytes > 20 * 1024 * 1024:
-        errors.append("文件超过 20 MB，请压缩后再上传。")
-        checks.append({"label": "文件大小", "status": "error", "detail": "超过 20 MB"})
-    else:
-        checks.append({"label": "文件大小", "status": "ok", "detail": f"{size_bytes / 1024 / 1024:.1f} MB"})
-    if not readable:
-        errors.append("文件内容无法读取，请确认文件未损坏后重新上传。")
-        checks.append({"label": "文件内容", "status": "error", "detail": "无法读取"})
-    elif encrypted:
-        errors.append("PDF 已加密，请先解除密码保护再上传。")
-        checks.append({"label": "文件保护", "status": "error", "detail": "已加密"})
-    else:
-        checks.append({"label": "文件保护", "status": "ok", "detail": "未发现加密标记"})
-    if page_count is None:
-        warnings.append("无法解析页数，请在下单前人工确认页数。")
-        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
-    elif page_count <= 0:
-        warnings.append("未解析到页数，可能使用了压缩对象流，请人工确认页数。")
-        checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
-    else:
-        checks.append({"label": "页数", "status": "ok", "detail": f"{page_count} 页"})
-        if page_count >= 49:
-            warnings.append("页数较多，请确认装订方式和翻阅强度。")
-            suggestions.append("页数较多时优先确认胶装、锁线或特殊装订方案。")
-    file_hints = " ".join(part.lower() for part in re.split(r"[\s_-]+", file_name) if part)
-    naming_warnings = []
-    if "无出血" in file_name or "no-bleed" in file_hints:
-        naming_warnings.append("文件名提示可能缺少出血")
-    if "rgb" in file_hints:
-        naming_warnings.append("文件名提示可能使用 RGB 颜色")
-    if "低分辨率" in file_name or "low-res" in file_hints:
-        naming_warnings.append("文件名提示可能存在低分辨率图片")
-    if naming_warnings:
-        warnings.extend(f"{item}，请上传前检查印前设置。" for item in naming_warnings)
-        checks.append({"label": "文件命名", "status": "warn", "detail": "；".join(naming_warnings)})
-    else:
-        checks.append({"label": "文件命名", "status": "ok", "detail": "未发现常见风险标记"})
-
-    # The browser performs a bounded, local PDF metadata scan.  Treat every
-    # result as a clue, not a production-grade proof; final preflight stays a
-    # human or professional PDF tool responsibility.
-    inspection = inspection if isinstance(inspection, dict) else {}
-    if inspection:
-        if inspection.get("isPdf") is False:
-            errors.append("未检测到有效的 PDF 文件头，请重新导出文件。")
-            checks.append({"label": "PDF 文件头", "status": "error", "detail": "格式异常"})
-        elif inspection.get("isPdf") is True:
-            checks.append({"label": "PDF 文件头", "status": "ok", "detail": "格式标记正常"})
-        pdf_version = str(inspection.get("pdfVersion") or "").strip()[:12]
-        if pdf_version:
-            checks.append({"label": "PDF 版本", "status": "info", "detail": f"PDF {pdf_version}"})
-        inspected_pages = inspection.get("pageCount")
-        if isinstance(inspected_pages, int) and page_count and inspected_pages != page_count:
-            warnings.append("浏览器解析页数与提交页数不一致，请人工核对")
-            checks.append({"label": "页数一致性", "status": "warn", "detail": f"提交 {page_count} 页 / 解析 {inspected_pages} 页"})
-        if inspection.get("hasEof") is False:
-            warnings.append("未发现 PDF 结束标记，文件可能未完整导出")
-            checks.append({"label": "文件结束标记", "status": "warn", "detail": "未发现 %%EOF"})
-        elif inspection.get("hasEof") is True:
-            checks.append({"label": "文件结束标记", "status": "ok", "detail": "已发现 %%EOF"})
-
-        boxes = inspection.get("boxes") if isinstance(inspection.get("boxes"), dict) else {}
-        media_box = boxes.get("media") if isinstance(boxes.get("media"), list) else None
-        trim_box = boxes.get("trim") if isinstance(boxes.get("trim"), list) else None
-        bleed_box = boxes.get("bleed") if isinstance(boxes.get("bleed"), list) else None
-
-        def box_detail(box: Any) -> str:
-            if not isinstance(box, list) or len(box) != 4:
-                return "未解析到"
-            try:
-                width = abs(float(box[2]) - float(box[0])) * 25.4 / 72
-                height = abs(float(box[3]) - float(box[1])) * 25.4 / 72
-                return f"约 {width:.1f}×{height:.1f} mm"
-            except (TypeError, ValueError):
-                return "格式异常"
-
-        if media_box:
-            checks.append({"label": "页面 MediaBox", "status": "info", "detail": box_detail(media_box)})
-        if trim_box:
-            checks.append({"label": "裁切 TrimBox", "status": "ok", "detail": box_detail(trim_box)})
-        else:
-            warnings.append("未解析到 TrimBox，成品裁切尺寸需要人工确认")
-            checks.append({"label": "裁切 TrimBox", "status": "unknown", "detail": "未解析到"})
-        if bleed_box:
-            checks.append({"label": "出血 BleedBox", "status": "ok", "detail": box_detail(bleed_box)})
-        else:
-            warnings.append("未解析到 BleedBox，出血需要人工确认")
-            suggestions.append("确认成品四边通常各预留约 3mm 出血，并检查文字安全边")
-            checks.append({"label": "出血 BleedBox", "status": "unknown", "detail": "未解析到"})
-
-        # Compare the requested flat size with TrimBox (or MediaBox when no
-        # TrimBox is available). Three-dimensional package sizes stay unknown.
-        expected_sizes = []
-        for part in str(expected_size or "").split("/"):
-            parsed = _parse_size_mm(part.strip())
-            if parsed and len(parsed) == 2:
-                expected_sizes.append(parsed)
-        observed_box = trim_box or media_box
-        if expected_sizes and observed_box and len(observed_box) == 4:
-            try:
-                observed = (abs(float(observed_box[2]) - float(observed_box[0])) * 25.4 / 72,
-                            abs(float(observed_box[3]) - float(observed_box[1])) * 25.4 / 72)
-                matches = any(
-                    (abs(observed[0] - candidate[0]) <= 1 and abs(observed[1] - candidate[1]) <= 1)
-                    or (abs(observed[0] - candidate[1]) <= 1 and abs(observed[1] - candidate[0]) <= 1)
-                    for candidate in expected_sizes
-                )
-                observed_detail = f"约 {observed[0]:.1f}×{observed[1]:.1f} mm"
-                if matches:
-                    checks.append({"label": "成品尺寸一致性", "status": "ok", "detail": f"文件 {observed_detail}"})
-                else:
-                    warnings.append(f"文件页面尺寸为{observed_detail}，与订单成品尺寸不一致，请确认是否为展开尺寸")
-                    checks.append({"label": "成品尺寸一致性", "status": "warn", "detail": f"文件 {observed_detail} / 订单 {expected_size}"})
-            except (TypeError, ValueError):
-                checks.append({"label": "成品尺寸一致性", "status": "unknown", "detail": "尺寸格式异常"})
-        elif expected_sizes:
-            checks.append({"label": "成品尺寸一致性", "status": "unknown", "detail": "缺少可比页面框"})
-
-        color_spaces = inspection.get("colorSpaces") if isinstance(inspection.get("colorSpaces"), list) else []
-        color_spaces = [str(item)[:24] for item in color_spaces if item][:8]
-        if color_spaces:
-            checks.append({"label": "颜色空间线索", "status": "info", "detail": "、".join(color_spaces)})
-            if "DeviceRGB" in color_spaces:
-                warnings.append("检测到 RGB 颜色空间，印刷前请确认是否需要转换为 CMYK")
-            if any(item in color_spaces for item in ("Separation", "DeviceN")):
-                warnings.append("检测到专色/多色版线索，请确认专色名称和供应商配置")
-        else:
-            checks.append({"label": "颜色空间线索", "status": "unknown", "detail": "未解析到"})
-
-        font_state = str(inspection.get("fontEmbedding") or "unknown")
-        if font_state == "embedded":
-            checks.append({"label": "字体嵌入线索", "status": "ok", "detail": "发现字体文件嵌入标记"})
-        elif font_state == "missing":
-            warnings.append("发现字体可能未嵌入，印刷前请转曲或嵌入字体")
-            checks.append({"label": "字体嵌入线索", "status": "warn", "detail": "可能未嵌入"})
-        else:
-            checks.append({"label": "字体嵌入线索", "status": "unknown", "detail": "无法从轻量扫描确认"})
-
-        image_count = inspection.get("imageCount")
-        if isinstance(image_count, int) and image_count > 0:
-            checks.append({"label": "图片对象", "status": "info", "detail": f"发现 {image_count} 个图片对象；分辨率需专业工具确认"})
-        else:
-            checks.append({"label": "图片对象", "status": "unknown", "detail": "未解析到"})
-        if inspection.get("hasTransparency"):
-            warnings.append("检测到透明度对象，需确认扁平化和叠印效果")
-            checks.append({"label": "透明度线索", "status": "warn", "detail": "发现透明度对象"})
-        if inspection.get("hasOverprint"):
-            warnings.append("检测到叠印线索，请确认黑版和专色叠印设置")
-            checks.append({"label": "叠印线索", "status": "warn", "detail": "发现叠印标记"})
-    if errors:
-        message = errors[0]
-    elif warnings:
-        page_summary = f"已解析到 {page_count} 页；" if page_count and page_count > 0 else ""
-        message = f"基础检查完成，{page_summary}有 {len(warnings)} 项需要人工确认：" + "；".join(warnings)
-    else:
-        message = "基础检查通过；出血、颜色和字体仍需正式印前检查。"
-    return {"ok": not errors, "message": message, "fileName": file_name, "sizeBytes": size_bytes,
-            "pageCount": page_count, "encrypted": encrypted, "checks": checks,
-            "warnings": warnings, "suggestions": suggestions,
-            "inspectionLevel": "metadata" if inspection else "basic"}
-
-
-def _parse_size_mm(value: str) -> tuple[float, ...] | None:
-    """Parse common named/custom sizes for capability checks, without guessing units."""
-    text = unicodedata.normalize("NFKC", str(value or "")).upper().replace("＊", "×").replace("*", "×")
-    named = {"A3": (297.0, 420.0), "A4": (210.0, 297.0), "A5": (148.0, 210.0),
-             "B4": (257.0, 364.0), "B5": (182.0, 257.0)}
-    compact = re.sub(r"\s+", "", text)
-    if compact in named:
-        return named[compact]
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)×(\d+(?:\.\d+)?)(?:×(\d+(?:\.\d+)?))?(MM|CM)?", compact)
-    if not match:
-        return None
-    values = tuple(float(item) for item in match.groups()[:3] if item is not None)
-    unit = match.group(4)
-    if unit == "CM":
-        return tuple(item * 10 for item in values)
-    if unit == "MM":
-        return values
-    return None
-
-
-def _parse_max_size(value: str) -> tuple[float, ...] | None:
-    text = unicodedata.normalize("NFKC", str(value or "")).upper().replace("＊", "×").replace("*", "×")
-    if text == "A3+":
-        return (330.0, 480.0)
-    return _parse_size_mm(text)
-
-
-@tool
-def match_supplier_capability(order: dict[str, Any], platform_id: str | None = None) -> dict[str, Any]:
-    """将标准订单与供应商能力档案逐字段匹配，返回支持、待确认和不支持项。"""
-    selected_id = platform_id or order.get("platform") or "generic"
-    platform = PLATFORMS.get(selected_id, PLATFORMS["generic"])
-    profile = platform.get("supplierProfile", {})
-    supported: list[dict[str, Any]] = []
-    needs_review: list[dict[str, Any]] = []
-    unsupported: list[dict[str, Any]] = []
-
-    def review(field: str, message: str) -> None:
-        needs_review.append({"field": field, "message": message})
-
-    def support(field: str, value: Any) -> None:
-        supported.append({"field": field, "value": value})
-
-    product_type = order.get("productType", "")
-    categories = profile.get("categories", [])
-    if product_type and (product_type in categories or "全品类" in categories):
-        support("品类", product_type)
-    elif product_type:
-        unsupported.append({"field": "品类", "message": f"供应商档案未明确支持{product_type}"})
-    else:
-        review("品类", "尚未确定印刷品品类")
-
-    paper = order.get("paper", "")
-    papers = profile.get("papers", [])
-    if paper:
-        if not papers or "按供应商确认" in papers:
-            review("纸张/材料", "纸张能力需要供应商人工确认")
-        elif any(item.lower() in paper.lower() for item in papers):
-            support("纸张/材料", paper)
-        else:
-            unsupported.append({"field": "纸张/材料", "message": f"{paper}不在常用材料档案中"})
-
-    finishing = order.get("finishing", "")
-    finishings = profile.get("finishing", [])
-    if finishing:
-        if not finishings or "按供应商确认" in finishings:
-            review("表面工艺", "表面工艺能力需要供应商人工确认")
-        else:
-            matched = [item for item in finishings if item.lower() in finishing.lower()]
-            if matched:
-                support("表面工艺", "、".join(matched))
-            else:
-                unsupported.append({"field": "表面工艺", "message": f"{finishing}不在常用工艺档案中"})
-
-    size = order.get("size", "")
-    max_size = profile.get("maxSize", "")
-    if size:
-        limit = _parse_max_size(max_size)
-        actual = _parse_size_mm(size.split(" / ")[0])
-        if max_size in {"", "按供应商确认", "待补充"}:
-            review("成品尺寸", f"请由供应商确认{size}的可生产范围")
-        elif limit and actual:
-            actual_sorted, limit_sorted = sorted(actual), sorted(limit)
-            if len(actual_sorted) > len(limit_sorted):
-                review("成品尺寸", f"{size}包含结构尺寸，需供应商按刀模和展开尺寸确认")
-            elif len(actual_sorted) == len(limit_sorted) and all(a <= b for a, b in zip(actual_sorted, limit_sorted)):
-                support("成品尺寸", size)
-                review("成品尺寸", f"档案范围已覆盖{size}，仍需确认成品/展开尺寸和出血要求")
-            else:
-                unsupported.append({"field": "成品尺寸", "message": f"{size}可能超过供应商最大尺寸{max_size}"})
-        else:
-            review("成品尺寸", f"请确认{size}与供应商最大尺寸{max_size}的关系")
-
-    deadline = order.get("deadline", "")
-    if deadline:
-        lead_time = profile.get("leadTime", "按供应商确认")
-        if lead_time in {"", "按供应商确认", "待补充"}:
-            review("交期", f"请由供应商确认{deadline}是否可交付")
-        else:
-            review("交期", f"静态档案参考交期为{lead_time}，仍需确认{deadline}")
-
-    product_profile = parameter_state(order)
-    if product_profile.get("parameters"):
-        filled = [item["label"] for item in product_profile["parameters"] if item.get("filled")]
-        if filled:
-            review("品类参数", f"已填写{('、'.join(filled))}，需映射到供应商字段并人工确认")
-
-    multi_product = _multi_product_info(order)
-    if multi_product:
-        label = "、".join(multi_product) if len(multi_product) > 1 else "多个订单项"
-        items = order.get("items") if isinstance(order.get("items"), list) else []
-        split_ready = items and all(isinstance(item, dict) and item.get("selectedOption") for item in items)
-        review("多产品订单", f"{label}已拆分，将按产品项分别确认能力" if split_ready
-               else f"检测到{label}，需拆分为独立订单项后再询价")
-
-    status = "unsupported" if unsupported else "review" if needs_review else "ready"
-    denominator = len(supported) + len(needs_review) + len(unsupported)
-    confidence = round(len(supported) / denominator * 100) if denominator else 0
-    return {"platformId": selected_id, "platform": platform["name"], "status": status,
-            "confidence": confidence, "supported": supported, "needsReview": needs_review,
-            "unsupported": unsupported, "profile": profile,
-            "knowledgeVersion": KNOWLEDGE_VERSION,
-            "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
-            "multiProduct": multi_product,
-            "requiresHumanConfirmation": status != "ready" or bool(needs_review)}
-
-
-@tool
-def request_supplier_quote(order: dict[str, Any], platform_id: str | None = None) -> dict[str, Any]:
-    """Prepare a supplier quote request without sending anything externally."""
-    selected_id = platform_id or order.get("platform") or "generic"
-    platform = PLATFORMS.get(selected_id, PLATFORMS["generic"])
-    capability = match_supplier_capability(order, selected_id)
-    multi_product = capability.get("multiProduct") or _multi_product_info(order)
-    if capability.get("unsupported") or multi_product:
-        message = ("当前订单包含多个产品项，未生成合并询价请求；请在当前产品项中分别询价。"
-                   if multi_product else "当前平台存在明确不支持项，未生成询价请求；请切换平台或先人工确认。")
-        return {
-            "status": "blocked",
-            "platformId": selected_id,
-            "platform": platform["name"],
-            "capabilityStatus": capability.get("status"),
-            "knowledgeVersion": KNOWLEDGE_VERSION,
-            "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
-            "unsupported": capability["unsupported"],
-            "multiProduct": multi_product,
-            "requiresHumanConfirmation": True,
-            "message": message,
-        }
-    adapter = get_adapter(selected_id)
-    return {
-        **adapter.prepare_quote_request(order, capability),
-        "knowledgeVersion": KNOWLEDGE_VERSION,
-        "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
-    }
-
-
-@tool
-def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
-    """按目标平台生成标准化订单交接文本。"""
-    platform_id = order.get("platform") or "generic"
-    platform = PLATFORMS.get(platform_id, PLATFORMS["generic"])
-    adapter = get_adapter(platform_id)
-    supplier_profile = platform.get("supplierProfile", {})
-    readiness = match_supplier_capability(order)
-    multi_product = _multi_product_info(order)
-    if multi_product:
-        return {
-            "status": "blocked",
-            "platform": platform,
-            "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
-            "mappedOrder": {},
-            "text": "订单包含多个产品项，需分别完成各项确认后再生成整体交接单。",
-            "productProfile": parameter_state(order),
-            "supplierReadiness": readiness,
-            "knowledgeVersion": KNOWLEDGE_VERSION,
-            "multiProduct": multi_product,
-            "requiresHumanConfirmation": True,
-        }
-    dimensions = order.get("dimensions") if isinstance(order.get("dimensions"), dict) else {}
-    fields = [(key, LABELS[key]) for key in LABELS if key != "platform"
-              and not (key == "size" and dimensions.get("packageSize") and not dimensions.get("finishedSize"))]
-    lines = [f"目标平台：{platform['name']}"] + [f"{label}：{order[key] or '未填写'}" for key, label in fields]
-    dimension_lines = [f"{DIMENSION_LABELS[key]}：{dimensions.get(key)}"
-                       for key in DIMENSION_LABELS if dimensions.get(key)]
-    if dimension_lines:
-        lines.append("尺寸定义：")
-        lines.extend(f"- {line}" for line in dimension_lines)
-    profile = parameter_state(order)
-    if profile["parameters"]:
-        lines.append(f"品类分类：{profile['category']}")
-        lines.append("品类参数：")
-        lines.extend(f"- {item['label']}：{item['value'] or '未填写'}" for item in profile["parameters"])
-    text = "\n".join(lines)
-    return {"status": "ready", "platform": platform, "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
-            "mappedOrder": adapter.map_order(order), "text": text, "productProfile": profile,
-            "supplierReadiness": readiness,
-            "knowledgeVersion": KNOWLEDGE_VERSION,
-            "requiresHumanConfirmation": True}
-
-
-@tool
-def estimate_price(order: dict[str, Any]) -> dict[str, Any]:
-    """根据订单字段估算价格区间，不替代印刷厂正式报价。"""
-    multi_product = _multi_product_info(order)
-    if multi_product:
-        return {"type": "estimate", "status": "blocked", "range": None, "missing": [],
-                "multiProduct": multi_product, "assumptions": "多个产品项不能合并估算；请拆分后分别估算。",
-                "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
-    missing = [LABELS[key] for key in ("productType", "quantity", "size", "printing") if not order.get(key)]
-    if missing:
-        return {"type": "estimate", "range": None, "missing": missing,
-                "assumptions": "至少需要印刷品、数量、尺寸和印刷颜色后才能估算。",
-                "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
-    quantity = _number(order.get("quantity", "")) or 500
-    base = 180 if order.get("productType") in {"名片", "折页", "单页"} else 520
-    if order.get("productType") in {"包装盒", "手提袋", "纸杯", "标签"}:
-        base *= 1.35
-    unit = max(0.35, base / max(quantity, 1))
-    if order.get("finishing") and order["finishing"] not in {"无特殊工艺", "待推荐"}: unit *= 1.35
-    low, high = round(quantity * unit * 0.85), round(quantity * unit * 1.25)
-    return {"type": "estimate", "range": f"¥{low} - ¥{high}", "assumptions": "按常规纸张、四色印刷和当前数量估算，未含运输及特殊打样。", "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
-
-
-@tool
-def validate_order(order: dict[str, Any]) -> dict[str, Any]:
-    """校验订单字段完整性，输出阻塞项、风险和下一步建议。"""
-    required_keys = required_order_keys(order)
-    missing = [LABELS[key] for key in required_keys if not order.get(key)]
-    warnings = []
-    suggestions = []
-    risks = []
-    profile = parameter_state(order)
-    product_missing = [item["label"] for item in profile["missing"]]
-    multi_product = _multi_product_info(order)
-    if multi_product:
-        label = "、".join(multi_product) if len(multi_product) > 1 else "多个订单项"
-        warnings.append(f"检测到多个印刷品：{label}，当前需要拆分为独立订单项")
-        suggestions.append("请分别确认每个产品的数量、尺寸、材料和交期，再分别询价")
-    if order.get("productType") in {"宣传册", "画册"} and not order.get("binding"):
-        warnings.append("宣传册/画册尚未确认装订方式")
-        suggestions.append("页数少于 48 页可优先考虑骑马钉，页数较多再考虑胶装")
-    page_count = _number(order.get("pages", ""))
-    if (order.get("productType") in {"宣传册", "画册"} and order.get("binding") == "骑马钉"
-            and page_count is not None and page_count >= 48):
-        message = f"{page_count} 页画册使用骑马钉，装订强度和摊平度可能不足"
-        warnings.append(message)
-        suggestions.append("页数达到 48 页或更多时，优先确认胶装、锁线胶装或特殊装订")
-        risks.append({"level": "warning", "message": message, "suggestion": suggestions[-1]})
-    if order.get("finishing") in {"烫金", "烫金 / 击凸"}:
-        warnings.append("烫金需要确认文件专色、线条粗细和加急交期")
-    if order.get("printing") == "双面四色" and order.get("productType") in {"宣传册", "画册"} and not order.get("pages"):
-        suggestions.append("补充页数后才能准确判断装订和纸张克重")
-    if order.get("size") and any(re.fullmatch(r"\d+×\d+(?:×\d+)?", part) for part in order["size"].split(" / ")):
-        warnings.append("自定义尺寸未注明单位，请确认是 mm 还是 cm")
-    if product_missing:
-        warnings.append(f"{order.get('productType') or '该品类'}还需确认：{'、'.join(product_missing)}")
-        suggestions.append(profile["missing"][0]["question"])
-    if order.get("productType") == "包装盒" and order.get("size") and not (order.get("productSpecs") or {}).get("boxSize"):
-        suggestions.append("包装盒请补充长×宽×高，并区分内尺寸/外尺寸")
-    if order.get("productType") in {"喷画", "海报", "PVC"} and (order.get("productSpecs") or {}).get("install"):
-        if "户外" in str((order.get("productSpecs") or {}).get("install")) and order.get("productType") == "海报":
-            warnings.append("户外展示请确认介质耐候性与安装安全")
-    quantity = _number(order.get("quantity", ""))
-    if quantity is not None and quantity <= 0:
-        warnings.append("数量必须大于 0")
-    readiness = round((len(required_keys) - len(missing)) / len(required_keys) * 100) if required_keys else 100
-    item_validations = _validate_order_items(order) if multi_product else []
-    item_readiness = round(sum(item["readiness"] for item in item_validations) / len(item_validations)) if item_validations else None
-    if item_validations and all(item.get("ok") for item in item_validations) \
-            and all(item.get("selectedOption") for item in (order.get("items") or []) if isinstance(item, dict)):
-        warnings = [item for item in warnings if "检测到多个印刷品" not in item]
-        suggestions = [item for item in suggestions if "分别确认每个产品" not in item]
-    return {"ok": not missing and quantity != 0 and not multi_product, "missing": missing,
-            "multiProduct": multi_product, "productMissing": product_missing,
-            "productProfile": profile, "warnings": warnings, "suggestions": suggestions,
-            "risks": risks, "readiness": readiness, "productReadiness": profile["readiness"],
-            "itemValidations": item_validations, "itemReadiness": item_readiness,
-            "knowledgeVersion": KNOWLEDGE_VERSION}
-
-
-def _validate_order_items(order: dict[str, Any]) -> list[dict[str, Any]]:
-    """Validate each product item against its own product profile.
-
-    Top-level order fields stay available for backwards compatibility, but a
-    multi-product order must use these per-item results before recommendation,
-    quote, or handoff actions are enabled.
-    """
-    items = order.get("items") if isinstance(order.get("items"), list) else []
-    shared_fields = ("purpose", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget")
-    results: list[dict[str, Any]] = []
-    for index, raw_item in enumerate(items):
-        if not isinstance(raw_item, dict):
-            continue
-        item = deepcopy(raw_item)
-        item["items"] = []
-        item["productTypes"] = []
-        for key in shared_fields:
-            if not item.get(key) and order.get(key):
-                item[key] = deepcopy(order[key])
-        item_result = validate_order(item)
-        ready = bool(item_result.get("ok")) and not item_result.get("productMissing")
-        results.append({
-            "itemId": str(raw_item.get("itemId") or f"item-{index + 1}"),
-            "index": index,
-            "productType": raw_item.get("productType") or "",
-            "ok": ready,
-            "status": "ready" if ready else "needs_input",
-            "missing": item_result.get("missing", []),
-            "productMissing": item_result.get("productMissing", []),
-            "warnings": item_result.get("warnings", []),
-            "risks": item_result.get("risks", []),
-            "parameters": [{"key": parameter.get("key"), "label": parameter.get("label"),
-                            "value": parameter.get("value", ""), "filled": parameter.get("filled", False),
-                            "required": parameter.get("required", False)}
-                           for parameter in item_result.get("productProfile", {}).get("parameters", [])
-                           if parameter.get("key")],
-            "readiness": round((item_result.get("readiness", 0) + item_result.get("productReadiness", 0)) / 2),
-            "productReadiness": item_result.get("productReadiness", 0),
-        })
-    return results
 
 
 class Agent:
@@ -1251,20 +355,52 @@ class Agent:
             return stored
         return self._base_workflow_stage(validation)
 
-    def _set_field_meta(self, key: str, value: Any, source: str, confidence: float) -> None:
+    def _resolve_confidence(self, key: str, base: float, field_confidence: dict[str, float] | None) -> float:
+        """Prefer the perception-grade confidence for a field over the scalar."""
+        if not field_confidence:
+            return base
+        if key in field_confidence:
+            return float(field_confidence[key])
+        if key.startswith("items."):
+            remainder = ".".join(key.split(".")[2:])
+            if remainder in field_confidence:
+                return float(field_confidence[remainder])
+        if key.startswith("productSpecs.") and "productSpecs" in field_confidence:
+            return float(field_confidence["productSpecs"])
+        return base
+
+    def _set_field_meta(self, key: str, value: Any, source: str, confidence: float,
+                        field_confidence: dict[str, float] | None = None) -> None:
         if value in (None, ""):
             self.state.setdefault("fieldMeta", {}).pop(key, None)
             return
+        graded = self._resolve_confidence(key, confidence, field_confidence)
         self.state.setdefault("fieldMeta", {})[key] = {
             "value": deepcopy(value), "source": source,
             "sourceLabel": FIELD_SOURCE_LABELS.get(source, source),
-            "confidence": round(max(0.0, min(1.0, float(confidence))), 2),
+            "confidence": round(max(0.0, min(1.0, float(graded))), 2),
             "runId": self.run_id or None, "updatedAt": self._timestamp(),
         }
 
-    def _low_confidence_fields(self) -> list[str]:
-        return [key for key, meta in (self.state.get("fieldMeta") or {}).items()
-                if meta.get("value") not in (None, "", {}) and float(meta.get("confidence", 1)) < 0.75]
+    PRODUCTION_FIELD_KEYS = {"productType", "quantity", "quantityValue", "quantityUnit", "size",
+                             "dimensions", "pages", "orientation", "paper", "printing",
+                             "finishing", "binding", "deadline"}
+
+    @classmethod
+    def _is_production_field(cls, key: str) -> bool:
+        """Preference fields (budget/purpose/platform) never block generation."""
+        if key.startswith("items."):
+            key = ".".join(key.split(".")[2:])
+        if key.startswith(("productSpecs.", "dimensions.")):
+            return True
+        return key in cls.PRODUCTION_FIELD_KEYS
+
+    def _low_confidence_fields(self, production_only: bool = False) -> list[str]:
+        fields = [key for key, meta in (self.state.get("fieldMeta") or {}).items()
+                  if meta.get("value") not in (None, "", {}) and float(meta.get("confidence", 1)) < 0.75]
+        if production_only:
+            fields = [key for key in fields if self._is_production_field(key)]
+        return fields
 
     def _record_conflict(self, key: str, previous: Any, current: Any, source: str) -> None:
         if previous in (None, "", {}) or current in (None, "", {}) or previous == current:
@@ -1288,7 +424,7 @@ class Agent:
         self._begin_run("chat")
         self.trace = ["感知需求"]
         self._event("perceive", "ok", "已完成规则感知")
-        perceived = self._perceive(text)
+        perceived, perceived_confidence = self._perceive_full(text)
         focus_match = re.search(r"第\s*(\d+)\s*项", text or "")
         requested_index = item_index
         if requested_index is None and focus_match and re.search(r"处理|查看|编辑|切换|更新", text or ""):
@@ -1318,12 +454,14 @@ class Agent:
         target_item = (isinstance(items, list) and isinstance(active_item, int)
                        and 0 <= active_item < len(items) and len(items) > 1)
         if target_item:
-            changed_item = self._update_item(active_item, perceived, source="rule", confidence=0.84)
+            changed_item = self._update_item(active_item, perceived, source="rule", confidence=0.84,
+                                             field_confidence=perceived_confidence)
             if patch:
                 changed_item |= self._update_item(active_item, patch, source="user", confidence=1.0)
             changed_fields = [f"items.{items[active_item].get('itemId', f'item-{active_item + 1}')}.{key}" for key in changed_item]
         else:
-            changed = self._update_order(perceived, source="rule", confidence=0.84)
+            changed = self._update_order(perceived, source="rule", confidence=0.84,
+                                         field_confidence=perceived_confidence)
             if patch:
                 changed |= self._update_order(patch, source="user", confidence=1.0)
             changed_fields = list(changed)
@@ -1644,7 +782,7 @@ class Agent:
                 self._remember("assistant", message)
                 self._save()
                 return self._result([message], tool_result=validation)
-            uncertain = [field for field in self._low_confidence_fields() if field.startswith("items.")]
+            uncertain = [field for field in self._low_confidence_fields(production_only=True) if field.startswith("items.")]
             if uncertain:
                 self._event("approval", "blocked", "产品项存在低置信度字段", fields=uncertain)
                 labels = [LABELS.get(field.rsplit(".", 1)[-1], field) for field in uncertain]
@@ -1709,7 +847,7 @@ class Agent:
             self._remember("assistant", message)
             self._save()
             return self._result([message], tool_result=validation)
-        uncertain = self._low_confidence_fields()
+        uncertain = self._low_confidence_fields(production_only=True)
         if uncertain:
             labels = [LABELS.get(key, key) for key in uncertain]
             message = f"订单还不能生成。请先确认低置信度字段：{'、'.join(labels)}。确认后再生成订单草稿。"
@@ -2024,7 +1162,8 @@ class Agent:
         return "下一步：人工确认文件、价格和交期"
 
     def _update_item(self, index: int, changes: dict[str, Any], source: str = "rule",
-                     confidence: float = 0.84) -> set[str]:
+                     confidence: float = 0.84,
+                     field_confidence: dict[str, float] | None = None) -> set[str]:
         """Apply a constrained patch to one product item in a multi-product order."""
         items = self.state["order"].get("items")
         if not isinstance(items, list) or not (0 <= index < len(items)) or not isinstance(changes, dict):
@@ -2042,6 +1181,14 @@ class Agent:
             if parsed_quantity:
                 display, numeric, unit = parsed_quantity
                 valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
+                unchanged = all(item.get(key) == value for key, value in
+                                (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)))
+                if unchanged:
+                    # Re-stating an identical quantity is still a confirmation:
+                    # it must be able to clear a low confidence grade.
+                    item_id = item.get("itemId") or f"item-{index + 1}"
+                    for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
+                        self._set_field_meta(f"items.{item_id}.{key}", value, source, confidence, field_confidence)
         for key, value in changes.items():
             if key not in ITEM_DEFAULTS or key in quantity_keys or key in {"itemId", "selectedOption", "orderGenerated"}:
                 continue
@@ -2113,7 +1260,8 @@ class Agent:
                 after = item.get("productSpecs") or {}
                 for name in set(before) | set(after):
                     spec_field = f"items.{item_id}.productSpecs.{name}"
-                    self._set_field_meta(spec_field, after.get(name), source, confidence)
+                    self._set_field_meta(spec_field, after.get(name), source, confidence,
+                                         field_confidence)
             elif key == "dimensions":
                 before = previous.get("dimensions") or {}
                 after = item.get("dimensions") or {}
@@ -2122,12 +1270,14 @@ class Agent:
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(spec_field, old_value, new_value, source)
-                    self._set_field_meta(spec_field, new_value, source, confidence)
+                    self._set_field_meta(spec_field, new_value, source, confidence,
+                                         field_confidence)
             else:
-                self._set_field_meta(field, new_value, source, confidence)
+                self._set_field_meta(field, new_value, source, confidence, field_confidence)
         return changed
 
-    def _update_order(self, changes: dict[str, Any], source: str = "rule", confidence: float = 0.84) -> set[str]:
+    def _update_order(self, changes: dict[str, Any], source: str = "rule", confidence: float = 0.84,
+                      field_confidence: dict[str, float] | None = None) -> set[str]:
         previous_product = self.state["order"].get("productType")
         previous_order = deepcopy(self.state["order"])
         valid: dict[str, Any] = {}
@@ -2147,6 +1297,13 @@ class Agent:
             if parsed_quantity:
                 display, numeric, unit = parsed_quantity
                 valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
+                unchanged = all(self.state["order"].get(key) == value for key, value in
+                                (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)))
+                if unchanged:
+                    # Re-stating an identical quantity is still a confirmation:
+                    # it must be able to clear a low confidence grade.
+                    for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
+                        self._set_field_meta(key, value, source, confidence, field_confidence)
         for key, value in changes.items():
             if key not in ORDER_DEFAULTS or value is None or key in quantity_keys:
                 continue
@@ -2233,7 +1390,7 @@ class Agent:
                     field = f"productSpecs.{name}"
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
-                    self._set_field_meta(field, new_value, source, confidence)
+                    self._set_field_meta(field, new_value, source, confidence, field_confidence)
             elif key == "dimensions":
                 before = previous_order.get("dimensions") or {}
                 after = self.state["order"].get("dimensions") or {}
@@ -2242,12 +1399,12 @@ class Agent:
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
-                    self._set_field_meta(field, new_value, source, confidence)
+                    self._set_field_meta(field, new_value, source, confidence, field_confidence)
             else:
                 old_value, new_value = previous_order.get(key), self.state["order"].get(key)
                 if old_value and new_value and old_value != new_value:
                     self._record_conflict(key, old_value, new_value, source)
-                self._set_field_meta(key, new_value, source, confidence)
+                self._set_field_meta(key, new_value, source, confidence, field_confidence)
         if changed & RECOMMENDATION_FIELDS:
             self.state["selectedOption"] = None
             self._invalidate_delivery_state()
@@ -2286,17 +1443,55 @@ class Agent:
         if changed:
             self._event("plan", "ok", "模型提出了受限字段更新", changedFields=sorted(changed))
 
+    def _planner_order_digest(self) -> dict[str, Any]:
+        """Compact order view for the planner: present fields only.
+
+        The full order (empty defaults, whole items lists) wastes tokens on
+        every call; the digest keeps the same field names so a proposed patch
+        still lands through the normal whitelist.
+        """
+        order = self.state["order"]
+        validation = validate_order(order)
+        digest: dict[str, Any] = {key: order[key] for key in LABELS if order.get(key)}
+        if order.get("quantityValue") is not None:
+            digest["quantityValue"] = order["quantityValue"]
+        digest["platform"] = order.get("platform") or "generic"
+        dimensions = {key: value for key, value in (order.get("dimensions") or {}).items() if value}
+        if dimensions:
+            digest["dimensions"] = dimensions
+        if order.get("productSpecs"):
+            digest["productSpecs"] = order["productSpecs"]
+        items = order.get("items") if isinstance(order.get("items"), list) else []
+        if len(items) > 1:
+            trimmed = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                entry = {key: item[key] for key in ("itemId", "productType", "quantity", "size", "pages",
+                                                    "selectedOption") if item.get(key)}
+                item_dimensions = {key: value for key, value in (item.get("dimensions") or {}).items() if value}
+                if item_dimensions:
+                    entry["dimensions"] = item_dimensions
+                if item.get("productSpecs"):
+                    entry["productSpecs"] = item["productSpecs"]
+                trimmed.append(entry)
+            digest["items"] = trimmed
+        digest["missingFields"] = list(validation.get("missing") or []) + list(validation.get("productMissing") or [])
+        digest["workflowStage"] = self._workflow_stage(validation)
+        return digest
+
     def _ask_planner(self, text: str, tool_result: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Call a provider with bounded context; provider failures stay inside the Agent."""
         history = self.state["messages"][:-1]
+        digest = self._planner_order_digest()
         try:
             if tool_result is None:
-                return self.planner.plan(text, self.state["order"], self.available_tools(), history)
+                return self.planner.plan(text, digest, self.available_tools(), history)
             try:
-                return self.planner.plan(text, self.state["order"], self.available_tools(), history, tool_result=tool_result)
+                return self.planner.plan(text, digest, self.available_tools(), history, tool_result=tool_result)
             except TypeError:
                 # Keep compatibility with an older custom planner implementation.
-                return self.planner.plan(text, self.state["order"], self.available_tools(), history)
+                return self.planner.plan(text, digest, self.available_tools(), history)
         except Exception:
             if hasattr(self.planner, "last_error"):
                 self.planner.last_error = "模型调用异常"
@@ -2331,301 +1526,18 @@ class Agent:
 
     @staticmethod
     def _perceive(text: str, allow_multi: bool = True) -> dict[str, Any]:
-        # Normalize full-width input copied from design tools or IMEs first.
-        text = unicodedata.normalize("NFKC", text or "")
-        data: dict[str, Any] = {}
-        product = find_product(text)
-        # Keep invitation cards from the original MVP as a lightweight family.
-        if not product and "邀请函" in text:
-            product = "邀请函"
-        if product:
-            data["productType"] = product
-        size_matches = Agent._extract_sizes(text)
-        size_spans = [(match.start(), match.end()) for match, _ in size_matches]
-        quantity_candidates: list[tuple[int, int, tuple[str, int | float, str]]] = []
-        explicit_quantity = re.search(
-            rf"(?:数量|印刷量|印多少|做多少)\s*(?:改成|改为|调整为|为|是)?\s*{QUANTITY_CAPTURE}",
-            text,
-        )
-        if explicit_quantity:
-            raw = "".join(item or "" for item in explicit_quantity.groups())
-            parsed = parse_quantity(raw, product, explicit_quantity.group(3) or "")
-            if parsed:
-                data["quantity"], data["quantityValue"], data["quantityUnit"] = parsed
-        for match in re.finditer(rf"(?:约|大约|需要|印刷|做)?\s*{QUANTITY_CAPTURE}", text):
-            # Dimension numbers (including B4's 4) are never quantities.
-            number_start, number_end = match.span(1)
-            if any(start <= number_start and number_end <= end for start, end in size_spans):
-                continue
-            unit = match.group(3) or match.group(2) or ""
-            next_chars = text[match.end():].lstrip()
-            prefix_text = text[match.start():number_start]
-            has_quantity_context = bool(re.search(r"(?:约|大约|需要|印刷|做|数量)\s*$", prefix_text))
-            if (unit or has_quantity_context) and not next_chars.startswith(("x", "X", "×", "*", "\\")):
-                parsed = parse_quantity(match.group(0), product, match.group(3) or "")
-                if parsed:
-                    data["quantity"], data["quantityValue"], data["quantityUnit"] = parsed
-                    quantity_candidates.append((number_start, number_end, parsed))
-        if size_matches:
-            normalized_sizes = []
-            for _, size in size_matches:
-                if size not in normalized_sizes:
-                    normalized_sizes.append(size)
-            labeled_dimensions = {
-                key: Agent._extract_labeled_size(text, marker)
-                for key, marker in (
-                    ("finishedSize", r"(?:成品|裁切)(?:尺寸|大小)?"),
-                    ("expandedSize", r"(?:展开|摊开)(?:尺寸|大小)?"),
-                    ("dieCutSize", r"(?:刀模|刀线)(?:尺寸|大小)?"),
-                    ("packageSize", r"(?:包装|盒体|袋体)(?:尺寸|大小)?"),
-                )
-            }
-            labeled_dimensions = {key: value for key, value in labeled_dimensions.items() if value}
-            if labeled_dimensions:
-                data["dimensions"] = labeled_dimensions
-                # ``size`` remains the backwards-compatible finished-size
-                # field. Never let an expanded or die-cut size replace it.
-                if labeled_dimensions.get("finishedSize"):
-                    data["size"] = labeled_dimensions["finishedSize"]
-                elif labeled_dimensions.get("packageSize") and _is_three_dimensional_size(labeled_dimensions["packageSize"]):
-                    # Keep the legacy display field for structural products;
-                    # the nested dimension remains the authoritative meaning.
-                    data["size"] = labeled_dimensions["packageSize"]
-                elif not data.get("size"):
-                    data["size"] = ""
-            else:
-                data["size"] = " / ".join(normalized_sizes)
-        if match := re.search(r"(?:共|约|大约)?\s*(\d{1,3})\s*(?:页|P(?![A-Za-z]))", text, re.I):
-            data["pages"] = f"{match.group(1)} 页"
-        if re.search(r"横版|横向|横式", text): data["orientation"] = "横版"
-        elif re.search(r"竖版|竖向|纵向|直式", text): data["orientation"] = "竖版"
-        paper_match = re.search(r"(\d{2,3})\s*(?:g|克)\s*(哑粉纸|铜版纸|白卡纸|牛皮纸|胶版纸)", text, re.I)
-        if paper_match:
-            data["paper"] = f"{paper_match.group(1)}g {paper_match.group(2)}"
-        else:
-            for item in ["特种纸", "牛皮纸", "白卡纸", "铜版纸", "哑粉纸", "胶版纸"]:
-                if item in text: data["paper"] = item; break
-        if re.search(r"双面.*?(?:四色|彩印)?|两面", text): data["printing"] = "双面四色"
-        elif re.search(r"单面.*?(?:四色|彩印)?", text): data["printing"] = "单面四色"
-        elif "四色" in text or "彩色" in text or "彩印" in text: data["printing"] = "四色印刷"
-        elif "黑白" in text or "单色" in text: data["printing"] = "单色印刷"
-        finish_names = ["哑膜", "亮膜", "覆膜", "烫金", "烫银", "局部UV", "局部 UV", "击凸", "压凹", "上光"]
-        removed_finishes = [item for item in finish_names if re.search(rf"(?:不要|不需要|无需|不用|去掉|取消).{{0,5}}{re.escape(item)}", text, re.I)]
-        finishes = [item for item in finish_names if item.lower() in text.lower() and item not in removed_finishes]
-        if removed_finishes and not finishes: data["finishing"] = "无特殊工艺"
-        elif finishes: data["finishing"] = "、".join(dict.fromkeys(finishes))
-        if "骑马钉" in text: data["binding"] = "骑马钉"
-        elif "胶装" in text: data["binding"] = "胶装"
-        elif "锁线" in text: data["binding"] = "锁线胶装"
-        elif re.search(r"(?:不要|不需要|无需|不用|去掉|取消).{0,5}装订", text): data["binding"] = "无需装订"
-        if budget_match := re.search(r"预算\s*(?:控制在|不超过|约|为)?\s*([\d,]+)\s*[元块]", text):
-            data["budget"] = f"预算 ¥{budget_match.group(1).replace(',', '')}"
-        elif re.search(r"低预算|便宜|控制成本|经济|不超过\s*\d+\s*[元块]", text): data["budget"] = "优先控制成本"
-        elif re.search(r"高级|质感|精致|有档次", text): data["budget"] = "优先视觉质感"
-        elif re.search(r"赶|尽快|明天|后天|下周|三天|两天", text): data["budget"] = "优先交期"
-        if match := re.search(r"(今天|明天|后天|(?:三|两|一|四|五|六|七)天(?:后|内)?|\d+\s*天(?:后|内)?|本周[一二三四五六日天]?|下周[一二三四五六日天]?|月底|\d{1,2}月\d{1,2}日)", text):
-            data["deadline"] = re.sub(r"\s+", "", match.group(1))
-        if "宣传" in text or "推广" in text or "活动" in text: data["purpose"] = "品牌宣传"
-        platform_aliases = {"盛大": "shengda", "平台A": "platform_a", "平台 B": "platform_b", "平台B": "platform_b"}
-        for phrase, platform in platform_aliases.items():
-            if phrase in text: data["platform"] = platform; break
-        if not product and re.search(r"天地盖|抽屉盒|折叠盒|飞机盒|开窗盒", text):
-            product = data["productType"] = "包装盒"
-        specs = Agent._extract_product_specs(text, product, data.get("size", ""))
-        if specs:
-            data["productSpecs"] = specs
-        normalize_order_dimensions(data)
-        if allow_multi:
-            mentions = _find_product_mentions(text)
-            distinct_products = list(dict.fromkeys(item[0] for item in mentions))
-            if len(mentions) > 1 and len(distinct_products) > 1:
-                items = []
-                used_quantities: set[int] = set()
-                for index, (item_product, item_start, _) in enumerate(mentions):
-                    segment_start = item_start
-                    segment_end = mentions[index + 1][1] if index + 1 < len(mentions) else len(text)
-                    item = Agent._perceive(text[segment_start:segment_end], allow_multi=False)
-                    item["productType"] = item_product
-                    if quantity_candidates:
-                        mention_mid = (item_start + mentions[index][2]) / 2
-                        available = [
-                            (candidate_index, candidate)
-                            for candidate_index, candidate in enumerate(quantity_candidates)
-                            if candidate_index not in used_quantities
-                        ]
-                        if available:
-                            candidate_index, (_, _, quantity) = min(
-                                available,
-                                key=lambda entry: abs(((entry[1][0] + entry[1][1]) / 2) - mention_mid),
-                            )
-                            item["quantity"], item["quantityValue"], item["quantityUnit"] = quantity
-                            used_quantities.add(candidate_index)
-                    # Values written after the product mentions are commonly
-                    # shared by every item. Copy only unambiguous shared fields;
-                    # product-specific dimensions and specs stay item-local.
-                    for shared_key in ("purpose", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget"):
-                        if not item.get(shared_key) and data.get(shared_key):
-                            item[shared_key] = deepcopy(data[shared_key])
-                    if len(size_matches) == 1 and not item.get("size") and data.get("size"):
-                        item["size"] = data["size"]
-                    if len(size_matches) == 1 and data.get("dimensions"):
-                        item["dimensions"] = deepcopy(data["dimensions"])
-                    items.append(item)
-                data["productType"] = mentions[0][0]
-                data["productTypes"] = distinct_products
-                data["items"] = items
-        return data
+        """Delegate to :mod:`nlu`; fields only, for legacy call sites/tests."""
+        return perceive(text, allow_multi=allow_multi)[0]
 
     @staticmethod
-    def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]:
-        """Extract only the product-specific details understood by the MVP catalog."""
-        specs: dict[str, str] = {}
+    def _perceive_full(text: str) -> tuple[dict[str, Any], dict[str, float]]:
+        """Return fields plus the per-field evidence confidence grade."""
+        return perceive(text)
 
-        def set_if(pattern: str, key: str, value: str | None = None, flags: int = re.I) -> None:
-            match = re.search(pattern, text, flags)
-            if match:
-                specs[key] = value or match.group(1)
-
-        fold = re.search(r"(二折|三折|四折|对折|风琴折|荷包折|卷折)", text)
-        if fold:
-            specs["folding"] = fold.group(1)
-        parts = re.search(r"([二三四五六])\s*联", text)
-        if parts:
-            specs["paperParts"] = f"{parts.group(1)}联"
-        if re.search(r"流水号|连续编号|打号码|编号", text):
-            specs["numbering"] = "需要连续编号"
-        if re.search(r"(?:不要|不需要|无需|不用).{0,4}(?:编号|流水号)", text):
-            specs["numbering"] = "不需要编号"
-
-        structure = re.search(r"(天地盖|抽屉盒|折叠盒|飞机盒|书型盒|开窗盒|异型盒)", text)
-        if structure:
-            specs["boxStructure"] = structure.group(1)
-        dimensions = [value for _, value in Agent._extract_sizes(text)]
-        three_dimensions = next((value for value in dimensions if value.count("×") >= 2), "")
-        if product == "包装盒" or structure:
-            if three_dimensions:
-                specs["boxSize"] = three_dimensions
-            if "刀模" in text or "刀线" in text:
-                specs["dieCut"] = "需确认刀模文件" if re.search(r"没有|无|未有|需要制作", text) else "已有/提供刀模文件"
-        if product == "手提袋" and three_dimensions:
-            specs["bagSize"] = three_dimensions
-        if product == "信封封套" and size:
-            specs["envelopeSize"] = size
-        if product in {"海报", "喷画", "PVC"} and size:
-            specs["displaySize" if product != "PVC" else "boardSize"] = size
-
-        material_terms = ["铜版不干胶", "透明不干胶", "牛皮纸不干胶", "PET", "PVC", "热敏纸", "不干胶"]
-        material = next((term for term in material_terms if term.lower() in text.lower()), "")
-        if material and product == "标签":
-            specs["labelMaterial"] = material
-        shape = re.search(r"(方形|圆形|椭圆形|异形|圆角)", text)
-        if shape and product == "标签":
-            specs["labelShape"] = shape.group(1)
-        adhesive = re.search(r"(可移胶|强粘胶|普通胶|冷冻胶|可移除胶)", text)
-        if adhesive and product == "标签":
-            specs["adhesive"] = adhesive.group(1)
-
-        bag_material = next((term for term in ["无纺布", "帆布", "牛皮纸", "白卡纸"] if term in text), "")
-        if bag_material and product == "手提袋":
-            specs["bagMaterial"] = bag_material
-        handle = re.search(r"(棉绳|扁绳|丝带|尼龙绳|手挽绳|穿绳)", text)
-        if handle and product == "手提袋":
-            specs["handle"] = handle.group(1)
-        if product == "手提袋" and "承重" in text:
-            load = re.search(r"承重\s*(\d+(?:\.\d+)?)\s*(?:kg|公斤|千克)?", text, re.I)
-            specs["loadBearing"] = f"{load.group(1)}kg" if load else "需确认承重"
-
-        volume = re.search(r"(\d+(?:\.\d+)?)\s*(?:ml|毫升)", text, re.I)
-        if volume and product == "纸杯":
-            specs["cupVolume"] = f"{volume.group(1)}ml"
-        cup_material = re.search(r"(单\s*PE|双\s*PE|食品级纸杯纸)", text, re.I)
-        if cup_material and product == "纸杯":
-            specs["cupMaterial"] = re.sub(r"\s+", " ", cup_material.group(1)).upper() if "PE" in cup_material.group(1).upper() else cup_material.group(1)
-        if product == "纸杯" and re.search(r"不需要?淋膜|无淋膜", text):
-            specs["innerCoating"] = "不需要内淋膜"
-        elif product == "纸杯" and "淋膜" in text:
-            specs["innerCoating"] = "需要内淋膜"
-
-        display_material = next((term for term in ["背胶", "灯片", "车贴", "灯布", "相纸", "写真布", "KT板", "刀刮布", "PVC"] if term.lower() in text.lower()), "")
-        if display_material and product in {"海报", "喷画"}:
-            specs["displayMaterial"] = display_material
-        if product == "PVC":
-            thickness = re.search(r"(?:板材厚度|厚度|PVC)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)", text, re.I)
-            if thickness:
-                specs["boardThickness"] = f"{thickness.group(1)}mm"
-        install = next((term for term in ["墙面张贴", "墙面", "裱板", "展架", "易拉宝", "打孔", "包边", "挂装", "支架", "户外", "室内"] if term in text), "")
-        if install and product in {"海报", "喷画", "PVC"}:
-            specs["install"] = install
-        distance = re.search(r"(?:观看距离|距离)\s*(\d+(?:\.\d+)?)\s*(米|m)", text, re.I)
-        if distance and product == "喷画":
-            specs["viewingDistance"] = f"{distance.group(1)}米"
-
-        if product == "名片":
-            if "圆角" in text: specs["cardCorners"] = "圆角"
-            elif "直角" in text: specs["cardCorners"] = "直角"
-            if "专色" in text: specs["cardColor"] = "专色"
-        if product == "PVC卡":
-            card_type = re.search(r"(智能卡|人像证卡|滴胶卡|冲切卡|异形卡)", text)
-            if card_type: specs["cardType"] = card_type.group(1)
-            thickness = re.search(r"(?:卡片厚度|卡厚|厚度)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)", text, re.I)
-            if not thickness:
-                thickness = re.search(r"(?<![\d×x*])((?:0?\.38|0?\.5|0?\.76|0?\.8|0?\.84))\s*(?:mm|毫米)", text, re.I)
-            if thickness: specs["cardThickness"] = f"{thickness.group(1)}mm"
-            if re.search(r"芯片|磁条|IC卡|ID卡", text, re.I): specs["chip"] = "需要芯片/磁条"
-        if product == "吊牌":
-            hole = re.search(r"(圆孔|蝴蝶孔|挂孔|打孔)", text)
-            if hole: specs["hangHole"] = hole.group(1)
-            string = re.search(r"(棉绳|扁绳|丝带|尼龙绳|别针|配绳)", text)
-            if string: specs["string"] = string.group(1)
-        if "出血" in text and product in {"单页", "折页", "名片", "宣传册", "画册"}:
-            bleed = re.search(r"出血\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)?", text, re.I)
-            specs["bleed"] = f"{bleed.group(1)}mm" if bleed else "需确认出血"
-        opening = re.search(r"(上开口|侧开口|自封|胶条封口|不干胶封口)", text)
-        if opening and product == "信封封套":
-            specs["opening"] = opening.group(1)
-        if product == "信封封套" and "开口" in text and "opening" not in specs:
-            specs["opening"] = "需确认开口方向"
-        if product == "数码印刷":
-            if re.search(r"可变数据|每份不同|个性化|流水号", text): specs["variableData"] = "需要可变数据"
-            if "打样" in text: specs["proofing"] = "需要打样"
-        return specs
-
-    @staticmethod
-    def _extract_sizes(text: str) -> list[tuple[re.Match[str], str]]:
-        """Find standard or custom finished sizes and return normalized labels."""
-        separator = r"(?:[x×✕✖]|(?:\\)?\*)"
-        dimension = (
-            rf"\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?\s*{separator}\s*"
-            rf"\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?"
-            rf"(?:\s*{separator}\s*\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?)?"
-        )
-        pattern = re.compile(
-            rf"(?<![A-Za-z0-9])(?:[AB]\s*-?\s*[3-6](?!\d)|{dimension})"
-            rf"(?![A-Za-z0-9])",
-            re.IGNORECASE,
-        )
-        found: list[tuple[re.Match[str], str]] = []
-        for match in pattern.finditer(text):
-            compact = re.sub(r"\s+", "", match.group(0)).upper()
-            if re.fullmatch(r"[AB]-?[3-6]", compact):
-                size = compact.replace("-", "")
-            else:
-                size = compact.replace("毫米", "MM").replace("厘米", "CM")
-                size = size.replace("\\*", "×").replace("*", "×")
-                size = size.replace("X", "×").replace("✕", "×").replace("✖", "×")
-                size = re.sub(r"(?:MM|CM)(?=×)", "", size)
-            found.append((match, size))
-        return found
-
-    @staticmethod
-    def _extract_labeled_size(text: str, marker_pattern: str) -> str:
-        """Read the first size immediately following a dimension label."""
-        marker = re.search(rf"{marker_pattern}\s*[:：]?", text, re.IGNORECASE)
-        if not marker:
-            return ""
-        tail = text[marker.end(): marker.end() + 96]
-        matches = Agent._extract_sizes(tail)
-        return matches[0][1] if matches else ""
+    # Backward-compatible aliases for callers that used the static extractors.
+    _extract_sizes = staticmethod(_extract_sizes)
+    _extract_labeled_size = staticmethod(_extract_labeled_size)
+    _extract_product_specs = staticmethod(_extract_product_specs)
 
     @staticmethod
     def _question(key: str) -> str:

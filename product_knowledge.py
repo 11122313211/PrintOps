@@ -20,11 +20,11 @@ CATALOG_SOURCE = "https://www.sd2000.com/"
 # Keep the knowledge revision independent from the application release.  An
 # order response carries this manifest so a later rule/catalog change can be
 # traced without storing or exposing any model credentials.
-KNOWLEDGE_VERSION = "2026.09.04"
+KNOWLEDGE_VERSION = "2026.09.05"
 KNOWLEDGE_MANIFEST: dict[str, Any] = {
     "version": KNOWLEDGE_VERSION,
     "schemaVersion": "1.0",
-    "lastReviewed": "2026-09-04",
+    "lastReviewed": "2026-09-05",
     "sources": [
         {
             "id": "sd2000-navigation",
@@ -37,12 +37,29 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
             "title": "通用印刷术语与工艺经验",
             "scope": "参数提问、风险提示和方案解释",
         },
+        {
+            "id": "pricing-model-sample",
+            "title": "示例价格参数表",
+            "scope": "estimate_price 的量级参考；基数为示例数据，不构成任何供应商实价",
+        },
     ],
     "dimensionDefinitions": {
         "size": {"label": "成品尺寸", "kind": "finished_2d", "unit": "mm", "requiresConfirmation": True},
         "expandedSize": {"label": "展开尺寸", "kind": "expanded_2d", "unit": "mm", "requiresConfirmation": True},
         "dieCutSize": {"label": "刀模尺寸", "kind": "die_cut_2d", "unit": "mm", "requiresConfirmation": True},
         "packageSize": {"label": "包装三维尺寸", "kind": "package_3d", "unit": "mm", "requiresConfirmation": True},
+    },
+    "printModes": {
+        "合版": {
+            "label": "合版印刷",
+            "description": "多家订单拼在同一块版上印刷，起印量低、单价低；颜色与其他订单共用版面，存在轻微批次色差，不能指定专色。",
+            "suitableFor": "名片、单页、折页等对颜色一致性要求不极端的常规物料",
+        },
+        "专版": {
+            "label": "专版印刷",
+            "description": "为这份订单单独制版开机，颜色可控、可上专色和特殊工艺，但版费与开机费高、交期更长、起印量更高。",
+            "suitableFor": "画册、包装盒、品牌色敏感或大数量订单",
+        },
     },
     "riskPolicy": {
         "requiresHumanConfirmation": [
@@ -53,6 +70,41 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
         ],
         "disclaimer": "知识库用于订单前置分流和解释，不能替代供应商确认或专业印前检查。",
     },
+}
+
+# Example price parameters consumed by ``estimate_price``.  Every number here
+# is SAMPLE DATA for order-of-magnitude guidance only; it is versioned so a
+# quote reference can be traced to the exact table that produced it.
+PRICE_MODEL_VERSION = "2026.09.05"
+PRICE_MODEL: dict[str, Any] = {
+    "version": PRICE_MODEL_VERSION,
+    "disclaimer": "示例参数，仅用于费用量级参考，不构成报价；实际价格以供应商回复为准。",
+    # Per-order base covering plate/make-ready effort for a small job.
+    "categories": {
+        "名片": 60, "单页": 120, "折页": 150, "数码印刷": 100, "海报": 90,
+        "喷画": 130, "PVC": 150, "宣传册": 300, "画册": 380, "联单": 200,
+        "信封封套": 220, "标签": 260, "吊牌": 240, "包装盒": 480,
+        "手提袋": 450, "纸杯": 400, "邀请函": 180,
+    },
+    "defaultBase": 200,
+    # Quantity tiers approximate per-unit price steps; going over a tier
+    # boundary drops the total factor instead of pricing linearly.
+    "quantityTiers": [
+        {"upTo": 500, "factor": 1.0},
+        {"upTo": 1000, "factor": 0.9},
+        {"upTo": 5000, "factor": 0.75},
+        {"upTo": 20000, "factor": 0.62},
+        {"upTo": None, "factor": 0.55},
+    ],
+    # Additive-process multipliers; the highest matching factor wins.
+    "finishingFactors": {
+        "覆膜": 1.15, "哑膜": 1.15, "亮膜": 1.1, "烫金": 1.35, "烫银": 1.35,
+        "局部UV": 1.3, "局部 UV": 1.3, "击凸": 1.25, "压凹": 1.2, "上光": 1.08,
+        "专色": 1.2,
+    },
+    # Press make-ready floor: tiny orders cannot fall below this.
+    "minimumTotal": 100,
+    "band": {"low": 0.85, "high": 1.25},
 }
 
 
@@ -262,7 +314,23 @@ GENERIC_PROFILE = {
     "summary": "暂未匹配到具体品类，将先按通用印刷参数收集。",
     "parameters": [],
     "defaultBinding": "无需装订",
-    "recommendation": "先确认成品用途、尺寸、材料、颜色、数量和交期。",
+    "recommendation": "先确认成品用途、尺寸、材料、数量和交期。",
+}
+
+# 参考起印量与印刷方式倾向（合版/专版）。示例数值，供 validate_order 提示
+# 和推荐解释使用；实际起印条件以供应商为准。
+MIN_QUANTITY = {
+    "名片": 100, "单页": 500, "折页": 500, "海报": 100, "宣传册": 100,
+    "画册": 100, "标签": 500, "吊牌": 500, "包装盒": 200, "手提袋": 500,
+    "纸杯": 10000, "联单": 20, "信封封套": 200, "PVC": 10, "喷画": 10,
+    "PVC卡": 100, "数码印刷": 50,
+}
+PRINT_MODE_HINT = {
+    "名片": "合版优先", "单页": "合版优先", "折页": "合版优先", "海报": "合版优先",
+    "标签": "合版优先", "吊牌": "合版优先",
+    "画册": "专版常见", "宣传册": "专版常见", "包装盒": "专版常见", "手提袋": "专版常见",
+    "信封封套": "专版常见", "PVC卡": "专版常见", "纸杯": "专版常见",
+    "喷画": "两者均可", "PVC": "两者均可", "联单": "两者均可", "数码印刷": "两者均可",
 }
 
 
@@ -285,6 +353,9 @@ def find_product(text: str) -> str:
 
 def profile_for(product: str) -> dict[str, Any]:
     profile = deepcopy(PRODUCT_CATALOG.get(product, GENERIC_PROFILE))
+    if product in MIN_QUANTITY:
+        profile["minQuantity"] = MIN_QUANTITY[product]
+        profile["printModeHint"] = PRINT_MODE_HINT.get(product, "两者均可")
     profile["knowledge"] = {
         "version": KNOWLEDGE_VERSION,
         "lastReviewed": KNOWLEDGE_MANIFEST["lastReviewed"],

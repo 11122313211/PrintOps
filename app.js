@@ -523,7 +523,7 @@ function fieldProvenance(key) {
   return state.fieldMeta?.[key] || null;
 }
 
-function renderFieldList(selector, keys) {
+function renderFieldList(selector, keys, editable = false) {
   const list = $(selector);
   list.innerHTML = "";
   keys.forEach((key) => {
@@ -534,12 +534,23 @@ function renderFieldList(selector, keys) {
     const label = document.createElement("span");
     label.className = "field-label";
     label.textContent = labels[key];
-    const value = document.createElement("span");
-    value.className = `field-value ${hasValue(current) ? "" : "empty"}`;
-    value.textContent = current || (missing ? "待补充" : "未设置");
     const meta = fieldProvenance(key);
     const valueWrap = document.createElement("span");
     valueWrap.className = "field-value-wrap";
+    let valueNode;
+    if (editable && key !== "platform") {
+      valueNode = document.createElement("input");
+      valueNode.type = "text";
+      valueNode.className = `field-input ${hasValue(current) ? "" : "empty"}`;
+      valueNode.value = current || "";
+      valueNode.placeholder = missing ? "待补充" : labels[key];
+      valueNode.setAttribute("aria-label", labels[key]);
+      valueNode.addEventListener("change", () => commitFieldEdit(key, valueNode));
+    } else {
+      valueNode = document.createElement("span");
+      valueNode.className = `field-value ${hasValue(current) ? "" : "empty"}`;
+      valueNode.textContent = current || (missing ? "待补充" : "未设置");
+    }
     const source = document.createElement("small");
     if (meta) {
       const confidence = Math.round(Number(meta.confidence || 0) * 100);
@@ -550,10 +561,26 @@ function renderFieldList(selector, keys) {
       source.className = "field-source empty";
       source.textContent = "尚无来源记录";
     }
-    valueWrap.append(value, source);
+    valueWrap.append(valueNode, source);
     row.append(label, valueWrap);
     list.appendChild(row);
   });
+}
+
+function commitFieldEdit(key, input) {
+  const value = input.value.trim();
+  const current = getFieldValue(key);
+  if (value === (current || "")) return;
+  if (!value) {
+    input.value = current || "";
+    showToast("如需清除字段，请在对话中说明，例如“不要覆膜”");
+    return;
+  }
+  if (isSending) {
+    input.value = current || "";
+    return;
+  }
+  sendMessage(`更新${labels[key]}：${value}`, { [key]: value });
 }
 
 function renderDimensionRows(selector, order = state.order) {
@@ -770,10 +797,10 @@ function renderDraft() {
   const fields = getDraftFieldSets();
   const multiItems = Array.isArray(state.order?.items) ? state.order.items.filter((item) => item && typeof item === "object") : [];
   const isMultiProduct = multiItems.length > 1 || (state.validation?.multiProduct || []).length > 0;
-  renderFieldList("#overview-fields", fields.overview);
-  renderFieldList("#spec-fields", fields.specs);
+  renderFieldList("#overview-fields", fields.overview, !isMultiProduct);
+  renderFieldList("#spec-fields", fields.specs, !isMultiProduct);
   if (!isMultiProduct) renderDimensionRows("#spec-fields");
-  renderFieldList("#process-fields", fields.process);
+  renderFieldList("#process-fields", fields.process, !isMultiProduct);
   if (isMultiProduct) {
     $("#product-context").hidden = true;
     $("#parameter-form").innerHTML = "";
@@ -1023,7 +1050,7 @@ function renderOptions() {
     card.querySelector("h4").textContent = option.title;
     card.querySelector(".option-score").textContent = option.score || "";
     card.querySelector("p").textContent = option.description;
-    [["成本", option.cost], ["交期", option.lead], ["材料", option.paper], ["工艺", option.finishing], ["装订", option.binding]].forEach(([name, value]) => {
+    [["成本", option.cost], ["交期", option.lead], ["印刷方式", option.printMode], ["材料", option.paper], ["工艺", option.finishing], ["装订", option.binding]].forEach(([name, value]) => {
       if (!value) return;
       const row = document.createElement("div");
       const term = document.createElement("dt");
@@ -1170,6 +1197,12 @@ async function inspectPdf(file) {
   }
 }
 
+const toolCodes = {
+  validate_order: "CK", recommend_processes: "RF", estimate_price: "PR",
+  prepare_handoff: "HO", request_supplier_quote: "QT",
+  match_supplier_capability: "CP", explain_print_term: "KB"
+};
+
 function renderTools() {
   const root = $("#tool-list");
   const tools = (state.availableTools || []).filter((item) => toolLabels[item.name]);
@@ -1181,7 +1214,8 @@ function renderTools() {
     button.className = "tool-item";
     const code = document.createElement("span");
     code.className = "tool-code";
-    code.textContent = item.name === "validate_order" ? "CK" : item.name === "recommend_processes" ? "RF" : item.name === "estimate_price" ? "¥" : item.name === "explain_print_term" ? "IN" : "EX";
+    code.textContent = toolCodes[item.name] || "··";
+    code.title = item.name;
     const copy = document.createElement("span");
     copy.innerHTML = `<strong>${toolLabels[item.name][0]}</strong><small>${toolLabels[item.name][1]}</small>`;
     button.append(code, copy);
@@ -1206,13 +1240,16 @@ function renderCatalog(categories = []) {
 
 function renderProgress() {
   const required = ["productType", "quantity", "size", "paper", "printing", "deadline"];
-  const complete = Array.isArray(state.missingFields)
-    ? required.length - state.missingFields.length
-    : required.filter((key) => state.order[key]).length;
   const workflowStage = state.workflowStage || state.stage || "collect";
-  const percent = workflowStage === "confirm" || workflowStage === "export" ? 100 : workflowStage === "quote" ? 88 : workflowStage === "preflight" ? 76 : workflowStage === "recommend" ? 66 : Math.round((complete / required.length) * 55);
+  // Progress = field readiness from the backend validation; workflow stages
+  // are shown by the step list, not baked into the percentage.
+  const fallback = Math.round((required.filter((key) => state.order[key]).length / required.length) * 100);
+  const readiness = Number(state.readiness);
+  const percent = Number.isFinite(readiness) && readiness > 0 ? Math.min(100, Math.round(readiness)) : fallback;
   $("#progress-stage").textContent = state.workflowLabel || ({ collect: "需求收集", clarify: "品类澄清", recommend: "方案选择", preflight: "文件预检", quote: "报价准备", confirm: "确认订单", export: "导出交接" })[workflowStage] || "需求收集";
-  $("#progress-bar").style.width = `${percent}%`;
+  const bar = $("#progress-bar");
+  bar.style.width = `${percent}%`;
+  bar.title = "字段信息度";
   $("#progress-percent").textContent = `${percent}%`;
   const order = ["collect", "recommend", "confirm"];
   document.querySelectorAll(".step").forEach((step) => {

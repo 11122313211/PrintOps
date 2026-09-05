@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20260904-4" />
+    <link rel="stylesheet" href="styles.css?v=20260905-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -75,32 +75,32 @@
             <div class="catalog-list" id="catalog-list"></div>
           </section>
 
-          <section class="tip-panel">
-            <span class="tip-label">AGENT 运行状态</span>
-            <p id="memory-status">正在恢复会话记忆与工具状态。</p>
-          </section>
-
           <section class="decision-panel" aria-label="当前决策">
             <div class="tool-panel-heading"><span>当前决策</span><span id="decision-confidence">可解释</span></div>
             <strong id="workflow-label">需求收集</strong>
             <p id="decision-reason">等待第一条需求。</p>
             <small id="decision-run">本次运行尚未开始</small>
+            <small id="memory-status">正在恢复会话记忆与工具状态。</small>
           </section>
 
-          <section class="tool-panel" aria-label="Agent 工具箱">
-            <div class="tool-panel-heading"><span>工具箱</span><span id="tool-count">0 项</span></div>
+          <details class="catalog-panel side-fold" aria-label="产品索引">
+            <summary class="tool-panel-heading"><span>产品索引</span><span>官网分类</span></summary>
+            <div class="catalog-list" id="catalog-list"></div>
+          </details>
+
+          <details class="tool-panel side-fold" aria-label="Agent 工具箱">
+            <summary class="tool-panel-heading"><span>工具箱</span><span id="tool-count">0 项</span></summary>
             <div class="tool-list" id="tool-list"></div>
             <details class="run-panel" id="run-panel">
               <summary><span>本次运行记录</span><small id="run-id">等待运行</small></summary>
               <div class="run-trace-list" id="run-trace-list"></div>
             </details>
-          </section>
+          </details>
         </aside>
 
         <section class="chat-section" aria-label="智能订单对话">
           <div class="section-title">
             <div>
-              <p class="eyebrow">ORDER INTAKE</p>
               <h2>把想法说出来</h2>
             </div>
             <div class="section-title-actions">
@@ -209,7 +209,6 @@
 
           <div class="risk-panel" id="risk-panel" hidden>
             <div class="risk-heading">
-              <p class="eyebrow">ORDER RISKS</p>
               <h3>风险与缺失</h3>
               <span class="risk-count" id="risk-count">0 项</span>
             </div>
@@ -219,7 +218,6 @@
           <div class="recommendations" id="recommendations" hidden>
             <div class="recommendation-heading">
               <div>
-                <p class="eyebrow">PROCESS OPTIONS</p>
                 <h3>推荐工艺方案</h3>
               </div>
               <span class="recommendation-count" id="recommendation-count">0 个方案</span>
@@ -230,7 +228,6 @@
           <div class="quote-panel" id="quote-panel" hidden>
             <div class="quote-heading">
               <div>
-                <p class="eyebrow">QUOTE REQUEST</p>
                 <h3>供应商询价</h3>
               </div>
               <span class="quote-status" id="quote-status">暂无请求</span>
@@ -267,7 +264,6 @@
       <form class="settings-card" id="settings-form">
         <div class="settings-heading">
           <div>
-            <p class="eyebrow">MODEL CONNECTION</p>
             <h2 id="settings-title">接口设置</h2>
           </div>
           <button class="settings-close" id="settings-cancel" type="button" aria-label="关闭接口设置" title="关闭">×</button>
@@ -293,12 +289,12 @@
           <span class="settings-action-spacer"></span>
           <button class="secondary-action" id="settings-test" type="button">测试连接</button>
           <button class="secondary-action" id="settings-cancel-secondary" type="button">取消</button>
-          <button class="primary-action" id="settings-save" type="submit">保存设置</button>
+          <button class="secondary-action settings-save" id="settings-save" type="submit">保存设置</button>
         </div>
       </form>
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
-    <script src="app.js?v=20260904-5"></script>
+    <script src="app.js?v=20260905-1"></script>
   </body>
 </html>
