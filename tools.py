@@ -105,22 +105,35 @@ def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
         material = known_paper if known_paper not in {"", "待推荐"} else "157g 哑粉纸"
         materials = (material, "200g 铜版纸", "特种纸" if premium else "高克重纸张")
         finishes = ("无特殊工艺", "哑膜", "烫金 / 击凸")
+    quantity = _number(order.get("quantity", "")) or 500
+    lead_hint = PRICE_MODEL["leadHints"]
+    plan_note = "示例参数估算，不构成报价；以供应商回复为准"
+    price_low, price_high = _reference_price(product, quantity, finishes[0], "合版")
+    balanced_low, balanced_high = _reference_price(product, quantity, finishes[1], "合版")
+    premium_low, premium_high = _reference_price(product, quantity, finishes[2], "专版")
+
     return [
         {"id": "economy", "title": "经济方案", "printMode": "合版",
          "description": f"合版拼单：{materials[0]} + {printing}，{format_note}，{finishes[0]}，{binding}。",
          "cost": "成本较低", "lead": "交期较快" if fast else "交期稳定", "score": "适合控预算",
+         "refPrice": f"¥{price_low} - ¥{price_high}", "refPriceBasis": plan_note,
+         "leadDetail": lead_hint["合版"],
          "reason": f"{profile_note}合版多单拼版，起印量低、单价低，适合预算敏感的项目。",
          "risk": "合版颜色与其他订单共用版面，存在轻微批次色差，且不能指定专色。",
          "paper": materials[0], "finishing": finishes[0], "binding": binding},
         {"id": "balanced", "title": "平衡方案", "printMode": "合版",
          "description": f"合版拼单：{materials[1]} + {printing}，{finishes[1]}，{binding}，兼顾效果与生产稳定性。",
          "cost": "成本中等", "lead": "交期稳定", "score": "综合推荐",
+         "refPrice": f"¥{balanced_low} - ¥{balanced_high}", "refPriceBasis": plan_note,
+         "leadDetail": lead_hint["合版"],
          "reason": f"{profile_note}在颜色表现、手感和成本之间取平衡，仍是合版产线的稳定配置。",
          "risk": "覆膜或复杂后道会增加少量加工时间和费用；颜色一致性要求高时考虑专版。",
          "paper": materials[1], "finishing": finishes[1], "binding": binding},
         {"id": "premium", "title": "质感方案", "printMode": "专版",
          "description": f"专版开机：{materials[2]} + {printing}，{finishes[2]}，{binding}，强化品牌表现。",
          "cost": "成本较高", "lead": "需要确认加急" if fast else "交期较长", "score": "视觉优先",
+         "refPrice": f"¥{premium_low} - ¥{premium_high}", "refPriceBasis": plan_note,
+         "leadDetail": lead_hint["专版"],
          "reason": f"{profile_note}专版单独制版，颜色可控、可上专色，适合品牌发布和需要触感记忆点的物料。",
          "risk": "专版版费与开机费较高、起印量更高；需要专色、打样、结构或后道工艺确认。",
          "paper": materials[2], "finishing": finishes[2], "binding": binding},
@@ -509,6 +522,25 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
             "requiresHumanConfirmation": True}
 
 
+def _reference_price(product: str | None, quantity: int, finishing: str,
+                     mode: str | None = None) -> tuple[int, int]:
+    """示例价格参数表的统一计算入口：品类基数 × 数量阶跃 × 工艺系数 × 印刷方式系数。
+
+    estimate_price 与 recommend_processes 共用，保证卡片参考价与估算工具同源。
+    """
+    base = PRICE_MODEL["categories"].get(product, PRICE_MODEL["defaultBase"])
+    tier = next((entry["factor"] for entry in PRICE_MODEL["quantityTiers"]
+                 if entry["upTo"] is None or quantity <= entry["upTo"]), 1.0)
+    finishing_factor = max(
+        (factor for term, factor in PRICE_MODEL["finishingFactors"].items() if term in (finishing or "")),
+        default=1.0,
+    )
+    mode_factor = PRICE_MODEL.get("modeFactors", {}).get(mode or "", 1.0)
+    total = max(base * tier * finishing_factor * mode_factor, PRICE_MODEL["minimumTotal"])
+    band = PRICE_MODEL["band"]
+    return round(total * band["low"]), round(total * band["high"])
+
+
 @tool
 def estimate_price(order: dict[str, Any]) -> dict[str, Any]:
     """按知识库示例价格参数表估算费用量级，不替代印刷厂正式报价。"""
@@ -523,17 +555,7 @@ def estimate_price(order: dict[str, Any]) -> dict[str, Any]:
                 "assumptions": "至少需要印刷品、数量、尺寸和印刷颜色后才能估算。",
                 "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
     quantity = _number(order.get("quantity", "")) or 500
-    base = PRICE_MODEL["categories"].get(order.get("productType"), PRICE_MODEL["defaultBase"])
-    tier = next((entry["factor"] for entry in PRICE_MODEL["quantityTiers"]
-                 if entry["upTo"] is None or quantity <= entry["upTo"]), 1.0)
-    finishing = str(order.get("finishing") or "")
-    finishing_factor = max(
-        (factor for term, factor in PRICE_MODEL["finishingFactors"].items() if term in finishing),
-        default=1.0,
-    )
-    total = max(base * tier * finishing_factor, PRICE_MODEL["minimumTotal"])
-    band = PRICE_MODEL["band"]
-    low, high = round(total * band["low"]), round(total * band["high"])
+    low, high = _reference_price(order.get("productType"), quantity, str(order.get("finishing") or ""))
     assumptions = (f"依据内置示例价格参数表（版本 {PRICE_MODEL_VERSION}）按品类基数、数量阶跃和工艺系数估算，"
                    "不构成报价；实际以供应商回复为准，未含运输和打样。")
     return {"type": "estimate", "range": f"¥{low} - ¥{high}",

@@ -1158,6 +1158,60 @@ function renderQuickReplies() {
   });
 }
 
+function renderOptionCompare(options) {
+  const wrap = $("#option-compare");
+  const note = $("#option-note");
+  const comparable = options.length >= 2 && options.every((o) => o.refPrice);
+  if (note) {
+    note.hidden = !comparable;
+    if (comparable) note.textContent = "参考费用按示例价格参数表估算，不构成报价；交期为常规示例。均以供应商回复为准。";
+  }
+  if (!wrap) return;
+  wrap.hidden = !comparable;
+  wrap.innerHTML = "";
+  if (!comparable) return;
+  const recommendedIndex = Math.max(0, options.findIndex((o) => o.score === "综合推荐"));
+  const rows = [
+    ["印刷方式", (o) => o.printMode],
+    ["材料", (o) => o.paper],
+    ["表面工艺", (o) => o.finishing],
+    ["装订/后道", (o) => o.binding],
+    ["参考费用", (o) => o.refPrice],
+    ["交期参考", (o) => o.leadDetail || o.lead],
+    ["适用", (o) => o.score]
+  ];
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const headLabel = document.createElement("th");
+  headLabel.textContent = "维度";
+  headRow.appendChild(headLabel);
+  options.forEach((option, index) => {
+    const th = document.createElement("th");
+    th.textContent = option.title;
+    if (index === recommendedIndex) th.className = "recommended";
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  rows.forEach(([label, pick]) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.textContent = label;
+    tr.appendChild(th);
+    options.forEach((option, index) => {
+      const td = document.createElement("td");
+      td.textContent = pick(option) || "未填";
+      if (index === recommendedIndex) td.className = "recommended";
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
 function renderOptions() {
   const root = $("#option-list");
   root.innerHTML = "";
@@ -1165,6 +1219,7 @@ function renderOptions() {
   const options = state.options || [];
   recommendations.hidden = !options.length;
   $("#recommendation-count").textContent = `${options.length} 个方案`;
+  renderOptionCompare(options);
   options.forEach((option, index) => {
     const selected = state.selectedOption === option.id || state.activeItemSelectedOption === option.id;
     const card = document.createElement("article");
@@ -1177,7 +1232,7 @@ function renderOptions() {
     card.querySelector("h4").textContent = option.title;
     card.querySelector(".option-score").textContent = option.score || "";
     card.querySelector("p").textContent = option.description;
-    [["成本", option.cost], ["交期", option.lead], ["印刷方式", option.printMode], ["材料", option.paper], ["工艺", option.finishing], ["装订", option.binding]].forEach(([name, value]) => {
+    [["参考费用", option.refPrice], ["交期", option.leadDetail || option.lead], ["印刷方式", option.printMode], ["材料", option.paper], ["工艺", option.finishing], ["装订", option.binding]].forEach(([name, value]) => {
       if (!value) return;
       const row = document.createElement("div");
       const term = document.createElement("dt");

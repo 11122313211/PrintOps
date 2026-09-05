@@ -104,6 +104,10 @@ PRICE_MODEL: dict[str, Any] = {
     },
     # Press make-ready floor: tiny orders cannot fall below this.
     "minimumTotal": 100,
+    # 专版单独制版的版费/开机摊销系数（合版为基准 1.0）。
+    "modeFactors": {"合版": 1.0, "专版": 1.6},
+    # 常规生产周期示例（不含运输与打样；免责见方案区说明行）。
+    "leadHints": {"合版": "2-4 天", "专版": "5-8 天"},
     "band": {"low": 0.85, "high": 1.25},
 }
 

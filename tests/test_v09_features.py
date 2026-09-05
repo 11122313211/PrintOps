@@ -169,6 +169,20 @@ class IndustryDepthTest(unittest.TestCase):
         self.assertIn("批次色差", options[0]["risk"])
         self.assertIn("颜色可控", options[2]["reason"])
 
+    def test_options_carry_reference_prices_with_premium_ladder(self) -> None:
+        # 名片等低价品类会被版费地板兜平；用基数更高的单页验证阶梯
+        order = {**ORDER_DEFAULTS, "productType": "单页", "quantity": "800 张",
+                 "quantityValue": 800, "quantityUnit": "张", "size": "A4",
+                 "paper": "157g 哑粉纸", "printing": "四色印刷", "deadline": "一周内"}
+        options = recommend_processes(order)
+        prices = [int(o["refPrice"].split(" - ")[0].lstrip("¥")) for o in options]
+        self.assertTrue(all(o["refPrice"].startswith("¥") for o in options))
+        self.assertLessEqual(prices[0], prices[1])
+        self.assertGreater(prices[2], prices[0] * 12 // 10, "专版系数应使质感方案明显更贵")
+        self.assertIn("示例", options[0]["refPriceBasis"])
+        self.assertIn("2-4 天", options[0]["leadDetail"])
+        self.assertIn("5-8 天", options[2]["leadDetail"])
+
     def test_min_quantity_warning_fires_and_clears(self) -> None:
         low = validate_order({**self.CARD_ORDER, "quantity": "20 张", "quantityValue": 20})
         self.assertTrue(any("起印量" in warning for warning in low["warnings"]))

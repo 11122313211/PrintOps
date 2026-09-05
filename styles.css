@@ -492,6 +492,15 @@ body.is-resizing { user-select: none; cursor: col-resize; }
 .risk-warning { border-left-color: var(--gold); }
 .risk-error { border-left-color: var(--red); }
 .recommendation-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: var(--space-3); }
+
+.option-note { margin: 8px 0 0; color: var(--quiet); font-size: var(--font-xs); line-height: 1.5; }
+.option-compare { margin-bottom: var(--space-3); overflow-x: auto; }
+.option-compare table { width: 100%; border-collapse: collapse; font-size: var(--font-xs); }
+.option-compare th, .option-compare td { padding: 6px 8px; border-bottom: 1px solid var(--rule-light); text-align: left; vertical-align: top; }
+.option-compare thead th { color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: var(--font-sm); }
+.option-compare tbody th { color: var(--quiet); font-weight: 800; white-space: nowrap; }
+.option-compare td { color: var(--ink-soft); }
+.option-compare .recommended { background: var(--red-pale); color: var(--red-deep); font-weight: 700; }
 .recommendation-count { color: var(--quiet); font-family: ui-monospace, monospace; font-size: var(--font-xs); }
 .option-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .option-card { position: relative; display: flex; flex-direction: column; gap: 9px; padding: var(--space-3); background: var(--paper-light); border: 1px solid var(--rule); border-radius: var(--radius-md); cursor: pointer; transition: transform var(--duration-base) ease, border-color var(--duration-base) ease, box-shadow var(--duration-base) ease; }
