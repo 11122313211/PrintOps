@@ -378,9 +378,11 @@ async function switchOrder(orderId) {
 }
 
 async function api(path, body, method = "POST", options = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (window.__PRINTOPS_TOKEN__) headers["X-PrintOps-Token"] = window.__PRINTOPS_TOKEN__;
   const response = await fetch(path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: method === "GET" ? undefined : JSON.stringify(body || {}),
     signal: options.signal
   });
@@ -587,6 +589,9 @@ function renderSettings(data) {
   if (stateText) stateText.textContent = enabled
     ? (hasError ? `已配置：${llmSettings.model}（上次调用失败，已回退）` : `已启用：${llmSettings.model}`)
     : "当前使用规则模式";
+  const note = $("#settings-note");
+  if (note) note.textContent = data?.keyStorageWarning
+    || "Key 仅由本机服务保存，不会显示在页面或接口响应中。URL 与模型留空即可继续使用规则模式。";
   const url = $("#settings-url");
   const model = $("#settings-model");
   const key = $("#settings-key");

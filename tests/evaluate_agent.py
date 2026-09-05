@@ -323,7 +323,8 @@ def _field(order: dict[str, Any], key: str) -> Any:
     return value
 
 
-def run_suite() -> dict[str, Any]:
+def run_suite(cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    cases = CASES if cases is None else cases
     case_results: list[dict[str, Any]] = []
     total_fields = 0
     matched_fields = 0
@@ -335,7 +336,7 @@ def run_suite() -> dict[str, Any]:
     expected_complete_done = 0
     tag_stats: dict[str, dict[str, int]] = {}
     with tempfile.TemporaryDirectory(prefix="printops-eval-") as directory:
-        for case_index, case in enumerate(CASES):
+        for case_index, case in enumerate(cases):
             agent = Agent(Memory(Path(directory) / f"{case_index}.sqlite3"))
             final: dict[str, Any] = {}
             ready_turn = None
@@ -375,7 +376,7 @@ def run_suite() -> dict[str, Any]:
                         "fieldAccuracy": round(stats["matched"] / stats["total"] * 100) if stats["total"] else 100}
                   for tag, stats in sorted(tag_stats.items())}
     return {
-        "cases": len(CASES), "passedCases": sum(item["fieldAccuracy"] == 100 for item in case_results),
+        "cases": len(cases), "passedCases": sum(item["fieldAccuracy"] == 100 for item in case_results),
         "completionRate": round(expected_complete_done / expected_complete_total * 100) if expected_complete_total else 100,
         "expectedCompleteCases": expected_complete_total,
         "fieldAccuracy": round(matched_fields / total_fields * 100) if total_fields else 100,
@@ -385,14 +386,71 @@ def run_suite() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 真实脱敏订单语料（v0.11.0 起支持）
+#
+# 合成语料由实现同一套规则的人编写，不能证明真实用户话术下的表现。把脱敏后的
+# 真实订单放进 tests/eval_cases_real.json（格式见该文件内说明），本脚本会单独
+# 运行并单独报告。语料达到 REAL_CORPUS_MIN_CASES 例后启用硬门槛：字段准确率
+# 低于 REAL_CORPUS_ACCURACY_GATE 时以非零码退出（CI 失败）。
+# ---------------------------------------------------------------------------
+
+REAL_CORPUS_PATH = Path(__file__).resolve().parent / "eval_cases_real.json"
+REAL_CORPUS_MIN_CASES = 20
+REAL_CORPUS_ACCURACY_GATE = 95
+
+
+def load_real_cases() -> tuple[list[dict[str, Any]], str]:
+    """Return (cases, status); status is ok | missing | invalid | empty."""
+    if not REAL_CORPUS_PATH.is_file():
+        return [], "missing"
+    try:
+        data = json.loads(REAL_CORPUS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], "invalid"
+    raw = data.get("cases") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return [], "invalid"
+    cases = [case for case in raw
+             if isinstance(case, dict) and case.get("turns") and case.get("expected")]
+    return cases, ("ok" if cases else "empty")
+
+
+def real_corpus_verdict(real_cases: list[dict[str, Any]], real_report: dict[str, Any] | None,
+                        real_status: str) -> str:
+    """Decide the real-corpus gate: fail | pending | record | pass.
+
+    ``fail`` blocks the release exit code; ``pending`` means no usable corpus
+    yet; ``record`` means fewer than REAL_CORPUS_MIN_CASES cases (report only,
+    no gate); ``pass`` means the corpus is large enough and met the gate.
+    """
+    if real_status == "invalid":
+        return "fail"
+    if not real_cases:
+        return "pending"
+    if len(real_cases) < REAL_CORPUS_MIN_CASES:
+        return "record"
+    if real_report is not None and real_report["fieldAccuracy"] < REAL_CORPUS_ACCURACY_GATE:
+        return "fail"
+    return "pass"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the deterministic PrintOps Agent evaluation suite")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON 报告")
     parser.add_argument("--only-failed", action="store_true", help="只打印未通过的用例")
     args = parser.parse_args()
     report = run_suite()
+    real_cases, real_status = load_real_cases()
+    real_report = run_suite(real_cases) if real_cases else None
+    verdict = real_corpus_verdict(real_cases, real_report, real_status)
+
+    def failed_cases(suite: dict[str, Any]) -> list[dict[str, Any]]:
+        return [item for item in suite["results"] if item["fieldAccuracy"] < 100]
+
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(json.dumps({**report, "realCorpus": real_report, "realCorpusVerdict": verdict},
+                         ensure_ascii=False, indent=2))
     else:
         print(f"PrintOps evaluation: {report['cases']} cases")
         print(f"字段准确率：{report['fieldAccuracy']}%")
@@ -401,14 +459,36 @@ def main() -> int:
         print(f"平均响应耗时：{report['averageResponseMs']}ms")
         for tag, stats in report["tagReport"].items():
             print(f"- [{tag}] {stats['cases']} 例，字段准确率 {stats['fieldAccuracy']}%")
-        failed = [item for item in report["results"] if item["fieldAccuracy"] < 100]
-        if failed:
-            print(f"未通过用例：{len(failed)}")
-            for item in failed:
-                bad = [c for c in item["checks"] if not c["ok"]]
-                detail = "；".join(f"{c['field']} 期望 {c['expected']!r} 实际 {c['actual']!r}" for c in bad)
-                print(f"- [{item['tag']}] {item['name']}：{detail}")
-    return 0 if report["fieldAccuracy"] >= 90 and report["completionRate"] >= 80 else 1
+        for label, suite in (("合成语料", report), ("真实语料", real_report)):
+            if suite is None:
+                continue
+            failed = failed_cases(suite)
+            if failed:
+                print(f"[{label}] 未通过用例：{len(failed)}")
+                for item in failed:
+                    bad = [c for c in item["checks"] if not c["ok"]]
+                    detail = "；".join(f"{c['field']} 期望 {c['expected']!r} 实际 {c['actual']!r}" for c in bad)
+                    print(f"- [{item['tag']}] {item['name']}：{detail}")
+        if verdict == "record":
+            print(f"真实脱敏语料：{real_report['cases']} 例，字段准确率 {real_report['fieldAccuracy']}%，"
+                  f"基础订单完整率 {real_report['completionRate']}%"
+                  f"（不足 {REAL_CORPUS_MIN_CASES} 例，本轮仅记录，不设门槛）")
+        elif verdict == "pass":
+            print(f"真实脱敏语料：{real_report['cases']} 例，字段准确率 {real_report['fieldAccuracy']}%，"
+                  f"达到 ≥{REAL_CORPUS_ACCURACY_GATE}% 门槛。")
+        elif verdict == "fail":
+            print(f"真实脱敏语料：未达门槛"
+                  + (f"（{real_report['cases']} 例，字段准确率 {real_report['fieldAccuracy']}%，"
+                     f"要求 ≥{REAL_CORPUS_ACCURACY_GATE}%）" if real_report else "（文件格式无效）。"))
+        else:
+            print(f"真实脱敏语料：待补充（放入 tests/eval_cases_real.json，≥{REAL_CORPUS_MIN_CASES} 例"
+                  f"后启用字段准确率 ≥{REAL_CORPUS_ACCURACY_GATE}% 门槛）。")
+
+    if report["fieldAccuracy"] < 90 or report["completionRate"] < 80:
+        return 1
+    if verdict == "fail":
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

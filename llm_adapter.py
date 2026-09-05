@@ -6,14 +6,49 @@ when a provider is temporarily unavailable.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import time
 import urllib.request
 from urllib.error import HTTPError, URLError
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+
+def _reject_private_host(hostname: str | None) -> None:
+    """SSRF guard: reject hosts that resolve to loopback/private/reserved space.
+
+    Literal IPs are checked directly; resolvable hostnames are resolved once so
+    an innocent-looking name pointing at internal space is rejected too. A name
+    that cannot resolve at all is allowed through — it cannot reach an internal
+    target, and the request itself will fail with a connection error.
+    """
+    name = (hostname or "").strip().lower().rstrip(".")
+    if not name:
+        raise ValueError("接口 URL 缺少主机名")
+    if name == "localhost" or name.endswith(".localhost") or name.endswith(".local"):
+        raise ValueError("接口 URL 不能指向本机或内网地址")
+    try:
+        addresses = [ipaddress.ip_address(name)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(name, None)
+        except (OSError, UnicodeError):
+            return
+        addresses = []
+        for info in infos:
+            try:
+                addresses.append(ipaddress.ip_address(info[4][0]))
+            except ValueError:
+                continue
+    for ip in addresses:
+        cgnat = ipaddress.ip_network("100.64.0.0/10") if ip.version == 4 else None
+        if ip.is_loopback or ip.is_private or ip.is_reserved or ip.is_link_local \
+                or ip.is_multicast or ip.is_unspecified or (cgnat and ip in cgnat):
+            raise ValueError("接口 URL 不能指向本机或内网地址")
 
 
 def normalize_base_url(value: str) -> str:
@@ -28,6 +63,7 @@ def normalize_base_url(value: str) -> str:
         raise ValueError("接口 URL 不应包含用户名或密码")
     if parsed.query or parsed.fragment:
         raise ValueError("接口 URL 不应包含查询参数或片段")
+    _reject_private_host(parsed.hostname)
     return value
 
 

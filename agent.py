@@ -4,10 +4,11 @@ Flow: perceive -> remember -> plan -> call tools -> respond.
 The contracts are intentionally compatible with a future LangGraph/FastAPI layer.
 """
 
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 import json
 import re
 import sqlite3
+import sys
 import time
 import unicodedata
 import uuid
@@ -16,16 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from nlu import _extract_labeled_size, _extract_product_specs, _extract_sizes, perceive
-from order_model import (DIMENSION_DEFAULTS, DIMENSION_LABELS, ITEM_DEFAULTS, LABELS,
-                         MATERIAL_SPEC_PRODUCTS, ORDER_DEFAULTS, PACKAGE_DIMENSION_PRODUCTS,
-                         QUANTITY_CAPTURE, QUANTITY_MULTIPLIERS, QUANTITY_UNIT_ALIASES,
+from nlu import perceive
+from order_model import (DIMENSION_DEFAULTS, ITEM_DEFAULTS, LABELS,
+                         MATERIAL_SPEC_PRODUCTS, ORDER_DEFAULTS,
+                         QUANTITY_UNIT_ALIASES,
                          DEFAULT_QUANTITY_UNITS, RECOMMENDATION_FIELDS, REQUIRED,
-                         STATE_SCHEMA_VERSION, _is_three_dimensional_size, _multi_product_info,
-                         _number, _parse_max_size, _parse_size_mm, default_quantity_unit,
+                         STATE_SCHEMA_VERSION, _multi_product_info,
+                         default_quantity_unit,
                          merge_dimension_patch, migrate_dimension_field_meta,
                          normalize_order_dimensions, normalize_order_items,
-                         normalize_order_quantity, normalize_state, parse_quantity,
+                         normalize_state, parse_quantity,
                          quote_idempotency_key, required_order_keys)
 from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, parameter_state
 from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
@@ -40,7 +41,6 @@ MAX_RUN_EVENTS = 64
 MAX_RUN_HISTORY = 20
 MAX_QUOTE_REQUESTS = 40
 QUOTE_ACTIVE_STATUSES = {"awaiting_human_confirmation", "confirmed"}
-QUOTE_TERMINAL_STATUSES = {"cancelled", "stale", "submitted", "failed"}
 WORKFLOW_LABELS = {
     "collect": "需求收集", "clarify": "品类澄清", "recommend": "方案选择",
     "preflight": "文件预检", "quote": "报价准备", "confirm": "订单确认",
@@ -50,10 +50,17 @@ FIELD_SOURCE_LABELS = {
     "user": "用户输入", "rule": "规则识别", "model": "模型推断",
     "recommendation": "方案带入", "system": "系统默认",
 }
+# Keys a patch may touch on an order item; identity and delivery state are
+# managed by the workflow, never written from user or model patches.
+ITEM_PATCH_KEYS = {key for key in ITEM_DEFAULTS
+                   if key not in {"itemId", "selectedOption", "orderGenerated"}}
+ORDER_PATCH_KEYS = {key for key in ORDER_DEFAULTS if key not in {"productTypes", "items"}}
 
 
 class Memory:
     """SQLite-backed session memory; survives server restarts."""
+
+    BUSY_TIMEOUT_MS = 5000
 
     def __init__(self, path: str | Path = "data/agent.sqlite3") -> None:
         self.path = Path(path)
@@ -66,7 +73,32 @@ class Memory:
             row = db.execute("SELECT state FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if not row:
             return self.fresh_state()
-        return normalize_state(json.loads(row[0]))
+        try:
+            state = json.loads(row[0])
+            if not isinstance(state, dict):
+                raise ValueError("会话状态不是 JSON 对象")
+            return normalize_state(state)
+        except (TypeError, ValueError, AttributeError, KeyError, json.JSONDecodeError) as error:
+            return self._quarantine(session_id, row[0], error)
+
+    def _quarantine(self, session_id: str, raw: str, error: Exception) -> dict[str, Any]:
+        """Self-heal a corrupted session: back it up, drop the row, start fresh."""
+        try:
+            backup_dir = self.path.parent / "corrupted"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64] or "session"
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            (backup_dir / f"{safe_id}-{stamp}.json").write_text(
+                json.dumps({"sessionId": session_id, "error": str(error), "raw": raw},
+                           ensure_ascii=False),
+                encoding="utf-8")
+        except OSError:
+            pass
+        with self._db() as db:
+            db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        print(f"PrintOps: 会话 {session_id} 的持久化状态损坏，已备份到 data/corrupted/ 并重置该会话"
+              f"（{error}）", file=sys.stderr)
+        return self.fresh_state()
 
     def save(self, session_id: str, state: dict[str, Any]) -> None:
         data = json.dumps(state, ensure_ascii=False)
@@ -89,8 +121,16 @@ class Memory:
 
     @contextmanager
     def _db(self):
-        with closing(sqlite3.connect(self.path)) as db, db:
-            yield db
+        db = sqlite3.connect(self.path, timeout=self.BUSY_TIMEOUT_MS / 1000)
+        try:
+            # WAL lets concurrent reads proceed during writes; busy_timeout keeps
+            # concurrent writers from failing with "database is locked".
+            db.execute("PRAGMA busy_timeout = 5000")
+            db.execute("PRAGMA journal_mode = WAL")
+            with db:
+                yield db
+        finally:
+            db.close()
 
 
 class Agent:
@@ -1162,41 +1202,42 @@ class Agent:
             return "下一步：确认方案后生成订单草稿"
         return "下一步：人工确认文件、价格和交期"
 
-    def _update_item(self, index: int, changes: dict[str, Any], source: str = "rule",
-                     confidence: float = 0.84,
-                     field_confidence: dict[str, float] | None = None) -> set[str]:
-        """Apply a constrained patch to one product item in a multi-product order."""
-        items = self.state["order"].get("items")
-        if not isinstance(items, list) or not (0 <= index < len(items)) or not isinstance(changes, dict):
-            return set()
-        previous = deepcopy(items[index])
-        item = deepcopy(previous)
-        product = str(changes.get("productType") or item.get("productType") or "")
+    def _apply_patch(self, target: dict[str, Any], previous: dict[str, Any],
+                     changes: dict[str, Any], *, source: str, confidence: float,
+                     field_confidence: dict[str, float] | None, allowed_keys: set[str],
+                     meta_prefix: str = "", list_fields: dict[str, Any] | None = None,
+                     settle=None) -> set[str]:
+        """Shared constrained-patch engine for the whole order and each item.
+
+        ``previous`` is the untouched pre-patch copy used for conflict and
+        provenance records; ``meta_prefix`` scopes provenance fields for items;
+        ``list_fields`` carries order-only list patches; ``settle`` runs after
+        the values land but before provenance is recorded. Returns the set of
+        keys whose value actually changed. Recommendation invalidation stays
+        with the callers because order and items differ there.
+        """
         valid: dict[str, Any] = {}
         quantity_keys = {"quantity", "quantityValue", "quantityUnit"}
         if any(key in changes for key in quantity_keys):
+            product = str(changes.get("productType") or target.get("productType") or "")
             raw_quantity = changes.get("quantity")
             if raw_quantity in (None, ""):
-                raw_quantity = changes.get("quantityValue", item.get("quantity"))
+                raw_quantity = changes.get("quantityValue", target.get("quantity"))
             parsed_quantity = parse_quantity(raw_quantity, product, str(changes.get("quantityUnit") or ""))
             if parsed_quantity:
                 display, numeric, unit = parsed_quantity
                 valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
-                unchanged = all(item.get(key) == value for key, value in
-                                (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)))
-                if unchanged:
+                if all(target.get(key) == value for key, value in
+                       (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit))):
                     # Re-stating an identical quantity is still a confirmation:
                     # it must be able to clear a low confidence grade.
-                    item_id = item.get("itemId") or f"item-{index + 1}"
                     for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
-                        self._set_field_meta(f"items.{item_id}.{key}", value, source, confidence, field_confidence)
+                        self._set_field_meta(f"{meta_prefix}{key}", value, source, confidence, field_confidence)
         for key, value in changes.items():
-            if key not in ITEM_DEFAULTS or key in quantity_keys or key in {"itemId", "selectedOption", "orderGenerated"}:
-                continue
-            if value is None:
+            if key not in allowed_keys or value is None or key in quantity_keys:
                 continue
             if key == "dimensions" and isinstance(value, dict):
-                current_dimensions = dict(item.get("dimensions") or {})
+                current_dimensions = dict(target.get("dimensions") or {})
                 next_dimensions = dict(DIMENSION_DEFAULTS)
                 next_dimensions.update({name: str(current_dimensions.get(name) or "").strip()
                                         for name in DIMENSION_DEFAULTS})
@@ -1207,7 +1248,7 @@ class Agent:
                 if next_dimensions != current_dimensions:
                     valid[key] = next_dimensions
             elif key == "productSpecs" and isinstance(value, dict):
-                current_specs = dict(item.get("productSpecs") or {})
+                current_specs = dict(target.get("productSpecs") or {})
                 next_specs = dict(current_specs)
                 dimension_patch: dict[str, Any] = {}
                 for name, spec_value in value.items():
@@ -1219,138 +1260,10 @@ class Agent:
                         dimension_patch[name] = normalized
                         continue
                     if normalized:
-                        next_specs[name] = normalized
-                    else:
-                        next_specs.pop(name, None)
-                if next_specs != current_specs:
-                    valid[key] = next_specs
-                if dimension_patch:
-                    valid["dimensions"] = merge_dimension_patch(item.get("dimensions"), dimension_patch)
-            elif str(value).strip():
-                normalized = str(value).strip()
-                if not self._equivalent_value(item.get(key), normalized):
-                    valid[key] = normalized
-        changed = {key for key, value in valid.items() if item.get(key) != value}
-        item.update(valid)
-        previous_dimensions = previous.get("dimensions") or {}
-        normalize_order_dimensions(item)
-        if previous_dimensions != item.get("dimensions"):
-            changed.add("dimensions")
-        if "productType" in changed and previous.get("productType") and previous.get("productType") != item.get("productType"):
-            item["productSpecs"] = {}
-            item["dimensions"] = deepcopy(DIMENSION_DEFAULTS)
-            changed.add("productSpecs")
-            changed.add("dimensions")
-        if changed & RECOMMENDATION_FIELDS:
-            item["selectedOption"] = None
-            item["orderGenerated"] = False
-            self.state.setdefault("itemOptions", {}).pop(item.get("itemId") or f"item-{index + 1}", None)
-            self._invalidate_delivery_state()
-            self.state["stage"] = "recommend"
-            self.state["workflowStage"] = "recommend"
-        items[index] = item
-        normalize_order_items(self.state["order"])
-        item_id = item.get("itemId") or f"item-{index + 1}"
-        for key in changed:
-            old_value, new_value = previous.get(key), item.get(key)
-            field = f"items.{item_id}.{key}"
-            if old_value and new_value and old_value != new_value:
-                self._record_conflict(field, old_value, new_value, source)
-            if key == "productSpecs":
-                before = previous.get("productSpecs") or {}
-                after = item.get("productSpecs") or {}
-                for name in set(before) | set(after):
-                    spec_field = f"items.{item_id}.productSpecs.{name}"
-                    self._set_field_meta(spec_field, after.get(name), source, confidence,
-                                         field_confidence)
-            elif key == "dimensions":
-                before = previous.get("dimensions") or {}
-                after = item.get("dimensions") or {}
-                for name in DIMENSION_DEFAULTS:
-                    spec_field = f"items.{item_id}.dimensions.{name}"
-                    old_value, new_value = before.get(name, ""), after.get(name, "")
-                    if old_value and new_value and old_value != new_value:
-                        self._record_conflict(spec_field, old_value, new_value, source)
-                    self._set_field_meta(spec_field, new_value, source, confidence,
-                                         field_confidence)
-            else:
-                self._set_field_meta(field, new_value, source, confidence, field_confidence)
-        return changed
-
-    def _update_order(self, changes: dict[str, Any], source: str = "rule", confidence: float = 0.84,
-                      field_confidence: dict[str, float] | None = None) -> set[str]:
-        previous_product = self.state["order"].get("productType")
-        previous_order = deepcopy(self.state["order"])
-        valid: dict[str, Any] = {}
-        # Quantity is kept backwards-compatible as a display string, while the
-        # numeric value and unit are stored separately for pricing and adapters.
-        quantity_keys = {"quantity", "quantityValue", "quantityUnit"}
-        if any(key in changes for key in quantity_keys):
-            product_for_quantity = str(changes.get("productType") or previous_product or "")
-            raw_quantity = changes.get("quantity")
-            if raw_quantity in (None, ""):
-                raw_quantity = changes.get("quantityValue", self.state["order"].get("quantity"))
-            parsed_quantity = parse_quantity(
-                raw_quantity,
-                product_for_quantity,
-                str(changes.get("quantityUnit") or ""),
-            )
-            if parsed_quantity:
-                display, numeric, unit = parsed_quantity
-                valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
-                unchanged = all(self.state["order"].get(key) == value for key, value in
-                                (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)))
-                if unchanged:
-                    # Re-stating an identical quantity is still a confirmation:
-                    # it must be able to clear a low confidence grade.
-                    for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
-                        self._set_field_meta(key, value, source, confidence, field_confidence)
-        for key, value in changes.items():
-            if key not in ORDER_DEFAULTS or value is None or key in quantity_keys:
-                continue
-            if key in {"productTypes", "items"}:
-                if isinstance(value, list):
-                    candidate = deepcopy(self.state["order"])
-                    candidate[key] = deepcopy(value)
-                    if key == "items":
-                        normalize_order_items(candidate)
-                        normalized_items = candidate["items"]
-                    else:
-                        normalized_items = deepcopy(value)
-                    if normalized_items != self.state["order"].get(key):
-                        valid[key] = normalized_items
-                    if key == "items":
-                        next_types = candidate.get("productTypes", [])
-                        if next_types != self.state["order"].get("productTypes", []):
-                            valid["productTypes"] = next_types
-                continue
-            if key == "dimensions" and isinstance(value, dict):
-                current_dimensions = dict(self.state["order"].get("dimensions") or {})
-                next_dimensions = dict(DIMENSION_DEFAULTS)
-                next_dimensions.update({name: str(current_dimensions.get(name) or "").strip()
-                                        for name in DIMENSION_DEFAULTS})
-                for name, dimension_value in value.items():
-                    if name not in DIMENSION_DEFAULTS:
-                        continue
-                    next_dimensions[name] = str(dimension_value).strip() if dimension_value is not None else ""
-                if next_dimensions != current_dimensions:
-                    valid[key] = next_dimensions
-            elif key == "productSpecs" and isinstance(value, dict):
-                current_specs = dict(self.state["order"].get("productSpecs") or {})
-                next_specs = dict(current_specs)
-                dimension_patch: dict[str, Any] = {}
-                for name, item in value.items():
-                    name = str(name).strip()
-                    if not name:
-                        continue
-                    normalized = str(item).strip() if item is not None else ""
-                    if name in DIMENSION_DEFAULTS:
-                        dimension_patch[name] = normalized
-                        continue
-                    if normalized:
                         if self._equivalent_value(next_specs.get(name), normalized):
                             if source == "user":
-                                self._set_field_meta(f"productSpecs.{name}", next_specs.get(name), source, confidence)
+                                self._set_field_meta(f"{meta_prefix}productSpecs.{name}",
+                                                     next_specs.get(name), source, confidence, field_confidence)
                             continue
                         next_specs[name] = normalized
                     else:
@@ -1358,54 +1271,119 @@ class Agent:
                 if next_specs != current_specs:
                     valid[key] = next_specs
                 if dimension_patch:
-                    valid["dimensions"] = merge_dimension_patch(self.state["order"].get("dimensions"), dimension_patch)
+                    valid["dimensions"] = merge_dimension_patch(target.get("dimensions"), dimension_patch)
             elif str(value).strip():
                 normalized = str(value).strip()
-                if self._equivalent_value(self.state["order"].get(key), normalized):
+                if self._equivalent_value(target.get(key), normalized):
                     if source == "user":
-                        self._set_field_meta(key, self.state["order"].get(key), source, confidence)
+                        self._set_field_meta(f"{meta_prefix}{key}", target.get(key), source, confidence, field_confidence)
                     continue
                 valid[key] = normalized
-        changed = {key for key, value in valid.items() if self.state["order"].get(key) != value}
-        previous_dimensions = previous_order.get("dimensions") or {}
-        self.state["order"].update(valid)
-        normalize_order_dimensions(self.state["order"])
-        normalize_order_items(self.state["order"])
-        if previous_dimensions != self.state["order"].get("dimensions"):
+        if list_fields:
+            valid.update(list_fields)
+        changed = {key for key, value in valid.items() if target.get(key) != value}
+        target.update(valid)
+        previous_dimensions = previous.get("dimensions") or {}
+        normalize_order_dimensions(target)
+        if previous_dimensions != target.get("dimensions"):
             changed.add("dimensions")
-        if "productType" in changed and previous_product and previous_product != self.state["order"].get("productType"):
+        if "productType" in changed and previous.get("productType") and previous.get("productType") != target.get("productType"):
             # Product-specific fields belong to the old item and must not leak into a new draft.
-            self.state["order"]["productSpecs"] = {}
-            self.state["order"]["dimensions"] = deepcopy(DIMENSION_DEFAULTS)
+            target["productSpecs"] = {}
+            target["dimensions"] = deepcopy(DIMENSION_DEFAULTS)
             changed.add("productSpecs")
             changed.add("dimensions")
+            spec_prefix = f"{meta_prefix}productSpecs."
             for field in list(self.state.get("fieldMeta") or {}):
-                if field.startswith("productSpecs."):
+                if field.startswith(spec_prefix):
                     self.state["fieldMeta"].pop(field, None)
+        if settle is not None:
+            settle()
         for key in changed:
             if key == "productSpecs":
-                before = previous_order.get("productSpecs") or {}
-                after = self.state["order"].get("productSpecs") or {}
+                before = previous.get("productSpecs") or {}
+                after = target.get("productSpecs") or {}
                 for name in set(before) | set(after):
+                    field = f"{meta_prefix}productSpecs.{name}"
                     old_value, new_value = before.get(name, ""), after.get(name, "")
-                    field = f"productSpecs.{name}"
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
                     self._set_field_meta(field, new_value, source, confidence, field_confidence)
             elif key == "dimensions":
-                before = previous_order.get("dimensions") or {}
-                after = self.state["order"].get("dimensions") or {}
+                before = previous.get("dimensions") or {}
+                after = target.get("dimensions") or {}
                 for name in DIMENSION_DEFAULTS:
-                    field = f"dimensions.{name}"
+                    field = f"{meta_prefix}dimensions.{name}"
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
                     self._set_field_meta(field, new_value, source, confidence, field_confidence)
             else:
-                old_value, new_value = previous_order.get(key), self.state["order"].get(key)
+                field = f"{meta_prefix}{key}"
+                old_value, new_value = previous.get(key), target.get(key)
                 if old_value and new_value and old_value != new_value:
-                    self._record_conflict(key, old_value, new_value, source)
-                self._set_field_meta(key, new_value, source, confidence, field_confidence)
+                    self._record_conflict(field, old_value, new_value, source)
+                self._set_field_meta(field, new_value, source, confidence, field_confidence)
+        return changed
+
+    def _update_item(self, index: int, changes: dict[str, Any], source: str = "rule",
+                     confidence: float = 0.84,
+                     field_confidence: dict[str, float] | None = None) -> set[str]:
+        """Apply a constrained patch to one product item in a multi-product order."""
+        items = self.state["order"].get("items")
+        if not isinstance(items, list) or not (0 <= index < len(items)) or not isinstance(changes, dict):
+            return set()
+        previous = deepcopy(items[index])
+        item = deepcopy(previous)
+        item_id = item.get("itemId") or f"item-{index + 1}"
+
+        def settle() -> None:
+            items[index] = item
+            normalize_order_items(self.state["order"])
+
+        changed = self._apply_patch(
+            item, previous, changes, source=source, confidence=confidence,
+            field_confidence=field_confidence, allowed_keys=ITEM_PATCH_KEYS,
+            meta_prefix=f"items.{item_id}.", settle=settle)
+        # normalize_order_items rebuilt the items list with fresh dicts; work
+        # on the live item from here on.
+        item = self.state["order"]["items"][index]
+        if changed & RECOMMENDATION_FIELDS:
+            item["selectedOption"] = None
+            item["orderGenerated"] = False
+            self.state.setdefault("itemOptions", {}).pop(item_id, None)
+            self._invalidate_delivery_state()
+            self.state["stage"] = "recommend"
+            self.state["workflowStage"] = "recommend"
+        return changed
+
+    def _update_order(self, changes: dict[str, Any], source: str = "rule", confidence: float = 0.84,
+                      field_confidence: dict[str, float] | None = None) -> set[str]:
+        order = self.state["order"]
+        previous = deepcopy(order)
+        # Order-only list patches: items must be normalized as whole items, and
+        # a new items list derives the productTypes summary.
+        list_fields: dict[str, Any] = {}
+        for key in ("productTypes", "items"):
+            if key not in changes or not isinstance(changes.get(key), list):
+                continue
+            candidate = deepcopy(order)
+            candidate[key] = deepcopy(changes[key])
+            if key == "items":
+                normalize_order_items(candidate)
+                normalized_items = candidate["items"]
+            else:
+                normalized_items = deepcopy(changes[key])
+            if normalized_items != order.get(key):
+                list_fields[key] = normalized_items
+                if key == "items":
+                    next_types = candidate.get("productTypes", [])
+                    if next_types != order.get("productTypes", []):
+                        list_fields["productTypes"] = next_types
+        changed = self._apply_patch(
+            order, previous, changes, source=source, confidence=confidence,
+            field_confidence=field_confidence, allowed_keys=ORDER_PATCH_KEYS,
+            list_fields=list_fields, settle=lambda: normalize_order_items(order))
         if changed & RECOMMENDATION_FIELDS:
             self.state["selectedOption"] = None
             self._invalidate_delivery_state()
@@ -1534,11 +1512,6 @@ class Agent:
     def _perceive_full(text: str, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
         """Return fields plus the per-field evidence confidence grade."""
         return perceive(text, product_hint=product_hint)
-
-    # Backward-compatible aliases for callers that used the static extractors.
-    _extract_sizes = staticmethod(_extract_sizes)
-    _extract_labeled_size = staticmethod(_extract_labeled_size)
-    _extract_product_specs = staticmethod(_extract_product_specs)
 
     @staticmethod
     def _question(key: str) -> str:

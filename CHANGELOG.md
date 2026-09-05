@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.0.0 - 2026-09-05
+
+首个稳定版。汇集 v0.9.x–v0.11.x 全部成果，发布物料（双语 README、截图、发布验收清单）齐备；149 个测试全绿，111 例评测字段准确率 100%。
+
+- 自然语言建单：16 品类目录、四种尺寸语义（含内外尺寸）、多产品拆分、修改与否定、置信度分级与低置信度拦截
+- 可解释方案：经济/平衡/质感三档，合版/专版语义、参考费用区间（示例价格参数表，带版本）、交期示例、横向对比表
+- 专业规则：起印量提示、开数参考、骑马钉页数约束、覆膜/烫金工艺系数
+- 本地安全模型：本地访问令牌鉴权、静态路由白名单、LLM 接口 SSRF 主机校验、API Key 明文风险提醒、敏感信息扫描
+- 可靠性：SQLite WAL + busy_timeout、损坏会话自动隔离恢复、询价幂等与生命周期、字段溯源与冲突记录
+- 工程化：order_model/nlu/tools 模块化、GitHub Actions CI（双平台双版本）、149 个测试、111 例评测套件、真实语料评测机制
+- 已知边界：供应商真实接入为下一阶段（适配器协议已就绪）；参考价格不构成报价
+
+## v0.11.0 - 2026-09-05
+
+1.0 发布门槛专项（发布验收清单见 `docs/RELEASE_CHECKLIST.md`）：
+
+安全（ROADMAP P0 全部落地）：
+
+- **静态路由白名单**：静态服务只放行 `/`、`/index.html`、`/app.js`、`/styles.css`，`/.git`、源码文件、`docs/`、运行时数据一律 404（此前实测 `/.git/config`、`server.py` 可被直接下载）。
+- **本地访问令牌**：启动时生成进程内随机 token，注入到所服务的页面（`window.__PRINTOPS_TOKEN__`）；除 `/api/health` 外全部 API 要求 `X-PrintOps-Token` 头，缺失/不匹配返回 401。启动终端会打印 token 供 curl 调试。浏览器跨来源请求（Origin 与 Host 不符）直接 403，阻断网页端 CSRF/DNS-rebinding 面。
+- **LLM 接口 SSRF 校验**：模型接口 URL 在配置时校验主机，拒绝环回、私有（RFC1918）、CGNAT（100.64/10）、保留与链路本地地址（含解析后指向内网的域名）；完全无法解析的主机名放行（请求时自然失败，不构成可达内网目标）。本地模型地址（如 `http://localhost:11434`）从此不再可用，如需本地推理请用带公网域名的网关。
+- **Key 明文风险提示**：`/api/settings` 在检测到本机 `data/llm_config.json` 存有明文 Key 时返回 `keyStorageWarning`，设置面板同步显示提醒（更安全做法是仅用环境变量提供 Key）。
+- **敏感扫描扩充**：`tools/secret_scan.py` 新增 Google/GitHub/Groq/HuggingFace/Slack/AWS/通用凭据字段 7 类模式；不再整体跳过 `data/`——JSON 文件先遮蔽敏感字段值再扫描，`llm_config.json` 中按设计存放的 Key 不触发，泄露到其他字段或文件的副本会被抓出。
+
+可靠性：
+
+- SQLite 开启 WAL 与 `busy_timeout=5000`，并发读写不再触发 database locked。
+- 损坏会话自愈：会话状态 JSON 损坏或类型异常时，备份到 `data/corrupted/`、删除坏行、自动重置该会话，不再永久 500。
+- `/api/chat` 超大请求先排空声明长度再返回 413，客户端能收到错误而不是连接重置。
+
+工程化：
+
+- `_update_item` 与 `_update_order` 约 220 行近似重复逻辑合并为统一的 `_apply_patch` 补丁引擎；同步修正三处单产品/多产品行为分叉（用户重述等值字段确认、productSpecs 冲突记录、切换品类时清理 item 级 provenance）。
+- 清理死代码：`agent.py` 9 个未使用 import 与未引用的 `QUOTE_TERMINAL_STATUSES`，`order_model.py` 整块从未使用的重复常量，`Agent._extract_*` 旧别名。
+- 新增 `tests/test_http_handler.py`（13 例，socket 级覆盖 token/403/白名单/411/413/415/400）、`tests/test_persistence.py`（WAL/损坏恢复 5 例）、`tests/test_security_units.py`（SSRF 与扫描 10 例）、`tests/test_real_corpus_eval.py`（真实语料管线 10 例：加载、套件运行、门槛四种判定与 CI 退出码，均用临时夹具验证，不向仓库写入伪造"真实"数据）；测试中的凭据形态样本全部运行时拼接，测试源码不含字面量密钥。
+- **真实脱敏评测机制**：`tests/evaluate_agent.py` 支持加载 `tests/eval_cases_real.json` 单独运行并单独报告（判定四态：pending/record/pass/fail）；达到 20 例后启用字段准确率 ≥95% 硬门槛（CI 失败），不足 20 例仅记录，文件格式无效直接失败。模板文件已就位，格式说明与脱敏要求见 `docs/RELEASE_CHECKLIST.md`。新增标注辅助工具 `tools/annotate_case.py`：把脱敏原话转成待核对用例草稿（expected 仅预填 user/rule/model 来源的建议值，系统默认与方案带入不进建议；工具只打印，不读写语料文件）。真实语料仍待补充——这是 1.0 前仅剩的两项人工事项之一。
+- 真人走查脚本与澄清轮数记录表入库（`docs/RELEASE_CHECKLIST.md` 门槛 7）。
+- 回归：149 个单测全绿，合成评测 111 例字段准确率 100%、可完成用例完整率 100%，敏感扫描通过。
+
 ## v0.10.1 - 2026-09-05
 
 面向企业用户的方案展示升级（便捷性/专业性/方案细节与经济性）：

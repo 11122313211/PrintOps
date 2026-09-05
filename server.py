@@ -6,9 +6,10 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import uuid
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -35,6 +36,26 @@ LOGGER = logging.getLogger("printops.server")
 DEFAULT_PORT = 4174
 PORT = int(os.getenv("PRINTOPS_PORT", str(DEFAULT_PORT)))
 
+# Local access token: generated per process, injected into the served page,
+# and required on every API call except /api/health. A random website cannot
+# read it (same-origin policy), so browser-borne CSRF/DNS-rebinding requests
+# fail with 401/403.
+TOKEN_HEADER = "X-PrintOps-Token"
+ACCESS_TOKEN = secrets.token_urlsafe(24)
+# Static routes are whitelisted: the server must never expose source files,
+# docs, .git or runtime data. Non-API paths outside this set return 404.
+STATIC_FILES = {
+    "": "index.html", "/": "index.html", "/index.html": "index.html",
+    "/app.js": "app.js", "/styles.css": "styles.css",
+}
+STATIC_CONTENT_TYPES = {
+    "index.html": "text/html; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+    "styles.css": "text/css; charset=utf-8",
+}
+KEY_STORAGE_WARNING = ("API Key 以明文保存在本机 data/llm_config.json（文件权限 600）。"
+                       "请勿把该文件提交到 Git 或分享给他人；更安全的做法是仅用环境变量提供 Key。")
+
 
 class RequestError(Exception):
     """An expected client/API error that can be safely shown to the UI."""
@@ -46,9 +67,21 @@ class RequestError(Exception):
         self.code = code
 
 
+def _key_storage_warning() -> str:
+    """Warn when a plaintext API key is actually stored in the local config file."""
+    try:
+        return KEY_STORAGE_WARNING if read_saved_config(LLM_CONFIG_PATH).get("key") else ""
+    except OSError:
+        return ""
+
+
 def llm_settings() -> dict[str, object]:
     with LLM_LOCK:
-        return {"llm": PLANNER.public_config()}
+        payload: dict[str, object] = {"llm": PLANNER.public_config()}
+    warning = _key_storage_warning()
+    if warning:
+        payload["keyStorageWarning"] = warning
+    return payload
 
 
 def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
@@ -65,7 +98,11 @@ def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
             api_key = str(body.get("key", "")).strip() or PLANNER.api_key
             PLANNER.configure(url, model, api_key)
             write_saved_config(LLM_CONFIG_PATH, {"url": PLANNER.base_url, "model": PLANNER.model, "key": PLANNER.api_key})
-        return {"llm": PLANNER.public_config()}
+        payload: dict[str, object] = {"llm": PLANNER.public_config()}
+    warning = _key_storage_warning()
+    if warning:
+        payload["keyStorageWarning"] = warning
+    return payload
 
 
 def _session_id(value: object) -> str | None:
@@ -131,22 +168,67 @@ def dispatch_get(path: str) -> dict[str, object] | None:
     return None
 
 
-class Handler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+class Handler(BaseHTTPRequestHandler):
+    def _origin_allowed(self) -> bool:
+        """Same-origin check: a present Origin header must match Host."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            return urlsplit(origin).netloc == (self.headers.get("Host") or "")
+        except ValueError:
+            return False
+
+    def _authorized(self) -> bool:
+        token = self.headers.get(TOKEN_HEADER, "")
+        try:
+            return secrets.compare_digest(token.encode("utf-8"), ACCESS_TOKEN.encode("utf-8"))
+        except (TypeError, ValueError, UnicodeEncodeError):
+            return False
+
+    def _discard_body(self) -> None:
+        """Read and drop a pending request body.
+
+        Closing a connection with unread body data makes Windows emit a RST
+        that can abort an unrelated later connection accepted from the same
+        backlog, so every early rejection drains the declared body first.
+        """
+        raw_length = self.headers.get("Content-Length")
+        try:
+            remaining = int(raw_length) if raw_length else 0
+        except (TypeError, ValueError):
+            return
+        if remaining <= 0:
+            return
+        try:
+            self._drain(remaining)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _guard(self) -> bool:
+        """Reject cross-origin and tokenless API access with a JSON error."""
+        if not self._origin_allowed():
+            self._discard_body()
+            self.error_response(RequestError("跨来源请求被拒绝", 403, "FORBIDDEN_ORIGIN"))
+            return False
+        if not self._authorized():
+            self._discard_body()
+            self.error_response(RequestError("本地访问令牌缺失或不匹配，请刷新页面后重试", 401, "UNAUTHORIZED"))
+            return False
+        return True
 
     def do_GET(self):
         self.request_id = uuid.uuid4().hex[:12]
         path = unquote(urlsplit(self.path).path)
         try:
-            if path == "/data" or path.startswith("/data/"):
-                return self.error_response(RequestError("资源不存在", 404, "NOT_FOUND"))
-            public_payload = dispatch_get(path)
-            if public_payload is not None:
-                return self.reply(public_payload)
             if path.startswith("/api/"):
+                if path != "/api/health" and not self._guard():
+                    return None
+                public_payload = dispatch_get(path)
+                if public_payload is not None:
+                    return self.reply(public_payload)
                 return self.error_response(RequestError("接口不存在", 404, "NOT_FOUND"))
-            return super().do_GET()
+            return self.serve_static(path)
         except RequestError as error:
             return self.error_response(error)
         except (BrokenPipeError, ConnectionResetError):
@@ -159,6 +241,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.request_id = uuid.uuid4().hex[:12]
         path = unquote(urlsplit(self.path).path)
         try:
+            if not self._guard():
+                return None
             body = self.read_json()
             if path == "/api/settings":
                 try:
@@ -212,6 +296,9 @@ class Handler(SimpleHTTPRequestHandler):
         if length < 0:
             raise RequestError("请求内容长度无效", 400, "INVALID_LENGTH")
         if length > MAX_BODY_BYTES:
+            # Drain the declared body first so the client can finish writing
+            # and actually receive the 413 instead of a connection reset.
+            self._drain(length)
             raise RequestError("请求内容过大，请缩小后重试", 413, "PAYLOAD_TOO_LARGE")
         raw = self.rfile.read(length)
         if not raw:
@@ -226,6 +313,36 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(value, dict):
             raise RequestError("请求体必须是 JSON 对象", 400, "INVALID_PAYLOAD")
         return value
+
+    def _drain(self, length: int, cap: int = 16 * 1024 * 1024) -> None:
+        remaining = min(length, cap)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
+    def serve_static(self, path: str):
+        """Serve only whitelisted static files; the page carries the access token."""
+        name = STATIC_FILES.get(path)
+        if name is None:
+            return self.error_response(RequestError("资源不存在", 404, "NOT_FOUND"))
+        try:
+            raw = (ROOT / name).read_bytes()
+        except OSError:
+            return self.error_response(RequestError("资源不存在", 404, "NOT_FOUND"))
+        if name == "index.html":
+            raw = index_html_with_token(raw)
+        self.send_response(200)
+        self.send_header("Content-Type", STATIC_CONTENT_TYPES[name])
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Request-ID", getattr(self, "request_id", ""))
+        self.end_headers()
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            return None
 
     def reply(self, data, status=200):
         raw = json.dumps(data, ensure_ascii=False).encode()
@@ -248,6 +365,18 @@ class Handler(SimpleHTTPRequestHandler):
         LOGGER.info("%s %s", self.command, unquote(urlsplit(self.path).path))
 
 
+def index_html_with_token(raw: bytes) -> bytes:
+    """Inject the per-process access token into the served page."""
+    html = raw.decode("utf-8")
+    script = f"<script>window.__PRINTOPS_TOKEN__={json.dumps(ACCESS_TOKEN)};</script>"
+    if "</head>" in html:
+        html = html.replace("</head>", f"{script}</head>", 1)
+    else:
+        html = script + html
+    return html.encode("utf-8")
+
+
 if __name__ == "__main__":
-    print(f"Print order agent: http://localhost:{PORT}")
+    print(f"PrintOps order agent: http://localhost:{PORT}")
+    print(f"本地访问令牌（curl 调试用 -H 'X-PrintOps-Token: ...'）：{ACCESS_TOKEN}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

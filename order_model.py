@@ -31,23 +31,7 @@ ITEM_DEFAULTS = {
     "productSpecs": {}, "selectedOption": None, "orderGenerated": False, "uploadedFile": None,
 }
 REQUIRED = ["productType", "quantity", "size", "paper", "printing", "deadline"]
-HISTORY_LIMIT = 80
-MAX_PLANNER_TOOL_ROUNDS = 2
-MAX_RUN_EVENTS = 64
-MAX_RUN_HISTORY = 20
-MAX_QUOTE_REQUESTS = 40
-QUOTE_ACTIVE_STATUSES = {"awaiting_human_confirmation", "confirmed"}
-QUOTE_TERMINAL_STATUSES = {"cancelled", "stale", "submitted", "failed"}
 RECOMMENDATION_FIELDS = {"productType", "productTypes", "items", "purpose", "quantity", "quantityValue", "quantityUnit", "size", "dimensions", "pages", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget", "productSpecs"}
-WORKFLOW_LABELS = {
-    "collect": "需求收集", "clarify": "品类澄清", "recommend": "方案选择",
-    "preflight": "文件预检", "quote": "报价准备", "confirm": "订单确认",
-    "export": "导出交接",
-}
-FIELD_SOURCE_LABELS = {
-    "user": "用户输入", "rule": "规则识别", "model": "模型推断",
-    "recommendation": "方案带入", "system": "系统默认",
-}
 LABELS = {
     "productType": "印刷品", "purpose": "使用场景", "quantity": "数量",
     "size": "成品尺寸", "pages": "页数", "orientation": "版式方向", "paper": "纸张/材料", "printing": "印刷颜色",

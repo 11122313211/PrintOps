@@ -1,0 +1,4 @@
+{
+  "_instructions": "真实脱敏订单评测语料（详见 docs/RELEASE_CHECKLIST.md）。每例结构：{\"name\": 唯一名称, \"tag\": 分组（如 真实/修改）, \"turns\": [{\"text\": \"用户原话（脱敏后）\"}], \"expected\": {\"字段路径\": \"期望值\"}}。字段路径支持 items.0.quantity、productSpecs.folding 等形式；expected 值比较前会做空白/全半角/大小写归一。turns 按顺序模拟多轮对话。至少 20 例后启用字段准确率 ≥95% 硬门槛（不足 20 例仅记录报告，不失败）。脱敏要求：不得包含客户名称、电话、地址、邮箱、订单号等真实个人信息。",
+  "cases": []
+}
