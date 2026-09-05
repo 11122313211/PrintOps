@@ -67,6 +67,115 @@ let fileFeedback = null;
 let pdfPreview = null;
 const orderHistoryKey = "printops_order_history";
 const specPresetKey = "printops_spec_presets";
+const layoutKey = "printops_layout";
+const LAYOUT_DEFAULTS = { sidebarW: 204, orderW: 335, orderCollapsed: false };
+const SIDEBAR_RANGE = [180, 320];
+const ORDER_RANGE = [300, 480];
+const DESKTOP_QUERY = window.matchMedia("(min-width: 1051px)");
+
+function loadLayout() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(layoutKey) || "{}");
+    return {
+      sidebarW: clampLayoutWidth(Number(stored.sidebarW) || LAYOUT_DEFAULTS.sidebarW, SIDEBAR_RANGE),
+      orderW: clampLayoutWidth(Number(stored.orderW) || LAYOUT_DEFAULTS.orderW, ORDER_RANGE),
+      orderCollapsed: Boolean(stored.orderCollapsed)
+    };
+  } catch {
+    return { ...LAYOUT_DEFAULTS };
+  }
+}
+
+function clampLayoutWidth(value, [min, max]) {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function saveLayout() {
+  try {
+    localStorage.setItem(layoutKey, JSON.stringify({ sidebarW: layout.sidebarW, orderW: layout.orderW, orderCollapsed: layout.orderCollapsed }));
+  } catch { /* 布局是增强项，存储失败不影响使用 */ }
+}
+
+function applyLayout() {
+  const workspace = $("#workspace");
+  workspace.style.setProperty("--sidebar-w", `${layout.sidebarW}px`);
+  workspace.style.setProperty("--order-w", `${layout.orderW}px`);
+  workspace.classList.toggle("order-collapsed", layout.orderCollapsed);
+  const orderToggle = $("#order-toggle");
+  if (orderToggle) {
+    const collapsed = layout.orderCollapsed;
+    orderToggle.setAttribute("aria-label", collapsed ? "展开订单栏" : "收起订单栏");
+    orderToggle.title = collapsed ? "展开订单栏" : "收起订单栏";
+    orderToggle.dataset.collapsed = String(collapsed);
+  }
+  updateBackdrop();
+}
+
+function resetPaneWidth(pane) {
+  if (pane === "sidebar") layout.sidebarW = LAYOUT_DEFAULTS.sidebarW;
+  if (pane === "order") layout.orderW = LAYOUT_DEFAULTS.orderW;
+  applyLayout();
+  saveLayout();
+  showToast("栏宽已重置");
+}
+
+function setupSplitters() {
+  document.querySelectorAll(".pane-splitter").forEach((splitter) => {
+    const pane = splitter.dataset.pane;
+    splitter.addEventListener("pointerdown", (event) => {
+      if (!DESKTOP_QUERY.matches || (pane === "sidebar" && sidebarCollapsed)) return;
+      event.preventDefault();
+      splitter.setPointerCapture(event.pointerId);
+      splitter.classList.add("is-dragging");
+      document.body.classList.add("is-resizing");
+      const workspaceRect = $("#workspace").getBoundingClientRect();
+      const onMove = (moveEvent) => {
+        if (pane === "sidebar") {
+          layout.sidebarW = clampLayoutWidth(moveEvent.clientX - workspaceRect.left, SIDEBAR_RANGE);
+          $("#workspace").style.setProperty("--sidebar-w", `${layout.sidebarW}px`);
+        } else {
+          layout.orderW = clampLayoutWidth(workspaceRect.right - moveEvent.clientX, ORDER_RANGE);
+          $("#workspace").style.setProperty("--order-w", `${layout.orderW}px`);
+        }
+      };
+      const finish = () => {
+        splitter.classList.remove("is-dragging");
+        document.body.classList.remove("is-resizing");
+        splitter.removeEventListener("pointermove", onMove);
+        splitter.removeEventListener("pointerup", finish);
+        splitter.removeEventListener("pointercancel", finish);
+        saveLayout();
+      };
+      splitter.addEventListener("pointermove", onMove);
+      splitter.addEventListener("pointerup", finish);
+      splitter.addEventListener("pointercancel", finish);
+    });
+    splitter.addEventListener("dblclick", () => resetPaneWidth(pane));
+    splitter.addEventListener("keydown", (event) => {
+      const step = event.key === "ArrowRight" ? 16 : event.key === "ArrowLeft" ? -16 : 0;
+      if (!step) return;
+      event.preventDefault();
+      if (pane === "sidebar") {
+        if (sidebarCollapsed) return;
+        layout.sidebarW = clampLayoutWidth(layout.sidebarW + step, SIDEBAR_RANGE);
+      } else {
+        layout.orderW = clampLayoutWidth(layout.orderW + step, ORDER_RANGE);
+      }
+      applyLayout();
+      saveLayout();
+    });
+  });
+}
+
+function updateBackdrop() {
+  const backdrop = $("#workspace-backdrop");
+  if (!backdrop) return;
+  const drawerOpen = !DESKTOP_QUERY.matches && !sidebarCollapsed;
+  backdrop.hidden = !drawerOpen;
+  document.body.classList.toggle("drawer-open", drawerOpen);
+}
+
+let layout = loadLayout();
 
 function cloneData(value) {
   if (typeof structuredClone === "function") return structuredClone(value);
@@ -139,7 +248,7 @@ function renderOrderHistory() {
     const title = document.createElement("strong");
     title.textContent = orderHistoryTitle(item.order);
     const meta = document.createElement("small");
-    meta.textContent = `${item.orderGenerated ? "已生成" : item.stage === "recommend" ? "已选方案" : "编辑中"} · ${formatOrderHistoryTime(item.updatedAt)}`;
+    meta.textContent = `${item.orderGenerated ? "已生成" : item.order?.selectedOption ? "已选方案" : item.stage === "recommend" ? "待选方案" : "编辑中"} · ${formatOrderHistoryTime(item.updatedAt)}`;
     button.append(title, meta);
     root.append(button);
   });
@@ -262,7 +371,7 @@ async function switchOrder(orderId) {
     } else addMessage("assistant", "已切换到这个订单。当前没有保存的对话内容，可以直接继续补充。");
     showToast("订单已切换");
   } catch (error) {
-    showToast(apiErrorText(error, "订单切换失败，请重试。"));
+    showToast(apiErrorText(error, "订单切换失败，请重试"), "error");
   } finally {
     setComposerBusy(false);
   }
@@ -317,6 +426,7 @@ function setSidebarCollapsed(collapsed) {
     button.dataset.collapsed = String(sidebarCollapsed);
   }
   localStorage.setItem("printops_sidebar", sidebarCollapsed ? "collapsed" : "expanded");
+  updateBackdrop();
 }
 
 function setHighContrast(enabled) {
@@ -330,7 +440,18 @@ function setHighContrast(enabled) {
   localStorage.setItem("printops_theme", enabled ? "high-contrast" : "standard");
 }
 
+function isFeedNearBottom() {
+  const feed = $("#chat-feed");
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+}
+
+function scrollFeedToBottom() {
+  const feed = $("#chat-feed");
+  feed.scrollTop = feed.scrollHeight;
+}
+
 function addMessage(role, text) {
+  const stick = isFeedNearBottom();
   const message = document.createElement("div");
   message.className = `message ${role}`;
   const avatar = document.createElement("div");
@@ -342,17 +463,18 @@ function addMessage(role, text) {
   bubble.textContent = text;
   const meta = document.createElement("div");
   meta.className = "message-meta";
-  meta.textContent = `${role === "assistant" ? "印刷订单智能体" : "当前订单"} · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date())}`;
+  meta.textContent = `${role === "assistant" ? "印刷订单智能体" : "我"} · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date())}`;
   content.append(bubble, meta);
   message.append(avatar, content);
   $("#chat-feed").appendChild(message);
-  $("#chat-feed").scrollTop = $("#chat-feed").scrollHeight;
+  if (stick) scrollFeedToBottom();
 }
 
 function addPendingMessage() {
   const message = document.createElement("div");
   message.className = "message assistant pending-message";
   message.setAttribute("role", "status");
+  const stick = isFeedNearBottom();
   const avatar = document.createElement("div");
   avatar.className = "avatar pending-avatar";
   avatar.textContent = "AI";
@@ -371,7 +493,7 @@ function addPendingMessage() {
   content.appendChild(bubble);
   message.append(avatar, content);
   $("#chat-feed").appendChild(message);
-  $("#chat-feed").scrollTop = $("#chat-feed").scrollHeight;
+  if (stick) scrollFeedToBottom();
   const timer = setInterval(() => {
     phaseIndex = (phaseIndex + 1) % phases.length;
     label.textContent = phases[phaseIndex];
@@ -439,7 +561,7 @@ function render(data, showMessages = true) {
   renderSpecPresets();
   $("#agent-trace").textContent = data.toolTrace?.length ? data.toolTrace.join("  /  ") : "等待输入";
   $("#memory-status").textContent = data.nextAction || (data.stage === "confirm" ? "订单记忆已锁定，等待人工确认。" : data.order?.productType ? "订单记忆已保存，可继续补充或修改。" : "等待第一条需求，Agent 将自动建立订单记忆。");
-  $("#agent-status").innerHTML = '<span class="status-dot"></span>Agent 在线';
+  $("#agent-status").innerHTML = '<span class="status-dot"></span>智能体在线';
 }
 
 function trackOrderChanges(order) {
@@ -475,7 +597,7 @@ function renderSettings(data) {
     key.placeholder = llmSettings.keyConfigured ? "已配置，留空保持不变" : "可选，不填也可使用规则模式";
   }
   const button = $("#settings-button");
-  if (button) button.textContent = hasError ? "模型异常" : enabled ? "模型已启用" : "接口设置";
+  if (button) button.textContent = hasError ? "接口异常" : enabled ? "接口已启用" : "接口设置";
 }
 
 function hasValue(value) {
@@ -543,7 +665,7 @@ function renderFieldList(selector, keys, editable = false) {
       valueNode.type = "text";
       valueNode.className = `field-input ${hasValue(current) ? "" : "empty"}`;
       valueNode.value = current || "";
-      valueNode.placeholder = missing ? "待补充" : labels[key];
+      valueNode.placeholder = missing ? "待补充" : "未设置";
       valueNode.setAttribute("aria-label", labels[key]);
       valueNode.addEventListener("change", () => commitFieldEdit(key, valueNode));
     } else {
@@ -573,7 +695,7 @@ function commitFieldEdit(key, input) {
   if (value === (current || "")) return;
   if (!value) {
     input.value = current || "";
-    showToast("如需清除字段，请在对话中说明，例如“不要覆膜”");
+    showToast("暂不支持直接清空，请在对话中说明，例如「不要覆膜」或「数量改成 800」", "error");
     return;
   }
   if (isSending) {
@@ -1044,8 +1166,13 @@ function renderOptions() {
   recommendations.hidden = !options.length;
   $("#recommendation-count").textContent = `${options.length} 个方案`;
   options.forEach((option, index) => {
+    const selected = state.selectedOption === option.id || state.activeItemSelectedOption === option.id;
     const card = document.createElement("article");
-    card.className = `option-card ${state.selectedOption === option.id || state.activeItemSelectedOption === option.id ? "selected" : ""}`;
+    card.className = `option-card ${selected ? "selected" : ""}`;
+    card.setAttribute("role", "button");
+    card.setAttribute("tabindex", "0");
+    card.setAttribute("aria-pressed", String(selected));
+    card.setAttribute("aria-label", `选择${option.title}`);
     card.innerHTML = `${option.score === "综合推荐" || index === 1 ? '<span class="option-badge">推荐</span>' : ""}<div class="option-card-heading"><h4></h4><span class="option-score"></span></div><p></p><dl class="option-grid"></dl><button class="option-details-toggle" type="button">展开推荐理由</button><div class="option-details" hidden></div>`;
     card.querySelector("h4").textContent = option.title;
     card.querySelector(".option-score").textContent = option.score || "";
@@ -1074,18 +1201,26 @@ function renderOptions() {
       details.hidden = !visible;
       toggle.textContent = visible ? "收起推荐理由" : "展开推荐理由";
     });
-    card.addEventListener("click", async () => {
-      try {
-        render(await api("/api/choose", { sessionId, optionId: option.id,
-          itemIndex: Array.isArray(state.order?.items) && state.order.items.length > 1 ? state.activeItemIndex : undefined }));
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        chooseOption(option.id);
       }
-      catch (error) { addMessage("assistant", apiErrorText(error, "方案选择暂时失败，请重试。")); }
     });
+    card.addEventListener("click", () => chooseOption(option.id));
     root.appendChild(card);
   });
   if (options.length && state.stage === "recommend" && !state.orderGenerated) {
     requestAnimationFrame(() => recommendations.closest(".order-section")?.scrollTo({ top: Math.max(0, recommendations.offsetTop - 12), behavior: "smooth" }));
   }
+}
+
+async function chooseOption(optionId) {
+  try {
+    render(await api("/api/choose", { sessionId, optionId,
+      itemIndex: Array.isArray(state.order?.items) && state.order.items.length > 1 ? state.activeItemIndex : undefined }));
+  }
+  catch (error) { showToast(apiErrorText(error, "方案选择暂时失败，请重试"), "error"); }
 }
 
 function renderFileState() {
@@ -1268,6 +1403,7 @@ async function sendMessage(text, patch) {
   isSending = true;
   addMessage("user", text);
   $("#message-input").value = "";
+  autoGrowComposer();
   setComposerBusy(true);
   pendingMessage = addPendingMessage();
   try {
@@ -1280,7 +1416,7 @@ async function sendMessage(text, patch) {
     if (error?.name === "AbortError" || requestSeq !== chatRequestSeq) return;
     removePendingMessage();
     const suffix = error?.requestId ? `（请求号 ${error.requestId}）` : "";
-    addMessage("assistant", `${error?.message || "Agent 暂时无法连接，请确认本地服务已启动。"}${suffix}`);
+    addMessage("assistant", `${error?.message || "智能体暂时无法连接，请确认本地服务已启动。"}${suffix}`);
     $("#agent-status").innerHTML = '<span class="status-dot offline"></span>连接失败';
   }
   finally {
@@ -1292,6 +1428,13 @@ async function sendMessage(text, patch) {
   }
 }
 
+function autoGrowComposer() {
+  const input = $("#message-input");
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(120, Math.max(38, input.scrollHeight))}px`;
+}
+
 async function callTool(toolName, payload = {}) {
   try {
     if (toolName === "explain_print_term" && !payload.question) {
@@ -1301,16 +1444,17 @@ async function callTool(toolName, payload = {}) {
     render(result);
     showToast(`已调用：${toolLabels[toolName]?.[0] || toolName}`);
   } catch (error) {
-    addMessage("assistant", apiErrorText(error, "工具调用失败，请确认 Agent 服务已启动，或先刷新会话。"));
+    showToast(apiErrorText(error, "工具调用失败，请确认本地服务已启动，或先刷新会话"), "error");
   }
 }
 
 $("#message-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#message-input").value); });
+$("#message-input").addEventListener("input", autoGrowComposer);
 $("#message-input").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#message-form").requestSubmit(); } });
-$("#generate-order").addEventListener("click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { addMessage("assistant", apiErrorText(error, "订单生成失败，请重试。")); } });
+$("#generate-order").addEventListener("click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { showToast(apiErrorText(error, "订单生成失败，请重试"), "error"); } });
 $("#confirm-order").addEventListener("click", async () => {
   try { render(await api("/api/confirm", { sessionId, note: "用户在订单工作台确认" })); }
-  catch (error) { addMessage("assistant", apiErrorText(error, "确认交接单失败，请重试。")); }
+  catch (error) { showToast(apiErrorText(error, "确认交接单失败，请重试"), "error"); }
 });
 $("#quote-refresh").addEventListener("click", async () => {
   const requestId = state.activeQuoteRequestId || state.quoteRequest?.requestId || (state.quoteRequests?.length ? state.quoteRequests[state.quoteRequests.length - 1]?.requestId : "");
@@ -1318,7 +1462,7 @@ $("#quote-refresh").addEventListener("click", async () => {
   try {
     render(await api("/api/quote/status", { sessionId, requestId }));
     showToast("询价状态已刷新");
-  } catch (error) { showToast(apiErrorText(error, "询价状态刷新失败，请重试。")); }
+  } catch (error) { showToast(apiErrorText(error, "询价状态刷新失败，请重试"), "error"); }
 });
 $("#quote-cancel").addEventListener("click", async () => {
   const requestId = state.activeQuoteRequestId || state.quoteRequest?.requestId || (state.quoteRequests?.length ? state.quoteRequests[state.quoteRequests.length - 1]?.requestId : "");
@@ -1326,12 +1470,12 @@ $("#quote-cancel").addEventListener("click", async () => {
   try {
     render(await api("/api/quote/cancel", { sessionId, requestId, reason: "用户在订单工作台取消询价" }));
     showToast("询价请求已取消");
-  } catch (error) { showToast(apiErrorText(error, "取消询价失败，请重试。")); }
+  } catch (error) { showToast(apiErrorText(error, "取消询价失败，请重试"), "error"); }
 });
 $("#copy-order").addEventListener("click", async () => {
   const groups = getOrderGroups();
   const lines = groups.filter(([, items]) => items.length).flatMap(([title, items]) => [`【${title}】`, ...items.map(([label, value]) => `${label}：${value}`), ""]);
-  try { await navigator.clipboard.writeText(lines.join("\n")); showToast("订单信息已复制"); } catch { showToast("当前浏览器不支持自动复制"); }
+  try { await navigator.clipboard.writeText(lines.join("\n")); showToast("订单信息已复制"); } catch { showToast("当前浏览器不支持自动复制", "error"); }
 });
 
 function getOrderGroups() {
@@ -1415,16 +1559,16 @@ async function uploadFile(file) {
   clearPdfPreview();
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".pdf")) {
-    fileFeedback = { ok: false, fileName: file.name, message: "MVP 暂只支持 PDF 文件。" };
+    fileFeedback = { ok: false, fileName: file.name, message: "目前仅支持上传 PDF 文件。" };
     addMessage("user", `上传文件：${file.name}`);
-    addMessage("assistant", fileFeedback.message);
+    showToast(fileFeedback.message, "error");
     renderFileState();
     return;
   }
   addMessage("user", `上传文件：${file.name}`);
   if (file.size > 20 * 1024 * 1024) {
     fileFeedback = { ok: false, fileName: file.name, message: "文件超过 20 MB，请压缩后再上传。" };
-    addMessage("assistant", fileFeedback.message);
+    showToast(fileFeedback.message, "error");
     renderFileState();
     return;
   }
@@ -1469,9 +1613,9 @@ async function uploadFile(file) {
     render(data);
   } catch (error) {
     clearPdfPreview();
-    fileFeedback = { ok: false, fileName: file.name, message: apiErrorText(error, "文件预检调用失败，请重试。") };
+    fileFeedback = { ok: false, fileName: file.name, message: apiErrorText(error, "文件预检调用失败，请重试") };
     renderFileState();
-    addMessage("assistant", fileFeedback.message);
+    showToast(fileFeedback.message, "error");
   }
 }
 $("#upload-button").addEventListener("click", () => $("#file-input").click());
@@ -1489,8 +1633,18 @@ $("#drop-zone").addEventListener("drop", (event) => {
   event.preventDefault();
   uploadFile(event.dataTransfer?.files?.[0]);
 });
-$("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败")); } });
+$("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败"), "error"); } });
 $("#sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
+$("#order-toggle").addEventListener("click", () => {
+  layout.orderCollapsed = !layout.orderCollapsed;
+  applyLayout();
+  saveLayout();
+});
+$("#workspace-backdrop").addEventListener("click", () => setSidebarCollapsed(true));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !DESKTOP_QUERY.matches && !sidebarCollapsed) setSidebarCollapsed(true);
+});
+window.addEventListener("resize", updateBackdrop);
 $("#theme-toggle").addEventListener("click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
 $("#history-list").addEventListener("click", (event) => {
   const item = event.target.closest(".history-item");
@@ -1503,20 +1657,29 @@ $("#preset-list").addEventListener("click", (event) => {
   const remove = event.target.closest(".preset-remove");
   if (remove) removeSpecPreset(remove.dataset.presetId);
 });
-$("#reset-order").addEventListener("click", async () => {
-  chatRequestSeq += 1;
-  activeChatController?.abort();
-  activeChatController = null;
-  removePendingMessage();
-  isSending = false;
-  setComposerBusy(false);
-  localStorage.removeItem("printops_session");
-  $("#chat-feed").innerHTML = "";
-  sessionId = "";
-  suppressOrderDiff = true;
-  fileFeedback = null;
-  clearPdfPreview();
-  await bootstrap();
+$("#reset-order").addEventListener("click", () => {
+  $("#confirm-reset-dialog").showModal();
+});
+
+const confirmResetDialog = $("#confirm-reset-dialog");
+confirmResetDialog.addEventListener("close", () => {
+  if (confirmResetDialog.returnValue !== "confirm") return;
+  (async () => {
+    chatRequestSeq += 1;
+    activeChatController?.abort();
+    activeChatController = null;
+    removePendingMessage();
+    isSending = false;
+    setComposerBusy(false);
+    localStorage.removeItem("printops_session");
+    $("#chat-feed").innerHTML = "";
+    sessionId = "";
+    suppressOrderDiff = true;
+    fileFeedback = null;
+    clearPdfPreview();
+    await bootstrap();
+    showToast("已重置当前订单，开始新的对话");
+  })();
 });
 
 $("#settings-test").addEventListener("click", async () => {
@@ -1533,7 +1696,7 @@ $("#settings-test").addEventListener("click", async () => {
       : result.test?.message || "模型连接失败";
     showToast(result.test?.ok ? `连接正常 · ${result.test.latencyMs}ms` : result.test?.message || "模型连接失败");
   } catch (error) {
-    showToast(error.message || "模型连接测试失败");
+    showToast(error.message || "模型连接测试失败", "error");
   } finally {
     button.disabled = false;
     button.textContent = "测试连接";
@@ -1558,7 +1721,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
     $("#settings-dialog").close();
     showToast(result.llm.enabled ? `已启用模型：${result.llm.model}` : "已切换为规则模式");
   } catch (error) {
-    showToast(error.message.includes("URL 和模型名") ? "URL 和模型名需要同时填写" : error.message.includes("接口 URL") ? "接口 URL 格式不正确" : "设置保存失败，请检查接口地址");
+    showToast(error.message.includes("URL 和模型名") ? "URL 和模型名需要同时填写" : error.message.includes("接口 URL") ? "接口 URL 格式不正确" : "设置保存失败，请检查接口地址", "error");
   } finally {
     save.disabled = false;
   }
@@ -1571,11 +1734,17 @@ $("#settings-clear").addEventListener("click", async () => {
     renderSettings(result);
     $("#settings-dialog").close();
     showToast("已清空模型配置，继续使用规则模式");
-  } catch { showToast("配置清空失败，请重试"); }
+  } catch { showToast("配置清空失败，请重试", "error"); }
   finally { clear.disabled = false; }
 });
 
-function showToast(text) { const node = $("#toast"); node.textContent = text; node.classList.add("show"); setTimeout(() => node.classList.remove("show"), 2200); }
+function showToast(text, kind = "success") {
+  const node = $("#toast");
+  node.textContent = text;
+  node.className = `toast show ${kind}`;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => node.classList.remove("show"), 2600);
+}
 
 async function bootstrap() {
   try {
@@ -1616,6 +1785,9 @@ async function bootstrap() {
   }
 }
 
+setupSplitters();
+applyLayout();
+autoGrowComposer();
 bootstrap();
 setSidebarCollapsed(sidebarCollapsed);
 setHighContrast(localStorage.getItem("printops_theme") === "high-contrast");

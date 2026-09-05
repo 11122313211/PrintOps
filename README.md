@@ -232,7 +232,7 @@ git diff --check
 - [开源选型参考](docs/OPEN_SOURCE_OPTIONS.md)
 - [版本变更记录](CHANGELOG.md)
 
-当前版本以根目录 `VERSION` 文件为准，当前为 `v0.9.1`。macOS 与 Windows 只更换启动脚本，订单逻辑和 UI 不分叉。
+当前版本以根目录 `VERSION` 文件为准，当前为 `v0.10.0`。macOS 与 Windows 只更换启动脚本，订单逻辑和 UI 不分叉。
 
 ## License
 

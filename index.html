@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20260905-1" />
+    <link rel="stylesheet" href="styles.css?v=20260905-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -70,11 +70,6 @@
             <button class="preset-save" id="save-preset" type="button">保存当前工艺组合</button>
           </section>
 
-          <section class="catalog-panel" aria-label="产品索引">
-            <div class="tool-panel-heading"><span>产品索引</span><span>官网分类</span></div>
-            <div class="catalog-list" id="catalog-list"></div>
-          </section>
-
           <section class="decision-panel" aria-label="当前决策">
             <div class="tool-panel-heading"><span>当前决策</span><span id="decision-confidence">可解释</span></div>
             <strong id="workflow-label">需求收集</strong>
@@ -98,6 +93,9 @@
           </details>
         </aside>
 
+        <div class="pane-splitter" data-pane="sidebar" role="separator" tabindex="0" aria-orientation="vertical"
+             aria-label="调整导航栏宽度" title="拖动调整宽度，双击重置"></div>
+
         <section class="chat-section" aria-label="智能订单对话">
           <div class="section-title">
             <div>
@@ -108,6 +106,10 @@
               <button class="panel-toggle" id="sidebar-toggle" type="button" aria-label="收起导航栏" title="收起导航栏">
                 <span class="panel-toggle-glyph" aria-hidden="true"></span>
                 <span class="panel-toggle-label">导航</span>
+              </button>
+              <button class="panel-toggle" id="order-toggle" type="button" aria-label="收起订单栏" title="收起订单栏">
+                <span class="panel-toggle-glyph glyph-right" aria-hidden="true"></span>
+                <span class="panel-toggle-label">订单</span>
               </button>
             </div>
           </div>
@@ -133,6 +135,8 @@
           </form>
         </section>
 
+        <div class="pane-splitter" data-pane="order" role="separator" tabindex="0" aria-orientation="vertical"
+             aria-label="调整订单栏宽度" title="拖动调整宽度，双击重置"></div>
         <aside class="order-section" aria-label="订单草稿">
           <div class="section-title order-title">
             <div>
@@ -260,6 +264,19 @@
       </main>
     </div>
 
+    <div class="workspace-backdrop" id="workspace-backdrop" hidden></div>
+
+    <dialog class="confirm-dialog" id="confirm-reset-dialog" aria-labelledby="confirm-reset-title">
+      <form class="confirm-card" method="dialog">
+        <h2 id="confirm-reset-title">确认重置当前订单？</h2>
+        <p>对话与草稿将清空，历史记录保留。</p>
+        <div class="confirm-actions">
+          <button class="secondary-action" id="confirm-reset-cancel" type="submit" value="cancel">取消</button>
+          <button class="primary-action" id="confirm-reset-ok" type="submit" value="confirm">确认重置</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
       <form class="settings-card" id="settings-form">
         <div class="settings-heading">
@@ -276,7 +293,7 @@
           </label>
           <label class="settings-field" for="settings-model">
             <span>模型名称</span>
-            <input id="settings-model" type="text" autocomplete="off" placeholder="例如：gpt-5.6-sol" />
+            <input id="settings-model" type="text" autocomplete="off" placeholder="例如：your-model-name" />
           </label>
           <label class="settings-field" for="settings-key">
             <span>API Key <small>可选</small></span>
@@ -295,6 +312,6 @@
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
-    <script src="app.js?v=20260905-1"></script>
+    <script src="app.js?v=20260905-2"></script>
   </body>
 </html>
