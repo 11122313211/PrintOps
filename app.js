@@ -643,7 +643,7 @@ function renderMultiProductItems() {
   const specLabels = {
     cardStock: "名片材质", cardCorners: "圆角", folding: "折页方式", bleed: "出血",
     labelMaterial: "标签面材", labelShape: "标签形状", adhesive: "胶水类型", boxSize: "盒体尺寸",
-    boxStructure: "盒型结构", dieCut: "刀模文件", bagSize: "袋体尺寸", bagMaterial: "袋体材料",
+    boxSizeInner: "内尺寸", boxSizeOuter: "外尺寸", boxStructure: "盒型结构", dieCut: "刀模文件", bagSize: "袋体尺寸", bagMaterial: "袋体材料",
     handle: "提手方式", cupVolume: "容量", cupMaterial: "杯身材料", innerCoating: "内淋膜",
     displayMaterial: "展示介质", install: "安装加工", hangHole: "挂孔", string: "穿绳/配件"
   };

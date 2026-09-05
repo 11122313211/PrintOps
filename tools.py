@@ -577,6 +577,13 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
         suggestions.append(profile["missing"][0]["question"])
     if order.get("productType") == "包装盒" and order.get("size") and not (order.get("productSpecs") or {}).get("boxSize"):
         suggestions.append("包装盒请补充长×宽×高，并区分内尺寸/外尺寸")
+    box_specs = order.get("productSpecs") or {}
+    if order.get("productType") == "包装盒":
+        has_structure_size = bool(box_specs.get("boxSize")
+                                  or (order.get("dimensions") or {}).get("packageSize")
+                                  or (isinstance(order.get("size"), str) and order["size"].count("×") >= 2))
+        if has_structure_size and not (box_specs.get("boxSizeInner") or box_specs.get("boxSizeOuter")):
+            suggestions.append("盒体尺寸请标注是内尺寸还是外尺寸，糊盒刀模以内尺寸为准")
     if order.get("productType") in {"喷画", "海报", "PVC"} and (order.get("productSpecs") or {}).get("install"):
         if "户外" in str((order.get("productSpecs") or {}).get("install")) and order.get("productType") == "海报":
             warnings.append("户外展示请确认介质耐候性与安装安全")

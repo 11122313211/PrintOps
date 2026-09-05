@@ -30,18 +30,21 @@ def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
     return sorted(accepted, key=lambda item: item[1])
 
 
-def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[str, float]]:
+def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
     """Extract order fields plus a per-field evidence confidence in [0, 1].
 
     Confidence grades how directly the value was stated: explicit labels,
     units and full patterns score >= 0.85; bare numbers in context, vibe
     words and heuristic attributions score below the 0.75 confirmation
     threshold so the Agent asks the user before trusting them.
+    ``product_hint`` is the current order's product type; follow-up turns
+    like "改成可移胶" keep extracting category specs without naming it.
     """
     # Normalize full-width input copied from design tools or IMEs first.
     text = unicodedata.normalize("NFKC", text or "")
     data: dict[str, Any] = {}
     confidence: dict[str, float] = {}
+    catalog_aliases = set(alias_map())
     product = find_product(text)
     # Keep invitation cards from the original MVP as a lightweight family.
     if not product and "邀请函" in text:
@@ -49,16 +52,17 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
     if product:
         data["productType"] = product
         confidence["productType"] = 0.92
+    spec_product = product or product_hint
     size_matches = _extract_sizes(text)
     size_spans = [(match.start(), match.end()) for match, _ in size_matches]
-    quantity_candidates: list[tuple[int, int, tuple[str, int | float, str]]] = []
+    quantity_candidates: list[tuple[int, int, tuple[str, int | float, str], float]] = []
     explicit_quantity = re.search(
         rf"(?:数量|印刷量|印多少|做多少)\s*(?:改成|改为|调整为|为|是)?\s*{QUANTITY_CAPTURE}",
         text,
     )
     if explicit_quantity:
         raw = "".join(item or "" for item in explicit_quantity.groups())
-        parsed = parse_quantity(raw, product, explicit_quantity.group(3) or "")
+        parsed = parse_quantity(raw, spec_product, explicit_quantity.group(3) or "")
         if parsed:
             data["quantity"], data["quantityValue"], data["quantityUnit"] = parsed
             confidence["quantity"] = 0.95
@@ -68,17 +72,28 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
         if any(start <= number_start and number_end <= end for start, end in size_spans):
             continue
         unit = match.group(3) or match.group(2) or ""
+        if match.group(3):
+            # "500 包装盒": the captured 包 belongs to the product name,
+            # not to the quantity. Undo the unit when an alias continues it.
+            tail = text[match.end(3): match.end(3) + 3]
+            if any(alias.startswith(match.group(3)) and len(alias) > len(match.group(3))
+                   and (match.group(3) + tail).startswith(alias) for alias in catalog_aliases):
+                unit = ""
         next_chars = text[match.end():].lstrip()
         prefix_text = text[match.start():number_start]
         has_quantity_context = bool(re.search(r"(?:约|大约|需要|印刷|做|数量)\s*$", prefix_text))
         if (unit or has_quantity_context) and not next_chars.startswith(("x", "X", "×", "*", "\\")):
-            parsed = parse_quantity(match.group(0), product, match.group(3) or "")
+            # When the captured unit was rejected as part of a product name
+            # ("500 包装盒"), parse the bare number so the category default
+            # unit applies instead of leaking "包".
+            raw = match.group(0) if unit else (match.group(1) + (match.group(2) or ""))
+            parsed = parse_quantity(raw, spec_product, match.group(3) if unit else "")
             if parsed:
                 data["quantity"], data["quantityValue"], data["quantityUnit"] = parsed
                 # An explicit unit is strong evidence; a bare number that
                 # merely follows "做/需要" is a guess the user must confirm.
-                confidence["quantity"] = 0.95 if match.group(3) else (0.9 if match.group(2) else 0.72)
-                quantity_candidates.append((number_start, number_end, parsed))
+                confidence["quantity"] = 0.95 if (match.group(3) and unit) else (0.9 if match.group(2) else 0.72)
+                quantity_candidates.append((number_start, number_end, parsed, confidence["quantity"]))
     if size_matches:
         normalized_sizes = []
         for _, size in size_matches:
@@ -139,7 +154,10 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
     elif "黑白" in text or "单色" in text:
         data["printing"] = "单色印刷"; confidence["printing"] = 0.85
     finish_names = ["哑膜", "亮膜", "覆膜", "烫金", "烫银", "局部UV", "局部 UV", "击凸", "压凹", "上光"]
-    removed_finishes = [item for item in finish_names if re.search(rf"(?:不要|不需要|无需|不用|去掉|取消).{{0,5}}{re.escape(item)}", text, re.I)]
+    # The negation window must not cross punctuation, otherwise
+    # "不要烫金，改哑膜" would negate the newly requested 哑膜 too.
+    removed_finishes = [item for item in finish_names
+                        if re.search(rf"(?:不要|不需要|无需|不用|去掉|取消)[^，,。；;！?！]{{0,5}}{re.escape(item)}", text, re.I)]
     finishes = [item for item in finish_names if item.lower() in text.lower() and item not in removed_finishes]
     if removed_finishes and not finishes:
         data["finishing"] = "无特殊工艺"; confidence["finishing"] = 0.85
@@ -176,7 +194,7 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
     if not product and re.search(r"天地盖|抽屉盒|折叠盒|飞机盒|开窗盒", text):
         product = data["productType"] = "包装盒"
         confidence["productType"] = 0.78
-    specs = _extract_product_specs(text, product, data.get("size", ""))
+    specs = _extract_product_specs(text, spec_product, data.get("size", ""))
     if specs:
         data["productSpecs"] = specs
         for key, value in specs.items():
@@ -188,27 +206,38 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
         mentions = _find_product_mentions(text)
         distinct_products = list(dict.fromkeys(item[0] for item in mentions))
         if len(mentions) > 1 and len(distinct_products) > 1:
+            # Segment at midpoints between mentions so qualifiers written
+            # BEFORE a mention ("天地盖包装盒") stay with that product.
+            boundaries = [0]
+            for (_, prev_end), (next_start, _) in zip(
+                    [(m[1], m[2]) for m in mentions], [(m[1], m[2]) for m in mentions[1:]]):
+                boundaries.append((prev_end + next_start) // 2)
+            boundaries.append(len(text))
             items = []
-            used_quantities: set[int] = set()
-            for index, (item_product, item_start, _) in enumerate(mentions):
-                segment_start = item_start
-                segment_end = mentions[index + 1][1] if index + 1 < len(mentions) else len(text)
-                item, item_confidence = perceive(text[segment_start:segment_end], allow_multi=False)
+            items_confidence: list[dict[str, float]] = []
+            for index, (item_product, _start, _end) in enumerate(mentions):
+                item, item_confidence = perceive(text[boundaries[index]:boundaries[index + 1]],
+                                                 allow_multi=False)
                 item["productType"] = item_product
-                if quantity_candidates:
-                    mention_mid = (item_start + mentions[index][2]) / 2
-                    available = [
-                        (candidate_index, candidate)
-                        for candidate_index, candidate in enumerate(quantity_candidates)
-                        if candidate_index not in used_quantities
-                    ]
-                    if available:
-                        candidate_index, (_, _, quantity) = min(
-                            available,
-                            key=lambda entry: abs(((entry[1][0] + entry[1][1]) / 2) - mention_mid),
-                        )
-                        item["quantity"], item["quantityValue"], item["quantityUnit"] = quantity
-                        used_quantities.add(candidate_index)
+                items.append(item)
+                items_confidence.append(item_confidence)
+            # Chinese orders place the quantity before its product ("500 张
+            # 名片"); assign each captured quantity to the nearest following
+            # mention, falling back to the nearest preceding one.
+            taken: set[int] = set()
+            for cand_start, cand_end, parsed, cand_conf in quantity_candidates:
+                following = [m for m in range(len(mentions)) if m not in taken and mentions[m][1] >= cand_end]
+                preceding = [m for m in range(len(mentions)) if m not in taken and mentions[m][2] <= cand_start]
+                pool = following or preceding or [m for m in range(len(mentions)) if m not in taken]
+                if pool:
+                    cand_mid = (cand_start + cand_end) / 2
+                    target = min(pool, key=lambda m: (abs((mentions[m][1] + mentions[m][2]) / 2 - cand_mid), m))
+                    items[target]["quantity"] = parsed[0]
+                    items[target]["quantityValue"] = parsed[1]
+                    items[target]["quantityUnit"] = parsed[2]
+                    items_confidence[target]["quantity"] = cand_conf
+                    taken.add(target)
+            for index, item in enumerate(items):
                 # Values written after the product mentions are commonly
                 # shared by every item. Copy only unambiguous shared fields;
                 # product-specific dimensions and specs stay item-local.
@@ -216,17 +245,16 @@ def perceive(text: str, allow_multi: bool = True) -> tuple[dict[str, Any], dict[
                     if not item.get(shared_key) and data.get(shared_key):
                         item[shared_key] = deepcopy(data[shared_key])
                         if shared_key in confidence:
-                            item_confidence[shared_key] = confidence[shared_key]
+                            items_confidence[index][shared_key] = confidence[shared_key]
                 if len(size_matches) == 1 and not item.get("size") and data.get("size"):
                     item["size"] = data["size"]
                     if "size" in confidence:
-                        item_confidence["size"] = confidence["size"]
+                        items_confidence[index]["size"] = confidence["size"]
                 if len(size_matches) == 1 and data.get("dimensions"):
                     item["dimensions"] = deepcopy(data["dimensions"])
                     for key in data["dimensions"]:
                         if f"dimensions.{key}" in confidence:
-                            item_confidence[f"dimensions.{key}"] = confidence[f"dimensions.{key}"]
-                items.append(item)
+                            items_confidence[index][f"dimensions.{key}"] = confidence[f"dimensions.{key}"]
             data["productType"] = mentions[0][0]
             data["productTypes"] = distinct_products
             data["items"] = items
@@ -263,6 +291,15 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
             specs["boxSize"] = three_dimensions
         if "刀模" in text or "刀线" in text:
             specs["dieCut"] = "需确认刀模文件" if re.search(r"没有|无|未有|需要制作", text) else "已有/提供刀模文件"
+    if product == "包装盒":
+        # 内/外尺寸语义必须显式记录：糊盒刀模以内尺寸为准，尺寸数值相同
+        # 而语义不同会直接改变成品。
+        inner = _extract_labeled_size(text, r"内(?:尺寸|径)")
+        outer = _extract_labeled_size(text, r"外(?:尺寸|径)")
+        if inner:
+            specs["boxSizeInner"] = inner
+        if outer:
+            specs["boxSizeOuter"] = outer
     if product == "手提袋" and three_dimensions:
         specs["bagSize"] = three_dimensions
     if product == "信封封套" and size:
@@ -297,7 +334,7 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
     cup_material = re.search(r"(单\s*PE|双\s*PE|食品级纸杯纸)", text, re.I)
     if cup_material and product == "纸杯":
         specs["cupMaterial"] = re.sub(r"\s+", " ", cup_material.group(1)).upper() if "PE" in cup_material.group(1).upper() else cup_material.group(1)
-    if product == "纸杯" and re.search(r"不需要?淋膜|无淋膜", text):
+    if product == "纸杯" and re.search(r"不需要?内?淋膜|无淋膜", text):
         specs["innerCoating"] = "不需要内淋膜"
     elif product == "纸杯" and "淋膜" in text:
         specs["innerCoating"] = "需要内淋膜"
@@ -327,7 +364,7 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
         if not thickness:
             thickness = re.search(r"(?<![\d×x*])((?:0?\.38|0?\.5|0?\.76|0?\.8|0?\.84))\s*(?:mm|毫米)", text, re.I)
         if thickness: specs["cardThickness"] = f"{thickness.group(1)}mm"
-        if re.search(r"芯片|磁条|IC卡|ID卡", text, re.I): specs["chip"] = "需要芯片/磁条"
+        if re.search(r"芯片|磁条|IC卡|ID卡|智能卡", text, re.I): specs["chip"] = "需要芯片/磁条"
     if product == "吊牌":
         hole = re.search(r"(圆孔|蝴蝶孔|挂孔|打孔)", text)
         if hole: specs["hangHole"] = hole.group(1)
@@ -350,10 +387,12 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
 def _extract_sizes(text: str) -> list[tuple[re.Match[str], str]]:
     """Find standard or custom finished sizes and return normalized labels."""
     separator = r"(?:[x×✕✖]|(?:\\)?\*)"
+    # One-digit dimensions matter for small labels/stickers (e.g. 5×5cm);
+    # the × separator keeps them distinct from quantities.
     dimension = (
-        rf"\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?\s*{separator}\s*"
-        rf"\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?"
-        rf"(?:\s*{separator}\s*\d{{2,4}}\s*(?:mm|毫米|cm|厘米)?)?"
+        rf"\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?\s*{separator}\s*"
+        rf"\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?"
+        rf"(?:\s*{separator}\s*\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?)?"
     )
     pattern = re.compile(
         rf"(?<![A-Za-z0-9])(?:[AB]\s*-?\s*[3-6](?!\d)|{dimension})"

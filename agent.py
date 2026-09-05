@@ -424,7 +424,8 @@ class Agent:
         self._begin_run("chat")
         self.trace = ["感知需求"]
         self._event("perceive", "ok", "已完成规则感知")
-        perceived, perceived_confidence = self._perceive_full(text)
+        perceived, perceived_confidence = self._perceive_full(
+            text, self.state["order"].get("productType") or "")
         focus_match = re.search(r"第\s*(\d+)\s*项", text or "")
         requested_index = item_index
         if requested_index is None and focus_match and re.search(r"处理|查看|编辑|切换|更新", text or ""):
@@ -1530,9 +1531,9 @@ class Agent:
         return perceive(text, allow_multi=allow_multi)[0]
 
     @staticmethod
-    def _perceive_full(text: str) -> tuple[dict[str, Any], dict[str, float]]:
+    def _perceive_full(text: str, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
         """Return fields plus the per-field evidence confidence grade."""
-        return perceive(text)
+        return perceive(text, product_hint=product_hint)
 
     # Backward-compatible aliases for callers that used the static extractors.
     _extract_sizes = staticmethod(_extract_sizes)
