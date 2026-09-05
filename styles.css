@@ -221,9 +221,10 @@ body.is-resizing { user-select: none; cursor: col-resize; }
 .sidebar, .chat-section, .order-section { min-height: 0; }
 .sidebar { padding: var(--space-5) var(--space-4); overflow-y: auto; background: var(--bg-sidebar); border-right: 1px solid var(--rule); scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 .sidebar-collapsed .sidebar { display: none; }
-.sidebar-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); margin-bottom: 21px; color: var(--ink); font-size: var(--font-sm); font-weight: 800; }
-.sidebar-heading > span:first-child { white-space: nowrap; }
-.order-number { color: var(--quiet); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-xs); font-weight: 600; letter-spacing: .03em;  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 与右栏「订单草稿」标题同级：衬线、23px */
+.sidebar-heading { margin-bottom: 18px; }
+.sidebar-heading > span:first-child { display: block; white-space: nowrap; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 23px; font-weight: 700; letter-spacing: .01em; }
+.order-number { display: block; margin-top: 5px; color: var(--quiet); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-xs); font-weight: 600; letter-spacing: .03em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .progress-panel { padding: 15px 0 18px; border-top: 3px double var(--rule); border-bottom: 1px solid var(--rule); }
 .progress-line { height: 5px; margin-bottom: var(--space-2); overflow: hidden; background: var(--paper-deep); border-radius: var(--radius-pill); }
 .progress-line span { display: block; height: 100%; background: var(--red); transition: width .3s ease; }
