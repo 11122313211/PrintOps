@@ -20,6 +20,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Compile check
         run: python -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py order_model.py nlu.py tools.py
+      - name: Python 3.9 import smoke
+        run: python -c "import agent; import server; import tests.test_real_corpus_eval"
       - name: Unit tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Evaluation suite

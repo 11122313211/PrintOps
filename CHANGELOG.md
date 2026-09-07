@@ -1,8 +1,14 @@
 # Changelog
 
+## Unreleased — release status convergence
+
+- Restored Python 3.9 runtime compatibility by deferring evaluation of modern type annotations in the agent and real-corpus test entry points; the existing Ubuntu/Windows × Python 3.9/3.12 CI matrix now has an explicit import smoke.
+- Normalized repository text files to LF and added `.gitattributes` so `git diff --check` is not obscured by platform line-ending changes.
+- Clarified that `1.0.0` is the current code baseline in candidate status. The real-corpus (≥20 cases) and manual walkthrough gates remain open, so the general stable-release claim is intentionally deferred.
+
 ## v1.0.0 - 2026-09-05
 
-首个稳定版。汇集 v0.9.x–v0.11.x 全部成果，发布物料（双语 README、截图、发布验收清单）齐备；149 个测试全绿，111 例评测字段准确率 100%。
+代码基线候选版。汇集 v0.9.x–v0.11.x 全部成果；149 个测试与 111 例合成评测已通过，但真实语料与真人走查门槛尚未闭合。
 
 - 自然语言建单：16 品类目录、四种尺寸语义（含内外尺寸）、多产品拆分、修改与否定、置信度分级与低置信度拦截
 - 可解释方案：经济/平衡/质感三档，合版/专版语义、参考费用区间（示例价格参数表，带版本）、交期示例、横向对比表
@@ -38,6 +44,7 @@
 - **真实脱敏评测机制**：`tests/evaluate_agent.py` 支持加载 `tests/eval_cases_real.json` 单独运行并单独报告（判定四态：pending/record/pass/fail）；达到 20 例后启用字段准确率 ≥95% 硬门槛（CI 失败），不足 20 例仅记录，文件格式无效直接失败。模板文件已就位，格式说明与脱敏要求见 `docs/RELEASE_CHECKLIST.md`。新增标注辅助工具 `tools/annotate_case.py`：把脱敏原话转成待核对用例草稿（expected 仅预填 user/rule/model 来源的建议值，系统默认与方案带入不进建议；工具只打印，不读写语料文件）。真实语料仍待补充——这是 1.0 前仅剩的两项人工事项之一。
 - 真人走查脚本与澄清轮数记录表入库（`docs/RELEASE_CHECKLIST.md` 门槛 7）。
 - 回归：149 个单测全绿，合成评测 111 例字段准确率 100%、可完成用例完整率 100%，敏感扫描通过。
+- 新增《后续完善开发计划书》（docs/DEVELOPMENT_PLAN.md + docs/plan/ 十篇路径 + 四个附录）：v0.12.0 → v1.1.0 的十条优化路径、版本级任务卡汇总与执行节奏。
 
 ## v0.10.1 - 2026-09-05
 

@@ -7,6 +7,8 @@ behave exactly as documented — using temporary fixtures, never fake "real"
 data committed to the repository.
 """
 
+from __future__ import annotations
+
 import json
 import sys
 import tempfile

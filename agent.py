@@ -4,6 +4,8 @@ Flow: perceive -> remember -> plan -> call tools -> respond.
 The contracts are intentionally compatible with a future LangGraph/FastAPI layer.
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager
 import json
 import re

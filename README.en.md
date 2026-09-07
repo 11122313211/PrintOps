@@ -23,6 +23,8 @@ PrintOps is a local-first print order agent for marketing, design, and procureme
 
 > Positioning: a **pre-order intake and communication** tool. It does not place orders automatically, does not replace prepress checks, and does not promise real quotes — every outward-facing action stops before the human-confirmation gate.
 
+> Release status: this is the `1.0.0` code baseline in candidate status. Python 3.9 compatibility is restored and passes the local gates; CI retains the Ubuntu/Windows × 3.9/3.12 matrix. The 20-case real-corpus gate and manual walkthrough are still pending, so do not treat it as a general stable release until both are closed.
+
 **North star**: let a non-printer person turn a vague requirement into a complete, reliable, traceable print order within 10 minutes.
 
 ## ✨ Features
@@ -131,13 +133,13 @@ python tests/evaluate_agent.py                        # 111-case desensitized or
 python tools/secret_scan.py                           # secret scanning
 ```
 
-Release gates: field accuracy ≥95% and completion ≥80% on completable cases (currently both 100%); a hard accuracy gate activates once 20 real desensitized orders are curated. CI runs everything on Ubuntu/Windows × Python 3.9/3.12.
+Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. CI runs everything on Ubuntu/Windows × Python 3.9/3.12.
 
 The 1.0 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese).
 
 ## 🗺️ Roadmap
 
-- **v1.0 (current)**: first stable release — natural-language intake, explainable plans, local security model, controlled export
+- **v1.0 (current code baseline, candidate status)**: natural-language intake, explainable plans, local security model, controlled export; real-corpus and manual-walkthrough gates remain open
 - **v1.1+**: controlled supplier integration (capability profiles + field adapters → quote drafts → human-confirmed submission), real quote write-back, production lead-time scheduling
 - Ongoing: replacing synthetic evaluation cases with real desensitized orders, expanding the trade-rule library, LLM lock and session isolation improvements
 
