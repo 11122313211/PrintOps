@@ -6,7 +6,6 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-[![CI](https://github.com/11122313211/PrintOps/actions/workflows/ci.yml/badge.svg)](https://github.com/11122313211/PrintOps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -23,7 +22,7 @@ PrintOps 是一个面向市场、设计和采购团队的本地印刷订单 Agen
 
 > 定位：订单**前置整理与沟通**工具。它不自动下单、不替代印前检查、不承诺真实报价——所有对外动作都停在“人工确认”这道闸门之前。
 
-> 发布状态：当前是 `1.0.0` 代码基线候选版。Python 3.9 兼容性已恢复并在本地门禁通过，CI 保留 Ubuntu/Windows × 3.9/3.12 矩阵；真实脱敏语料达到 20 例和真人走查仍未完成，在这两项关闭前请不要把它视为通用稳定发布。
+> 发布状态：当前是 `1.0.0` 代码基线候选版。项目只依赖 Python 标准库，发布前通过本地 Python 检查；真实脱敏语料达到 20 例和真人走查仍未完成，在这两项关闭前请不要把它视为通用稳定发布。
 
 **北极星目标**：让非印刷专业用户在 10 分钟内把模糊需求整理成完整、可靠、可追溯的印刷订单。
 
@@ -137,7 +136,7 @@ python tests/evaluate_agent.py                        # 111 例脱敏订单评�
 python tools/secret_scan.py                           # 敏感信息扫描
 ```
 
-发布门槛：合成语料当前字段准确率与可完成用例完整率均为 100%；真实脱敏语料仍待补充，达到 20 例后启用字段准确率 ≥95% 硬门槛。CI 在 Ubuntu/Windows × Python 3.9/3.12 上执行以上全部检查。
+发布门槛：合成语料当前字段准确率与可完成用例完整率均为 100%；真实脱敏语料仍待补充，达到 20 例后启用字段准确率 ≥95% 硬门槛。项目不依赖 GitHub Actions，发布前请在本机使用 Python 手动执行以上检查。
 
 1.0 发布门槛与真人走查清单见 [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md)。
 

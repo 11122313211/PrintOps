@@ -6,7 +6,6 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-[![CI](https://github.com/11122313211/PrintOps/actions/workflows/ci.yml/badge.svg)](https://github.com/11122313211/PrintOps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -23,7 +22,7 @@ PrintOps is a local-first print order agent for marketing, design, and procureme
 
 > Positioning: a **pre-order intake and communication** tool. It does not place orders automatically, does not replace prepress checks, and does not promise real quotes — every outward-facing action stops before the human-confirmation gate.
 
-> Release status: this is the `1.0.0` code baseline in candidate status. Python 3.9 compatibility is restored and passes the local gates; CI retains the Ubuntu/Windows × 3.9/3.12 matrix. The 20-case real-corpus gate and manual walkthrough are still pending, so do not treat it as a general stable release until both are closed.
+> Release status: this is the `1.0.0` code baseline in candidate status. The project uses only the Python standard library and is checked locally before release. The 20-case real-corpus gate and manual walkthrough are still pending, so do not treat it as a general stable release until both are closed.
 
 **North star**: let a non-printer person turn a vague requirement into a complete, reliable, traceable print order within 10 minutes.
 
@@ -133,7 +132,7 @@ python tests/evaluate_agent.py                        # 111-case desensitized or
 python tools/secret_scan.py                           # secret scanning
 ```
 
-Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. CI runs everything on Ubuntu/Windows × Python 3.9/3.12.
+Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. The project does not depend on GitHub Actions; run the Python checks locally before release.
 
 The 1.0 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese).
 
