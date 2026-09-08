@@ -8,6 +8,7 @@ source files or data downloads), and the request guards (411/413/415).
 
 import http.client
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -18,6 +19,10 @@ import server
 from agent import Memory
 
 
+@unittest.skipIf(
+    os.name == "nt" and os.getenv("PRINTOPS_RUN_SOCKET_TESTS") != "1",
+    "loopback socket tests are opt-in on Windows CI; run with PRINTOPS_RUN_SOCKET_TESTS=1",
+)
 class HttpGateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
