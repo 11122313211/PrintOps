@@ -10,7 +10,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
-**零第三方依赖 · 本地优先 · 数据不出本机 · 人工确认后才交接**
+**零第三方依赖 · 本地优先 · 规则模式数据留本机 · 模型模式仅发送受限上下文 · 人工确认后才交接**
 
 ![PrintOps 工作台](docs/screenshots/workbench.png)
 
@@ -48,6 +48,13 @@ PrintOps 是一个面向市场、设计和采购团队的本地印刷订单 Agen
 - 📄 浏览器本地 PDF 基础预检（页数、页面框、颜色空间线索、字体嵌入线索），原稿不上传
 - 📦 交接单文本 + JSON / CSV / Markdown 导出
 
+**本地工具与可选模型协作**
+- 🔧 8 个白名单工具统一经过本地 `Agent.call_tool()`：校验、工艺推荐、费用估算、术语解释、供应商能力匹配、询价准备、交接单和文件预检
+- 🔌 支持 OpenAI-compatible 原生 `tools[].function`；不支持原生工具的网关自动回退到 JSON envelope
+- 🧠 模型最多进行 3 轮有界工具规划；相同“工具名 + 参数”不会无限重复，工具结果会回传给模型做总结
+- 🛟 模型只返回自然语言时，系统按本地意图兜底调用必要工具：缺字段调用 `validate_order`，价格调用 `estimate_price`，术语调用 `explain_print_term`，完整订单方案调用 `recommend_processes`
+- 🧱 模型不接管订单状态：完整订单由本地 SQLite 会话保存，模型只接收精简订单摘要和受限工具参数；询价、交接等高风险动作仍需人工确认
+
 ## 🖼️ 界面预览
 
 | 方案对比 | 移动端（390px） |
@@ -61,12 +68,67 @@ PrintOps 是一个面向市场、设计和采购团队的本地印刷订单 Agen
 ```bash
 git clone https://github.com/11122313211/PrintOps.git
 cd PrintOps
-python server.py          # macOS / Linux；Windows 双击 start_windows.bat
+python3 server.py         # macOS / Linux；Windows 双击 start_windows.bat
 ```
 
 打开 <http://localhost:4174/>，健康检查：<http://localhost:4174/api/health> → `{"ok": true}`
 
 > 🔐 首次启动时，终端会打印**本地访问令牌**（`X-PrintOps-Token`）。页面会自动携带；用 curl 调试时请加 `-H "X-PrintOps-Token: <令牌>"`。
+
+### 连接公司内网模型接口
+
+模型接口默认拒绝环回、私有网段和其他内网地址。若模型服务确实位于公司 VPN/DNS 可访问的内网，显式开启受信内网模式后启动：
+
+```bash
+PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1 python3 server.py
+```
+
+在设置中填写 OpenAI 兼容的 base URL，例如 `https://llm.internal.example/v1`；程序会请求其 `/chat/completions` 路径。该示例仅表示受信内网 endpoint，不是项目实际服务地址。该开关只放宽主机网段检查，协议、凭据、查询参数等 URL 规则仍然生效。它不会修复 DNS：如果域名仍无法解析，请先连接公司网络/VPN 或配置公司 DNS。开启后不要把本地服务暴露到公网。
+
+隐私边界：未配置模型时，规则 Agent、SQLite 记忆和 PDF 基础预检均在本机完成；启用模型后，当前用户消息、有限历史、精简订单摘要和工具结果会发送到你配置的 endpoint。请先确认该 endpoint 的日志、留存和合规策略；API Key 不会写入对话内容或运行 trace。
+
+### 不安装 npm/pnpm 的本地 Agent host
+
+如果本机没有 Node、npm、pnpm 或真实 `dsh`，仍可以用 Python 标准库运行并验证 dsh 这一侧的契约：
+
+```bash
+python3 tools/printops_local_host.py \
+  --session-id local-demo \
+  --message "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"
+```
+
+该命令会发现 `.dsh/skills` 下的五个印刷 skill，通过真实 stdio launcher 完成 MCP
+`initialize`、`tools/list` 和只读工具 smoke，然后交给现有确定性 Agent 处理消息。它不调用
+DeepSeek 模型，也不需要 npm/pnpm；输出中的 `runtime: "python-stdlib"` 表示使用本地规则模式。
+需要保留会话时加 `--memory-path data/agent.sqlite3`；逐行交互可加 `--interactive`。
+
+只检查 MCP 边界而不处理订单消息：
+
+```bash
+python3 tools/dsh_mcp_smoke.py
+```
+
+这条路径是 dsh 的本地替代验证，不等同于真实 dsh headless + 模型端到端运行。
+
+### 模型接入后的数据流与上下文预算
+
+```text
+用户消息
+  → 规则感知 + SQLite 记忆
+  → 可选模型规划
+  → Agent.call_tool() 本地执行
+  → 工具结果裁剪后回传模型总结
+  → UI 展示订单、工具结果与 runTrace
+```
+
+模型请求遵循以下预算，避免长会话把完整订单、工具 schema 和历史重复发送：
+
+- 最近 8 条历史消息，每条最多 2,000 字符
+- 订单摘要最多 12KB，工具结果最多 12KB；嵌套层级、数组和字段数也有限制
+- 原生工具的后续轮次只发送工具名；JSON 兼容回退才发送精简参数 schema
+- 工具参数不携带完整 `order`，本地会话是唯一权威来源；`itemIndex`、`platformId` 等选择器仍会经过网关校验
+
+因此，模型“没有主动发起 tool call”不会直接跳过必要动作；规则兜底会补齐只读校验、估价、术语解释和工艺推荐。模型或内网接口不可用时，系统继续使用确定性规则 Agent。
 
 <details>
 <summary><b>端口冲突排查</b></summary>
@@ -110,9 +172,11 @@ Get-NetTCPConnection -LocalPort 4174 -State Listen
 | --- | --- |
 | `nlu.py` | 规则感知：字段抽取与置信度分级（显式证据 ≥0.9，弱推断 <0.75 需确认） |
 | `order_model.py` | 订单数据契约、数量/尺寸规范化、`schemaVersion` 迁移 |
-| `tools.py` | 白名单工具：工艺推荐、估价、供应商能力匹配、交接单、询价准备 |
-| `agent.py` | 会话记忆（SQLite WAL）、工作流阶段机、工具网关、模型协作（最多两轮） |
-| `llm_adapter.py` | OpenAI 兼容规划器（可选），失败自动回退规则；内置 SSRF 主机校验 |
+| `tools.py` | 8 个白名单工具：校验、工艺推荐、估价、术语解释、供应商能力匹配、询价准备、交接单、文件预检 |
+| `agent.py` | 会话记忆（SQLite WAL）、工作流阶段机、工具网关、模型协作（最多三轮） |
+| `llm_adapter.py` | OpenAI 兼容规划器（可选），原生工具/JSON 回退、上下文预算与规则兜底；内置 SSRF 主机校验 |
+| `mcp_server.py` | 标准库 JSON-RPC stdio MCP server；session 绑定、L0/L1 能力边界与工具参数校验 |
+| `tools/dsh_mcp_launcher.py` | 无 npm/pnpm 的受信 dsh/MCP 启动器；拒绝任意 session 和 L2 外部写入 |
 | `product_knowledge.py` | 品类目录、印刷知识、示例价格参数表（均带版本与来源） |
 | `supplier_adapters.py` | 平台能力档案与按品类分层的字段映射协议 |
 
@@ -122,7 +186,7 @@ Get-NetTCPConnection -LocalPort 4174 -State Listen
 
 - **本地访问令牌**：除 `/api/health` 外，全部接口要求 `X-PrintOps-Token`（服务启动时生成进程内随机令牌并注入所服务的页面）；跨来源请求返回 403
 - **静态白名单**：仅放行 `/`、`/index.html`、`/app.js`、`/styles.css`；源码、文档与运行时数据一律 404
-- **SSRF 防护**：模型接口 URL 在配置时校验主机，拒绝环回 / 私有 / CGNAT / 保留 / 链路本地地址
+- **SSRF 防护**：模型接口 URL 默认拒绝环回 / 私有 / CGNAT / 保留 / 链路本地地址；仅在显式设置 `PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1` 时允许受信公司内网 endpoint
 - **API Key**：仅保存在本机 `data/llm_config.json`（权限 600），不进日志、导出与 Git；明文存储时界面提示风险，更安全的做法是仅用环境变量提供
 - **数据 durability**：SQLite 启用 WAL 与 5s busy_timeout；损坏会话自动隔离（备份至 `data/corrupted/`）后继续服务
 
@@ -131,12 +195,15 @@ Get-NetTCPConnection -LocalPort 4174 -State Listen
 ## 🧪 测试与质量
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 149 个单元 / 契约 / 安全边界测试
-python tests/evaluate_agent.py                        # 111 例脱敏订单评测 + 真实语料评测
-python tools/secret_scan.py                           # 敏感信息扫描
+python3 -m unittest discover -s tests -p "test_*.py"  # 单元 / 契约 / 安全边界测试（数量随版本变化）
+python3 tests/evaluate_agent.py                        # 111 例脱敏订单评测 + 真实语料评测
+python3 tools/secret_scan.py                           # 敏感信息扫描
+python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 工具边界 smoke
 ```
 
 发布门槛：合成语料当前字段准确率与可完成用例完整率均为 100%；真实脱敏语料仍待补充，达到 20 例后启用字段准确率 ≥95% 硬门槛。项目不依赖 GitHub Actions，发布前请在本机使用 Python 手动执行以上检查。
+
+当前工作区已验证：236 项 Python 测试、MCP smoke、上下文边界和 native tool-call 离线链路通过。真实 dsh headless、真实内网模型的三条端到端走查和浏览器级冒烟仍是发布前验收项。
 
 1.0 发布门槛与真人走查清单见 [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md)。
 
@@ -156,6 +223,7 @@ python tools/secret_scan.py                           # 敏感信息扫描
 | [路线图](docs/ROADMAP.md) | 版本里程碑、系统优化路线图 |
 | [1.0 发布门槛与验收清单](docs/RELEASE_CHECKLIST.md) | 发布门槛、真实语料与真人走查 |
 | [后续完善开发计划书](docs/DEVELOPMENT_PLAN.md) | 十条优化路径总纲与任务卡（v0.12 → v1.1） |
+| [DeepSeek Harness 印刷 Agent 规划](docs/plan/dsh-print-agent.md) | dsh、第一方印刷 skill、PrintOps MCP 与分阶段验收路线 |
 | [开源选型参考](docs/OPEN_SOURCE_OPTIONS.md) | 后续可引入的组件选型 |
 
 ## 🤝 贡献
@@ -163,9 +231,9 @@ python tools/secret_scan.py                           # 敏感信息扫描
 欢迎 Issue 与 PR。提交前请运行：
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"
-python tests/evaluate_agent.py
-python tools/secret_scan.py
+python3 -m unittest discover -s tests -p "test_*.py"
+python3 tests/evaluate_agent.py
+python3 tools/secret_scan.py
 ```
 
 ## 📄 许可证

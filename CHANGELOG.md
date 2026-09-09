@@ -2,7 +2,7 @@
 
 ## Unreleased — release status convergence
 
-- Restored Python 3.9 runtime compatibility by deferring evaluation of modern type annotations in the agent and real-corpus test entry points; the existing Ubuntu/Windows × Python 3.9/3.12 CI matrix now has an explicit import smoke.
+- Restored Python 3.9 runtime compatibility by deferring evaluation of modern type annotations in the agent and real-corpus test entry points; run the local compile and test checks before release. The repository does not currently ship a GitHub Actions workflow.
 - Normalized repository text files to LF and added `.gitattributes` so `git diff --check` is not obscured by platform line-ending changes.
 - Clarified that `1.0.0` is the current code baseline in candidate status. The real-corpus (≥20 cases) and manual walkthrough gates remain open, so the general stable-release claim is intentionally deferred.
 

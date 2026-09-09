@@ -61,6 +61,26 @@ class SsrfHostValidationTest(unittest.TestCase):
         self.assertEqual(normalize_base_url(" https://api.example.com/v1/ "),
                          "https://api.example.com/v1")
 
+    def test_private_hosts_require_explicit_opt_in(self):
+        self.assertEqual(
+            normalize_base_url("http://10.1.2.3/v1", allow_private_hosts=True),
+            "http://10.1.2.3/v1",
+        )
+        infos = [(2, 1, 6, "", ("10.0.0.5", 0))]
+        with mock.patch("llm_adapter.socket.getaddrinfo", return_value=infos, create=True):
+            self.assertEqual(
+                normalize_base_url("https://llm.internal.example/v1", allow_private_hosts=True),
+                "https://llm.internal.example/v1",
+            )
+
+    def test_opt_in_keeps_structural_url_rules(self):
+        with self.assertRaises(ValueError):
+            normalize_base_url("ftp://10.1.2.3/v1", allow_private_hosts=True)
+        with self.assertRaises(ValueError):
+            normalize_base_url("https://user:pass@10.1.2.3/v1", allow_private_hosts=True)
+        with self.assertRaises(ValueError):
+            normalize_base_url("https://10.1.2.3/v1?key=1", allow_private_hosts=True)
+
     def test_structural_rules_are_kept(self):
         with self.assertRaises(ValueError):
             normalize_base_url("ftp://api.example.com/v1")

@@ -10,7 +10,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
-**Zero dependencies · Local-first · Data stays on your machine · Nothing ships without human confirmation**
+**Zero dependencies · Local-first · Rule mode stays local · Model mode sends only bounded context · Nothing ships without human confirmation**
 
 ![PrintOps workbench](docs/screenshots/workbench.png)
 
@@ -48,6 +48,13 @@ PrintOps is a local-first print order agent for marketing, design, and procureme
 - 📄 In-browser PDF pre-check (page count, page boxes, color-space and font-embedding clues); the artwork never leaves your machine
 - 📦 Hand-off text + JSON / CSV / Markdown export
 
+**Local tools and optional model collaboration**
+- 🔧 Eight whitelisted tools always run through the local `Agent.call_tool()` gateway: validation, process recommendation, price estimation, term explanation, supplier capability matching, quote preparation, hand-off, and file preflight
+- 🔌 Supports OpenAI-compatible native `tools[].function`; gateways without native tools automatically fall back to the JSON envelope contract
+- 🧠 Tool planning is bounded to three rounds; an identical tool name plus arguments cannot loop forever, and tool results are returned for model synthesis
+- 🛟 If the model only returns prose, deterministic local intent rules still call required tools: `validate_order` for missing fields, `estimate_price` for price requests, `explain_print_term` for terminology, and `recommend_processes` for complete-order plan requests
+- 🧱 The model never owns order state: SQLite is authoritative, while the model receives a compact order digest and constrained tool arguments; quotes and hand-offs remain behind human confirmation
+
 ## 🖼️ UI Preview
 
 | Plan comparison | Mobile (390px) |
@@ -61,12 +68,72 @@ Requires **Python 3.9+**. No third-party packages.
 ```bash
 git clone https://github.com/11122313211/PrintOps.git
 cd PrintOps
-python server.py          # macOS / Linux; on Windows run start_windows.bat
+python3 server.py         # macOS / Linux; on Windows run start_windows.bat
 ```
 
 Open <http://localhost:4174/> — health check: <http://localhost:4174/api/health> → `{"ok": true}`
 
 > 🔐 On first start the terminal prints a **local access token** (`X-PrintOps-Token`). The served page carries it automatically; for curl add `-H "X-PrintOps-Token: <token>"`.
+
+### Connecting to an internal model endpoint
+
+Model URLs reject loopback, private-network, and other internal addresses by default. If the model is intentionally hosted on a company network reachable through your VPN/DNS, opt in when starting the local server:
+
+```bash
+PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1 python3 server.py
+```
+
+Then enter an OpenAI-compatible base URL such as `https://llm.internal.example/v1`; the server requests its `/chat/completions` path. This is a documentation placeholder, not the project's service address. The option only relaxes the host-network check; protocol, credentials, and query/fragment URL rules remain enforced. It does not fix DNS, so connect to the company network/VPN or configure company DNS if the hostname cannot resolve. Do not expose the local server to the public internet while this option is enabled.
+
+Privacy boundary: without a configured model, the rule Agent, SQLite memory, and PDF preflight run locally. When a model is enabled, the current user message, bounded history, compact order digest, and bounded tool results are sent to the endpoint you configure. Review that endpoint's logging, retention, and compliance policy first; API keys are not placed in chat content or run traces.
+
+### Local agent host without npm/pnpm
+
+When Node, npm, pnpm, or the real `dsh` CLI is unavailable, the dsh-facing
+contract can still be exercised with the Python standard library:
+
+```bash
+python3 tools/printops_local_host.py \
+  --session-id local-demo \
+  --message "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"
+```
+
+The command discovers the five project skills, runs the real stdio launcher
+through MCP `initialize`, `tools/list`, and read-only smoke calls, then passes
+the message to the deterministic local Agent. It does not call a DeepSeek
+model and does not require npm/pnpm; `runtime: "python-stdlib"` makes that
+mode explicit. Add `--memory-path data/agent.sqlite3` for persistence, or
+`--interactive` for one JSON result per input line.
+
+For an MCP-only check:
+
+```bash
+python3 tools/dsh_mcp_smoke.py
+```
+
+This is a local fallback validation path, not a real dsh headless + model
+end-to-end run.
+
+### Model data flow and context budget
+
+```text
+user message
+  → rule perception + SQLite memory
+  → optional model planning
+  → local Agent.call_tool()
+  → bounded tool result returned for model synthesis
+  → UI order state, tool result, and runTrace
+```
+
+The planner uses explicit budgets so long sessions do not resend the full order,
+tool schemas, and unbounded history on every round:
+
+- the most recent 8 history messages, with at most 2,000 characters each
+- a compact order digest capped at 12KB and tool results capped at 12KB; nested depth, list length, and object keys are also bounded
+- native-tool follow-up rounds carry tool names only; the JSON fallback carries compact parameter schemas when needed
+- tool arguments do not carry the full `order`; the local session is authoritative, while selectors such as `itemIndex` and `platformId` are validated at the gateway
+
+Consequently, a model that does not emit a tool call cannot silently skip required read-only validation, pricing, terminology, or process recommendation. If the model or internal endpoint is unavailable, the deterministic local Agent continues to operate.
 
 <details>
 <summary><b>Port conflicts</b></summary>
@@ -78,7 +145,7 @@ lsof -nP -iTCP:4174 -sTCP:LISTEN
 Get-NetTCPConnection -LocalPort 4174 -State Listen
 ```
 
-Dev fallback: `PRINTOPS_PORT=4174 python server.py` (commits and acceptance always use 4174).
+Dev fallback: `PRINTOPS_PORT=4174 python3 server.py` (commits and acceptance always use 4174).
 
 </details>
 
@@ -106,9 +173,11 @@ understand → clarify category → complete parameters → recommend plans → 
 | --- | --- |
 | `nlu.py` | Rule-based perception: extraction + confidence grading (explicit evidence ≥0.9, weak inference <0.75 requires confirmation) |
 | `order_model.py` | Order data contract, quantity/size normalization, `schemaVersion` migrations |
-| `tools.py` | Whitelisted tools: plan recommendation, pricing, supplier capability matching, hand-off, quote preparation |
-| `agent.py` | Session memory (SQLite WAL), workflow stage machine, tool gateway, model collaboration (max two rounds) |
-| `llm_adapter.py` | Optional OpenAI-compatible planner with automatic rule fallback; built-in SSRF host validation |
+| `tools.py` | Eight whitelisted tools: validation, plan recommendation, pricing, term explanation, supplier capability matching, quote preparation, hand-off, and file preflight |
+| `agent.py` | Session memory (SQLite WAL), workflow stage machine, tool gateway, model collaboration (max three rounds) |
+| `llm_adapter.py` | Optional OpenAI-compatible planner with native tools/JSON fallback, context budgets, and rule fallback; built-in SSRF host validation |
+| `mcp_server.py` | Standard-library JSON-RPC stdio MCP server with session binding, L0/L1 capability boundaries, and argument validation |
+| `tools/dsh_mcp_launcher.py` | npm/pnpm-free trusted dsh/MCP launcher; rejects arbitrary sessions and L2 external writes |
 | `product_knowledge.py` | Product catalog, print knowledge, sample price parameter table (all versioned with sources) |
 | `supplier_adapters.py` | Platform capability profiles and per-category field-mapping protocol |
 
@@ -118,7 +187,7 @@ Full design in [Architecture & data contracts](docs/ARCHITECTURE.md) (Chinese).
 
 - **Local access token**: every endpoint except `/api/health` requires `X-PrintOps-Token` (a per-process random token injected into the served page); cross-origin requests get 403
 - **Static whitelist**: only `/`, `/index.html`, `/app.js`, `/styles.css` are served; source, docs, and runtime data return 404
-- **SSRF protection**: LLM endpoint URLs are validated at configuration time — loopback / private / CGNAT / reserved / link-local hosts are rejected
+- **SSRF protection**: LLM endpoint URLs reject loopback / private / CGNAT / reserved / link-local hosts by default; trusted internal endpoints require the explicit `PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1` opt-in
 - **API keys**: stored only in local `data/llm_config.json` (permission 600), never in logs, exports, or Git; the UI warns about plaintext storage — prefer environment variables
 - **Durability**: SQLite runs with WAL and a 5s busy timeout; corrupted sessions are quarantined (backed up to `data/corrupted/`) without taking the service down
 
@@ -127,12 +196,17 @@ Known limitations and the hardening backlog live in the [ROADMAP](docs/ROADMAP.m
 ## 🧪 Testing & Quality
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 149 unit / contract / security tests
-python tests/evaluate_agent.py                        # 111-case desensitized order evaluation + real-corpus evaluation
-python tools/secret_scan.py                           # secret scanning
+python3 -m unittest discover -s tests -p "test_*.py"  # unit / contract / security tests (count varies by version)
+python3 tests/evaluate_agent.py                        # 111-case desensitized order evaluation + real-corpus evaluation
+python3 tools/secret_scan.py                           # secret scanning
+python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 tool-boundary smoke
 ```
 
 Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. The project does not depend on GitHub Actions; run the Python checks locally before release.
+
+The current worktree has verified 236 Python tests, MCP smoke, context-boundary
+tests, and the offline native-tool loop. Real dsh headless, three live internal
+model walkthroughs, and browser-level smoke tests remain release acceptance items.
 
 The 1.0 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese).
 
@@ -151,15 +225,16 @@ See the full [ROADMAP](docs/ROADMAP.md).
 | [Architecture & data contracts](docs/ARCHITECTURE.md) | Module responsibilities, field contracts, confidence & migration strategy (Chinese) |
 | [Roadmap](docs/ROADMAP.md) | Milestones and the hardening backlog (Chinese) |
 | [1.0 release checklist](docs/RELEASE_CHECKLIST.md) | Release gates, real-corpus and manual walkthrough (Chinese) |
+| [DeepSeek Harness print-agent plan](docs/plan/dsh-print-agent.md) | dsh, first-party print skills, PrintOps MCP, and staged acceptance gates (Chinese) |
 
 ## 🤝 Contributing
 
 Issues and PRs are welcome. Before submitting:
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"
-python tests/evaluate_agent.py
-python tools/secret_scan.py
+python3 -m unittest discover -s tests -p "test_*.py"
+python3 tests/evaluate_agent.py
+python3 tools/secret_scan.py
 ```
 
 ## 📄 License

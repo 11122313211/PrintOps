@@ -81,7 +81,7 @@
 ### 4.1 快照命令
 
 ```bash
-PYTHONPATH=. python tests/evaluate_agent.py --record        # 已有：评测快照
+PYTHONPATH=. python3 tests/evaluate_agent.py --record       # 已有：评测快照
 python tools/metrics_report.py --week                        # 新增：聚合本周 JSONL
 python tools/metrics_report.py --compare <上周快照.json>      # 新增：周环比
 ```

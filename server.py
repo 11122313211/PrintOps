@@ -22,10 +22,14 @@ ROOT = Path(__file__).parent
 MEMORY = Memory(ROOT / "data/agent.sqlite3")
 LLM_CONFIG_PATH = ROOT / "data/llm_config.json"
 SAVED_LLM_CONFIG = read_saved_config(LLM_CONFIG_PATH)
+ALLOW_PRIVATE_LLM_HOSTS = os.getenv("PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 PLANNER = OpenAICompatiblePlanner(
     SAVED_LLM_CONFIG.get("url", os.getenv("PRINTOPS_LLM_URL", "")),
     SAVED_LLM_CONFIG.get("key", os.getenv("PRINTOPS_LLM_KEY", "")),
     SAVED_LLM_CONFIG.get("model", os.getenv("PRINTOPS_LLM_MODEL", "")),
+    allow_private_hosts=ALLOW_PRIVATE_LLM_HOSTS,
 )
 LLM_LOCK = threading.Lock()
 SESSION_LOCKS: dict[str, threading.Lock] = {}
@@ -254,7 +258,10 @@ class Handler(BaseHTTPRequestHandler):
                     has_override = any(key in body for key in ("url", "model", "key"))
                     tester = PLANNER
                     if has_override:
-                        tester = OpenAICompatiblePlanner(timeout=PLANNER.timeout)
+                        tester = OpenAICompatiblePlanner(
+                            timeout=PLANNER.timeout,
+                            allow_private_hosts=getattr(PLANNER, "allow_private_hosts", False),
+                        )
                         try:
                             test_url = str(body.get("url", "")).strip()
                             test_model = str(body.get("model", "")).strip()

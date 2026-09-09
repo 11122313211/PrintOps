@@ -1,6 +1,11 @@
 # Local runtime state. Never commit sessions, logs, or model credentials.
 data/*
 !data/.gitkeep
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 
 # Python and local environments.
 __pycache__/
@@ -14,6 +19,10 @@ venv/
 !.env.example
 .DS_Store
 *.log
+.coverage
+.pytest_cache/
+coverage/
+htmlcov/
 
 # Local tool state
 .mimosa/

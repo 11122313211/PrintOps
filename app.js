@@ -585,13 +585,16 @@ function renderSettings(data) {
   llmSettings = data?.llm || llmSettings;
   const enabled = Boolean(llmSettings.enabled);
   const hasError = enabled && Boolean(llmSettings.lastError);
+  const protocolLabel = { native_tools: "原生工具", json_fallback: "JSON 兼容", error: "连接异常" }[llmSettings.protocolMode] || "自动协议";
   const stateText = $("#settings-state");
   if (stateText) stateText.textContent = enabled
-    ? (hasError ? `已配置：${llmSettings.model}（上次调用失败，已回退）` : `已启用：${llmSettings.model}`)
+    ? (hasError ? `已配置：${llmSettings.model}（上次调用失败，已回退 · ${protocolLabel}）` : `已启用：${llmSettings.model} · ${protocolLabel}`)
     : "当前使用规则模式";
   const note = $("#settings-note");
   if (note) note.textContent = data?.keyStorageWarning
-    || "Key 仅由本机服务保存，不会显示在页面或接口响应中。URL 与模型留空即可继续使用规则模式。";
+    || (llmSettings.privateHostsAllowed
+      ? "当前已允许访问本机或公司内网模型地址；不要把此服务暴露到公网。Key 仅由本机服务保存。"
+      : "Key 仅由本机服务保存，不会显示在页面或接口响应中。内网模型地址默认拦截；URL 与模型留空即可继续使用规则模式。");
   const url = $("#settings-url");
   const model = $("#settings-model");
   const key = $("#settings-key");
@@ -1781,7 +1784,15 @@ $("#settings-form").addEventListener("submit", async (event) => {
     $("#settings-dialog").close();
     showToast(result.llm.enabled ? `已启用模型：${result.llm.model}` : "已切换为规则模式");
   } catch (error) {
-    showToast(error.message.includes("URL 和模型名") ? "URL 和模型名需要同时填写" : error.message.includes("接口 URL") ? "接口 URL 格式不正确" : "设置保存失败，请检查接口地址", "error");
+    const message = error?.message || "";
+    const settingsMessage = message.includes("URL 和模型名")
+      ? "URL 和模型名需要同时填写"
+      : message.includes("本机或内网")
+        ? "该接口解析到本机或内网地址，当前安全策略不允许"
+        : message.includes("接口 URL")
+          ? message
+          : "设置保存失败，请检查接口地址";
+    showToast(settingsMessage, "error");
   } finally {
     save.disabled = false;
   }

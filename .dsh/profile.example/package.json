@@ -1,0 +1,18 @@
+{
+  "name": "printops-dsh-profile",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.1.5-alpha.1"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-headless"
+      ],
+      "patchReload": "startup"
+    }
+  }
+}

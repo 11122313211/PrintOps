@@ -321,6 +321,45 @@ GENERIC_PROFILE = {
     "recommendation": "先确认成品用途、尺寸、材料、数量和交期。",
 }
 
+# A few fields are derived by the deterministic NLU layer rather than listed
+# as standalone catalog questions.  Keep them explicit so the patch gateway
+# can reject arbitrary model keys without breaking those documented semantics.
+PRODUCT_SPEC_EXTRAS: dict[str, set[str]] = {
+    "包装盒": {"boxSizeInner", "boxSizeOuter"},
+    "名片": {"cardColor"},
+    "手提袋": {"loadBearing"},
+    "海报": {"displaySize"},
+    "喷画": {"displaySize"},
+    "PVC": {"boardSize"},
+}
+
+
+def known_product_spec_keys(product: str | None = None) -> set[str]:
+    """Return the patch-safe product-spec keys for a category.
+
+    With no category yet, the union is used so an early patch can survive the
+    category-identification turn.  Once a category is known, only its profile
+    parameters and explicitly documented derived fields are accepted.
+    Dimension aliases are handled by the order model and remain allowed for
+    backwards-compatible sessions.
+    """
+    if product:
+        # Model/planner patches may use a catalog alias (for example ``彩盒``)
+        # instead of the canonical product id.  Resolve it before applying the
+        # profile-specific allowlist so valid fields are not rejected merely
+        # because the display name differs.
+        canonical = alias_map().get(str(product), str(product))
+        profile = PRODUCT_CATALOG.get(canonical, GENERIC_PROFILE)
+        keys = {str(item.get("key")) for item in profile.get("parameters", []) if item.get("key")}
+        keys.update(PRODUCT_SPEC_EXTRAS.get(canonical, set()))
+    else:
+        keys = set()
+        for name, profile in PRODUCT_CATALOG.items():
+            keys.update(str(item.get("key")) for item in profile.get("parameters", []) if item.get("key"))
+            keys.update(PRODUCT_SPEC_EXTRAS.get(name, set()))
+    keys.update({"expandedSize", "dieCutSize"})
+    return keys
+
 # 参考起印量与印刷方式倾向（合版/专版）。示例数值，供 validate_order 提示
 # 和推荐解释使用；实际起印条件以供应商为准。
 MIN_QUANTITY = {

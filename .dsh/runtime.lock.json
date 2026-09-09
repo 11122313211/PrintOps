@@ -1,0 +1,50 @@
+{
+  "lockFormat": 1,
+  "project": "printops",
+  "dsh": {
+    "package": "@deepseek-ai/dsh",
+    "command": "dsh",
+    "release": "0.1.5-alpha.1",
+    "tag": "dsh-v0.1.5-alpha.1",
+    "commit": "5dda764ed3aa172535a7967b06ff95d9cbfe536a",
+    "channel": "alpha",
+    "status": "developer-preview"
+  },
+  "node": {
+    "required": "^22.19.0 || >=24.0.0",
+    "verifiedInWorkspace": "24.19.0"
+  },
+  "pnpm": {
+    "required": "11.7.0"
+  },
+  "mcpClient": {
+    "package": "@deepseek-ai/dsh-mcp-client",
+    "version": "0.1.5-alpha.1"
+  },
+  "skillPackages": {
+    "registry": "@deepseek-ai/dsh-skill",
+    "filesystem": "@deepseek-ai/dsh-skill-filesystem",
+    "modelLoader": "@deepseek-ai/dsh-tool-skill",
+    "version": "0.1.5-alpha.1"
+  },
+  "python": {
+    "minimum": "3.9"
+  },
+  "integration": {
+    "profileExample": "profile.example.json",
+    "launcher": "../tools/dsh_mcp_launcher.py",
+    "mcpServer": "../mcp_server.py",
+    "defaultCapabilities": "L0",
+    "firstSmokeTools": [
+      "validate_order",
+      "explain_print_term"
+    ],
+    "enabledByDefault": false,
+    "lockStatus": "runtime-and-source-pins; upstream-transitive-lockfile-required-before-production"
+  },
+  "sources": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness",
+    "tag": "https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.1.5-alpha.1"
+  },
+  "verifiedAt": "2026-09-09"
+}

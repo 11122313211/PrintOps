@@ -658,6 +658,16 @@ class AgentTest(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_llm_planner_can_explicitly_enable_trusted_private_endpoint(self):
+        planner = OpenAICompatiblePlanner(
+            "http://10.1.2.3:8000/v1", "", "demo", allow_private_hosts=True,
+        )
+        self.assertTrue(planner.enabled)
+        self.assertTrue(planner.public_config()["privateHostsAllowed"])
+
+        blocked = OpenAICompatiblePlanner("http://10.1.2.3:8000/v1", "", "demo")
+        self.assertFalse(blocked.enabled)
+
     def test_reading_product_requires_pages_before_generate(self):
         self.agent.chat("做 500 份 A4 宣传册，157g哑粉纸，双面四色，下周内")
         self.agent.choose("balanced")
@@ -712,8 +722,29 @@ class AgentTest(unittest.TestCase):
         second = agent.chat("用于客户拜访")
         self.assertIn("我记住了这个项目", first["messages"][0])
         self.assertIn("调用模型：demo", first["toolTrace"])
+        self.assertIn("调用工具：validate_order", first["toolTrace"])
         self.assertEqual(planner.history[-1]["text"], "我记住了这个项目。请告诉我数量。")
         self.assertTrue(second["llm"]["enabled"])
+
+    def test_model_reply_cannot_suppress_required_recommendation_tool(self):
+        class ReplyOnlyPlanner:
+            enabled = True
+            model = "demo"
+            last_error = ""
+
+            def plan(self, text, order, tools, history):
+                return {"reply": "我已理解订单，正在整理方案。", "patch": {}, "tool": None}
+
+            def public_config(self):
+                return {"enabled": True, "url": "https://example.com/v1", "model": self.model,
+                        "keyConfigured": False, "lastError": ""}
+
+        result = Agent(self.memory, planner=ReplyOnlyPlanner()).chat(
+            "做 500 份 A4 名片，250g铜版纸，双面四色，下周内"
+        )
+        self.assertEqual(len(result["options"]), 3)
+        self.assertIn("调用工具：recommend_processes", result["toolTrace"])
+        self.assertIn("fallback_tool", [event["status"] for event in result["runTrace"] if event["step"] == "plan"])
 
     def test_llm_agent_closes_tool_loop_and_keeps_tool_result(self):
         class ToolPlanner:
@@ -743,6 +774,78 @@ class AgentTest(unittest.TestCase):
         self.assertIn("比较了三种工艺", result["messages"][0])
         self.assertIn("调用模型总结工具结果：demo", result["toolTrace"])
         self.assertEqual([item["role"] for item in result["history"]], ["user", "assistant"])
+
+    def test_native_openai_tool_call_runs_local_tool_and_returns_tool_context(self):
+        planner = OpenAICompatiblePlanner("https://example.com/v1", "", "demo", timeout=1)
+        native = {
+            "choices": [{"message": {"content": None, "tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "recommend_processes", "arguments": "{}"},
+            }]}}]
+        }
+        final = {"choices": [{"message": {"content": "工具结果已整理。"}}]}
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(native if len(requests) == 1 else final)
+
+        with mock_patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = Agent(self.memory, planner=planner).chat(
+                "做 500 份 A4 名片，250g铜版纸，双面四色，下周内"
+            )
+        self.assertEqual(len(result["options"]), 3)
+        self.assertIn("调用工具：recommend_processes", result["toolTrace"])
+        self.assertEqual(planner.public_config()["protocolMode"], "native_tools")
+        self.assertEqual([item["role"] for item in requests[1]["messages"][-2:]], ["assistant", "tool"])
+        self.assertIn("tools", requests[0])
+        self.assertNotIn("preflight_file", {
+            item["function"]["name"] for item in requests[0]["tools"]
+        })
+        self.assertNotIn("order", requests[0]["tools"][0]["function"]["parameters"].get("properties", {}))
+
+    def test_planner_context_is_bounded_and_tool_catalog_is_compact(self):
+        planner = OpenAICompatiblePlanner("https://example.com/v1", "", "demo", timeout=1)
+        response = {"choices": [{"message": {"content": '{"reply":"继续","patch":{},"tool":null}'}}]}
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse(response)
+
+        history = [{"role": "user", "text": "x" * 5000} for _ in range(20)]
+        with mock_patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
+            planner.plan("继续", {"productType": "名片"}, Agent.planner_tools(), history)
+        messages = captured["body"]["messages"]
+        self.assertLessEqual(len(messages), 10)
+        self.assertTrue(all(len(str(item.get("content", ""))) <= 2000 for item in messages[1:-1]))
+        self.assertTrue(all("output" not in item for item in json.loads(messages[-1]["content"])["tools"]))
+
+    def test_native_followup_uses_tool_names_and_bounds_tool_result(self):
+        planner = OpenAICompatiblePlanner("https://example.com/v1", "", "demo", timeout=1)
+        captured = {}
+        response = {"choices": [{"message": {"content": '{"reply":"已整理","patch":{},"tool":null}'}}]}
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse(response)
+
+        tool_call = {"id": "call-1", "function": {"name": "recommend_processes", "arguments": {}}}
+        tool_result = {"result": {"options": [{"id": str(index), "description": "x" * 2000} for index in range(100)]}}
+        with mock_patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
+            planner.plan("继续", {"productType": "名片"}, Agent.planner_tools(), [],
+                         tool_result=tool_result, tool_call=tool_call)
+
+        messages = captured["body"]["messages"]
+        followup_payload = json.loads(messages[-3]["content"])
+        self.assertEqual(
+            {item["name"] for item in followup_payload["tools"]},
+            {"validate_order", "recommend_processes", "estimate_price", "prepare_handoff",
+             "request_supplier_quote", "match_supplier_capability", "explain_print_term"},
+        )
+        self.assertTrue(all(set(item) == {"name"} for item in followup_payload["tools"]))
+        self.assertLessEqual(len(messages[-1]["content"].encode("utf-8")),
+                             planner.MAX_CONTEXT_TOOL_RESULT_BYTES)
 
     def test_tool_payload_shape_does_not_crash_agent(self):
         result = self.agent.call_tool("explain_print_term", ["错误参数"])

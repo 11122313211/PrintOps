@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import hashlib
+import math
 import re
 import sqlite3
 import sys
@@ -24,13 +26,15 @@ from order_model import (DIMENSION_DEFAULTS, ITEM_DEFAULTS, LABELS,
                          MATERIAL_SPEC_PRODUCTS, ORDER_DEFAULTS,
                          QUANTITY_UNIT_ALIASES,
                          DEFAULT_QUANTITY_UNITS, RECOMMENDATION_FIELDS, REQUIRED,
-                         STATE_SCHEMA_VERSION, _multi_product_info,
+                         STATE_SCHEMA_VERSION, MAX_STATE_REVISION, _multi_product_info,
                          default_quantity_unit,
                          merge_dimension_patch, migrate_dimension_field_meta,
-                         normalize_order_dimensions, normalize_order_items,
+                         migrate_state_item_references, normalize_order_dimensions,
+                         normalize_order_items,
                          normalize_state, parse_quantity,
                          quote_idempotency_key, required_order_keys)
-from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, parameter_state
+from product_knowledge import (KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION,
+                               known_product_spec_keys, parameter_state)
 from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
                                get_adapter)
 from tools import (TOOLS, TOOL_META, TOOL_SCHEMAS, estimate_price, explain_print_term,
@@ -38,11 +42,21 @@ from tools import (TOOLS, TOOL_META, TOOL_SCHEMAS, estimate_price, explain_print
                    recommend_processes, request_supplier_quote, validate_order)
 
 HISTORY_LIMIT = 80
-MAX_PLANNER_TOOL_ROUNDS = 2
+# One initial plan plus up to three bounded local tool turns.  The model never
+# receives an unbounded chain; every turn still passes through call_tool().
+MAX_PLANNER_TOOL_ROUNDS = 3
 MAX_RUN_EVENTS = 64
 MAX_RUN_HISTORY = 20
 MAX_QUOTE_REQUESTS = 40
 QUOTE_ACTIVE_STATUSES = {"awaiting_human_confirmation", "confirmed"}
+# ``call_tool`` is also used by the local HTTP bridge, so keep a small
+# provider-independent boundary here instead of relying only on MCP schemas.
+MAX_TOOL_NAME_LENGTH = 128
+MAX_TOOL_FILE_NAME_LENGTH = 255
+MAX_TOOL_INSPECTION_BYTES = 16 * 1024
+MAX_TOOL_ORDER_BYTES = 64 * 1024
+MAX_TOOL_SAFE_INTEGER = 2**53 - 1
+MAX_PATCH_VALUE = 4096
 WORKFLOW_LABELS = {
     "collect": "需求收集", "clarify": "品类澄清", "recommend": "方案选择",
     "preflight": "文件预检", "quote": "报价准备", "confirm": "订单确认",
@@ -107,6 +121,48 @@ class Memory:
         with self._db() as db:
             db.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (session_id, data))
 
+    def save_if_revision(self, session_id: str, state: dict[str, Any],
+                         expected_revision: int) -> tuple[bool, int | None]:
+        """Atomically persist a state only when its stored revision matches.
+
+        MCP instances can live in separate processes, so the in-process
+        session locks are insufficient for optimistic concurrency. SQLite's
+        IMMEDIATE transaction serializes the read/compare/write sequence while
+        keeping the existing sessions table/API unchanged.
+        """
+        try:
+            expected = int(expected_revision)
+        except (TypeError, ValueError, OverflowError):
+            return False, None
+        if expected < 0 or expected > MAX_STATE_REVISION:
+            return False, None
+        try:
+            data = json.dumps(state, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            raise
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                if expected != 0:
+                    return False, 0
+                db.execute("INSERT INTO sessions VALUES (?, ?)", (session_id, data))
+                saved = state.get("revision") if isinstance(state, dict) else None
+                return True, saved if isinstance(saved, int) else 0
+            try:
+                raw = json.loads(row[0])
+                current = raw.get("revision", 0) if isinstance(raw, dict) else None
+                if (not isinstance(current, int) or isinstance(current, bool)
+                        or current < 0 or current > MAX_STATE_REVISION):
+                    return False, None
+            except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+                return False, None
+            if current != expected:
+                return False, current
+            db.execute("UPDATE sessions SET state = ? WHERE id = ?", (data, session_id))
+            saved = state.get("revision") if isinstance(state, dict) else None
+            return True, saved if isinstance(saved, int) else current
+
     @staticmethod
     def fresh_state() -> dict[str, Any]:
         order = deepcopy(ORDER_DEFAULTS)
@@ -117,9 +173,11 @@ class Memory:
                 "uploadedFiles": [],
                 "handoff": None, "confirmation": {"status": "not_ready"},
                 "fieldMeta": {}, "conflicts": [], "lastRun": None, "runHistory": [],
+                "rejectedFields": [],
+                "planMeta": {},
                 "workflowStage": "collect", "activeItemIndex": None, "itemOptions": {},
                 "quoteRequests": [], "activeQuoteRequestId": None,
-                "schemaVersion": STATE_SCHEMA_VERSION}
+                "schemaVersion": STATE_SCHEMA_VERSION, "revision": 0}
 
     @contextmanager
     def _db(self):
@@ -135,14 +193,53 @@ class Memory:
             db.close()
 
 
+class RevisionConflictError(RuntimeError):
+    """Raised when an optimistic session write loses a cross-process race."""
+
+    def __init__(self, expected: int, current: int | None) -> None:
+        super().__init__("session revision changed")
+        self.expected = expected
+        self.current = current
+
+
 class Agent:
     def __init__(self, memory: Memory, session_id: str | None = None, planner: Any = None) -> None:
         self.memory, self.id, self.planner = memory, session_id or uuid.uuid4().hex[:12], planner
         self.state = memory.load(self.id)
+        # ``rejectedFields`` was added after the original state schema; keep
+        # older SQLite sessions readable without requiring a schema bump.
+        if not isinstance(self.state.get("rejectedFields"), list):
+            self.state["rejectedFields"] = []
+        if not isinstance(self.state.get("planMeta"), dict):
+            self.state["planMeta"] = {}
+        # The persisted revision advances by _save only when the state
+        # (excluding the counter itself) changed. Keeping a canonical
+        # snapshot prevents helper methods that save twice during one
+        # operation from spuriously advancing the CAS token.
+        raw_revision = self.state.get("revision")
+        self.state["revision"] = (raw_revision if isinstance(raw_revision, int)
+                                   and not isinstance(raw_revision, bool)
+                                   and 0 <= raw_revision <= MAX_STATE_REVISION else 0)
+        self._saved_state_digest = self._state_digest(self.state)
         self.trace: list[str] = []
         self.run_id = ""
         self.run_operation = ""
         self.run_events: list[dict[str, Any]] = []
+        self._cas_expected_revision: int | None = None
+
+    @staticmethod
+    def _state_digest(state: dict[str, Any]) -> str | None:
+        """Return a stable digest for revision tracking, excluding revision."""
+        state_copy = deepcopy(state)
+        state_copy.pop("revision", None)
+        try:
+            encoded = json.dumps(state_copy, ensure_ascii=False, sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            # An unusual direct-caller state is treated as changed rather than
+            # accidentally reusing a stale optimistic-concurrency token.
+            return None
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _timestamp() -> str:
@@ -280,9 +377,117 @@ class Agent:
         candidate = self.state.get("activeItemIndex") if value is None else value
         try:
             candidate = int(candidate)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             return None
         return candidate if isinstance(items, list) and len(items) > 1 and 0 <= candidate < len(items) else None
+
+    @staticmethod
+    def _validate_call_tool_payload(name: str, payload: dict[str, Any]) -> str | None:
+        """Validate the small public-tool envelope used by HTTP and planners.
+
+        MCP performs the same checks at its transport boundary, but the local
+        browser API also calls ``Agent.call_tool`` directly.  Keep this gate
+        strict enough that stringly typed values cannot silently change the
+        meaning of a preflight or quote request.
+        """
+        if any(not isinstance(key, str) for key in payload):
+            return "工具参数名必须是字符串"
+        allowed: dict[str, set[str]] = {
+            "validate_order": {"order"},
+            # The provider-neutral legacy schema lists ``order`` as required.
+            # It is accepted only as a bounded compatibility envelope and is
+            # discarded before dispatch; the session state remains authoritative.
+            "recommend_processes": {"order", "itemIndex"},
+            "explain_print_term": {"question"},
+            "estimate_price": {"order", "itemIndex"},
+            "prepare_handoff": {"order", "itemIndex"},
+            "match_supplier_capability": {"order", "platformId", "itemIndex"},
+            "request_supplier_quote": {"order", "platformId", "itemIndex"},
+            "preflight_file": {"fileName", "sizeBytes", "pageCount", "encrypted",
+                                "readable", "inspection", "expectedSize", "itemIndex"},
+        }
+        if name in allowed:
+            unknown = [key for key in payload if key not in allowed[name]]
+            if unknown:
+                return f"工具参数不支持：{'、'.join(sorted(key[:128] for key in unknown))}"
+
+        if "itemIndex" in payload:
+            value = payload.get("itemIndex")
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                return "参数 itemIndex 必须是整数或 null"
+            if isinstance(value, int) and (value < 0 or value > MAX_TOOL_SAFE_INTEGER):
+                return "参数 itemIndex 超出数值范围"
+
+        if "order" in payload:
+            order = payload.get("order")
+            if not isinstance(order, dict):
+                return "参数 order 必须是 JSON 对象"
+            try:
+                order_size = len(json.dumps(order, ensure_ascii=False,
+                                            allow_nan=False).encode("utf-8"))
+            except (TypeError, ValueError, RecursionError):
+                return "参数 order 不是有效 JSON"
+            if order_size > MAX_TOOL_ORDER_BYTES:
+                return "参数 order 超过大小限制"
+
+        if name in {"match_supplier_capability", "request_supplier_quote"} \
+                and "platformId" in payload:
+            value = payload.get("platformId")
+            if value is not None:
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 128:
+                    return "参数 platformId 必须是有效字符串"
+                if value.strip() not in PLATFORMS:
+                    return "未知目标平台"
+
+        if name == "explain_print_term" and "question" in payload:
+            value = payload.get("question")
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 2000:
+                return "参数 question 必须是非空字符串且不超过 2000 字符"
+
+        if name != "preflight_file":
+            return None
+
+        file_name = payload.get("fileName")
+        if not isinstance(file_name, str) or not file_name.strip():
+            return "参数 fileName 必须是非空字符串"
+        file_name = file_name.strip()
+        if len(file_name) > MAX_TOOL_FILE_NAME_LENGTH:
+            return "参数 fileName 超过长度限制"
+        if any(char in file_name for char in ("/", "\\", "\x00")) or file_name in {".", ".."}:
+            return "参数 fileName 不能包含路径"
+
+        size_bytes = payload.get("sizeBytes")
+        if isinstance(size_bytes, bool) or not isinstance(size_bytes, int):
+            return "参数 sizeBytes 必须是整数"
+        if size_bytes < 0 or size_bytes > MAX_TOOL_SAFE_INTEGER:
+            return "参数 sizeBytes 超出数值范围"
+
+        if "pageCount" in payload:
+            page_count = payload.get("pageCount")
+            if page_count is not None and (isinstance(page_count, bool) or not isinstance(page_count, int)):
+                return "参数 pageCount 必须是整数或 null"
+            if isinstance(page_count, int) and (page_count < 0 or page_count > MAX_TOOL_SAFE_INTEGER):
+                return "参数 pageCount 超出数值范围"
+        for key in ("encrypted", "readable"):
+            if key in payload and not isinstance(payload.get(key), bool):
+                return f"参数 {key} 必须是布尔值"
+
+        if "expectedSize" in payload:
+            expected = payload.get("expectedSize")
+            if expected is not None and (not isinstance(expected, str) or len(expected.strip()) > 128):
+                return "参数 expectedSize 必须是字符串或 null且不超过 128 字符"
+        if "inspection" in payload:
+            inspection = payload.get("inspection")
+            if inspection is not None and not isinstance(inspection, dict):
+                return "参数 inspection 必须是对象或 null"
+            try:
+                encoded_size = len(json.dumps(inspection, ensure_ascii=False,
+                                              allow_nan=False).encode("utf-8"))
+            except (TypeError, ValueError, RecursionError):
+                return "参数 inspection 不是有效 JSON"
+            if encoded_size > MAX_TOOL_INSPECTION_BYTES:
+                return "参数 inspection 超过大小限制"
+        return None
 
     def _item_order(self, index: int) -> dict[str, Any] | None:
         """Build a standalone order view for one item and inherit only shared fields."""
@@ -397,36 +602,277 @@ class Agent:
             return stored
         return self._base_workflow_stage(validation)
 
+    @staticmethod
+    def _finite_confidence(value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _is_patch_scalar(value: Any) -> bool:
+        """Return whether a model/user patch value is safe to stringify.
+
+        Order fields are text or numeric scalars.  Dicts/lists must never be
+        coerced with ``str(...)`` because doing so can turn an attacker/model
+        payload such as ``{"quantity": 500}`` into an executable field value.
+        Booleans are intentionally excluded: none of the current order
+        contracts are boolean fields, and ``True``/``False`` would otherwise
+        become misleading production text.
+        """
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            return False
+        return not (isinstance(value, float) and not math.isfinite(value))
+
     def _resolve_confidence(self, key: str, base: float, field_confidence: dict[str, float] | None) -> float:
-        """Prefer the perception-grade confidence for a field over the scalar."""
+        """Prefer a planner/NLU field grade over the scalar fallback."""
+        fallback = self._finite_confidence(base)
+        if fallback is None:
+            # Malformed provenance must fail closed as low confidence, while
+            # still allowing the rest of the conversation to continue.
+            fallback = 0.0
         if not field_confidence:
-            return base
-        if key in field_confidence:
-            return float(field_confidence[key])
+            return fallback
+        candidates = [key]
         if key.startswith("items."):
             remainder = ".".join(key.split(".")[2:])
-            if remainder in field_confidence:
-                return float(field_confidence[remainder])
-        if key.startswith("productSpecs.") and "productSpecs" in field_confidence:
-            return float(field_confidence["productSpecs"])
-        return base
+            candidates.extend([remainder, ".".join(remainder.split(".")[-2:])])
+        if key.startswith("productSpecs."):
+            candidates.append("productSpecs")
+        if key.startswith("dimensions."):
+            name = key.split(".", 1)[1]
+            candidates.extend([f"productSpecs.{name}", "dimensions"])
+            if name == "finishedSize":
+                candidates.append("size")
+            elif name == "packageSize":
+                candidates.extend(["productSpecs.boxSize", "productSpecs.bagSize", "size"])
+        if key in {"quantityValue", "quantityUnit"}:
+            candidates.append("quantity")
+        for candidate in candidates:
+            if candidate not in field_confidence:
+                continue
+            number = self._finite_confidence(field_confidence[candidate])
+            if number is not None:
+                return number
+        return fallback
+
+    @staticmethod
+    def _normalize_evidence_entry(value: Any) -> dict[str, str] | None:
+        """Normalize one dsh evidence record and bound untrusted strings."""
+        if isinstance(value, str):
+            quote = value.strip()
+            source = ""
+        elif isinstance(value, dict):
+            raw_quote = value.get("quote", value.get("evidence", ""))
+            # Evidence quotes are display/audit text, not arbitrary JSON.  Do
+            # not stringify lists, mappings, or booleans into misleading
+            # provenance that could later look like user confirmation.
+            if not isinstance(raw_quote, str):
+                return None
+            quote = raw_quote.strip()
+            raw_source = value.get("source", "")
+            source = raw_source.strip() if isinstance(raw_source, str) else ""
+        else:
+            return None
+        if not quote:
+            return None
+        entry = {"quote": quote[:2048]}
+        if source:
+            entry["source"] = source[:128]
+        return entry
+
+    @classmethod
+    def _normalize_field_evidence(cls, value: Any) -> dict[str, dict[str, str]]:
+        """Accept dsh's evidence array and compact field-to-quote maps."""
+        if not isinstance(value, (dict, list)):
+            return {}
+        entries: list[tuple[Any, Any]] = []
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    entries.append((item.get("field"), item))
+        else:
+            entries.extend((field, item) for field, item in value.items())
+        result: dict[str, dict[str, str]] = {}
+        for raw_field, raw_entry in entries:
+            if not isinstance(raw_field, str):
+                continue
+            field = raw_field.strip()
+            if not field:
+                continue
+            normalized = cls._normalize_evidence_entry(raw_entry)
+            if normalized is None:
+                continue
+            result[field[:256]] = normalized
+            if len(result) >= 128:
+                break
+        return result
+
+    @classmethod
+    def _resolve_evidence(cls, key: str,
+                          field_evidence: dict[str, dict[str, str]] | None) -> dict[str, str] | None:
+        if not field_evidence:
+            return None
+        candidates = [key]
+        if key.startswith("items."):
+            remainder = ".".join(key.split(".")[2:])
+            candidates.extend([remainder, ".".join(remainder.split(".")[-2:])])
+        if key.startswith("productSpecs."):
+            candidates.append("productSpecs")
+        if key.startswith("dimensions."):
+            name = key.split(".", 1)[1]
+            candidates.extend([f"productSpecs.{name}", "dimensions"])
+            if name == "finishedSize":
+                candidates.append("size")
+            elif name == "packageSize":
+                candidates.extend(["productSpecs.boxSize", "productSpecs.bagSize", "size"])
+        if key in {"quantityValue", "quantityUnit"}:
+            candidates.append("quantity")
+        for candidate in candidates:
+            if candidate in field_evidence:
+                return deepcopy(field_evidence[candidate])
+        return None
+
+    def _has_field_signal(self, key: str,
+                          field_confidence: dict[str, float] | None,
+                          field_evidence: dict[str, dict[str, str]] | None) -> bool:
+        """Tell whether a planner supplied provenance specifically for a field."""
+        if self._resolve_evidence(key, field_evidence) is not None:
+            return True
+        if not field_confidence:
+            return False
+        candidates = [key]
+        if key.startswith("items."):
+            remainder = ".".join(key.split(".")[2:])
+            candidates.extend([remainder, ".".join(remainder.split(".")[-2:])])
+        if key.startswith("productSpecs."):
+            candidates.append("productSpecs")
+        if key.startswith("dimensions."):
+            name = key.split(".", 1)[1]
+            candidates.extend([f"productSpecs.{name}", "dimensions"])
+            if name == "finishedSize":
+                candidates.append("size")
+            elif name == "packageSize":
+                candidates.extend(["productSpecs.boxSize", "productSpecs.bagSize", "size"])
+        if key in {"quantityValue", "quantityUnit"}:
+            candidates.append("quantity")
+        return any(candidate in field_confidence
+                   and self._finite_confidence(field_confidence[candidate]) is not None
+                   for candidate in candidates)
 
     def _set_field_meta(self, key: str, value: Any, source: str, confidence: float,
-                        field_confidence: dict[str, float] | None = None) -> None:
+                        field_confidence: dict[str, float] | None = None,
+                        field_evidence: dict[str, dict[str, str]] | None = None) -> None:
         if value in (None, ""):
             self.state.setdefault("fieldMeta", {}).pop(key, None)
             return
         graded = self._resolve_confidence(key, confidence, field_confidence)
-        self.state.setdefault("fieldMeta", {})[key] = {
+        entry: dict[str, Any] = {
             "value": deepcopy(value), "source": source,
             "sourceLabel": FIELD_SOURCE_LABELS.get(source, source),
             "confidence": round(max(0.0, min(1.0, float(graded))), 2),
             "runId": self.run_id or None, "updatedAt": self._timestamp(),
         }
+        evidence = self._resolve_evidence(key, field_evidence)
+        if evidence is None:
+            # Re-confirming an unchanged value should not discard its prior
+            # evidence, while a changed value naturally receives fresh data.
+            previous = self.state.setdefault("fieldMeta", {}).get(key)
+            if isinstance(previous, dict) and self._equivalent_value(previous.get("value"), value):
+                prior_evidence = previous.get("evidence")
+                if isinstance(prior_evidence, dict):
+                    evidence = self._normalize_evidence_entry(prior_evidence)
+        if evidence is not None:
+            entry["evidence"] = evidence
+        self.state.setdefault("fieldMeta", {})[key] = entry
+
+    def _record_rejected_fields(self, fields: list[str] | set[str] | tuple[str, ...] | None) -> None:
+        """Keep a bounded, de-duplicated audit list of rejected patch paths."""
+        if not isinstance(fields, (list, set, tuple)) or not fields:
+            return
+        current = self.state.setdefault("rejectedFields", [])
+        if not isinstance(current, list):
+            current = self.state["rejectedFields"] = []
+        for raw in fields:
+            field = str(raw).strip()
+            if field and field not in current:
+                current.append(field[:256])
+        del current[:-128]
+
+    @staticmethod
+    def _normalize_plan_annotation(value: Any) -> str | dict[str, str] | None:
+        """Bound one advisory skill question/risk before it reaches a client."""
+        if isinstance(value, str):
+            text = value.strip()
+            return text[:1024] if text else None
+        if not isinstance(value, dict):
+            return None
+        # Keep a small, display-oriented subset; arbitrary nested model data
+        # does not belong in the persisted run envelope.
+        result: dict[str, str] = {}
+        for key in ("field", "question", "text", "message", "risk", "severity", "source", "code"):
+            raw = value.get(key)
+            if isinstance(raw, (str, int, float)) and not isinstance(raw, bool):
+                if isinstance(raw, float) and not math.isfinite(raw):
+                    continue
+                text = str(raw).strip()
+                if text:
+                    result[key] = text[:512]
+        return result or None
+
+    @classmethod
+    def _normalize_plan_meta(cls, value: Any) -> dict[str, Any]:
+        """Normalize the common dsh skill envelope without granting authority."""
+        if not isinstance(value, dict):
+            return {"questions": [], "risks": [], "knowledgeVersion": ""}
+        normalized: dict[str, Any] = {"questions": [], "risks": [], "knowledgeVersion": ""}
+        for key in ("questions", "risks"):
+            raw_items = value.get(key)
+            if not isinstance(raw_items, list):
+                continue
+            items: list[str | dict[str, str]] = []
+            for raw_item in raw_items[:32]:
+                item = cls._normalize_plan_annotation(raw_item)
+                if item is not None:
+                    items.append(item)
+            normalized[key] = items
+        version = value.get("knowledgeVersion")
+        if isinstance(version, str):
+            normalized["knowledgeVersion"] = version.strip()[:128]
+        if isinstance(value.get("reportedKnowledgeVersion"), str):
+            normalized["reportedKnowledgeVersion"] = value["reportedKnowledgeVersion"].strip()[:128]
+        if normalized["knowledgeVersion"] and normalized["knowledgeVersion"] != KNOWLEDGE_VERSION:
+            normalized["risks"].append({
+                "code": "knowledge_version_mismatch",
+                "severity": "review",
+                "message": "模型知识版本与当前 PrintOps 知识版本不一致，需要复核。",
+            })
+        return normalized
+
+    def _record_plan_meta(self, plan: Any) -> None:
+        """Persist advisory skill output separately from the order state."""
+        if not isinstance(plan, dict):
+            return
+        keys = {"questions", "risks", "knowledgeVersion", "reportedKnowledgeVersion"}
+        if not keys.intersection(plan):
+            return
+        self.state["planMeta"] = self._normalize_plan_meta(plan)
 
     PRODUCTION_FIELD_KEYS = {"productType", "quantity", "quantityValue", "quantityUnit", "size",
                              "dimensions", "pages", "orientation", "paper", "printing",
                              "finishing", "binding", "deadline"}
+    # ``_item_order`` inherits these values from the top-level compatibility
+    # projection.  Their top-level provenance therefore applies to a focused
+    # multi-product item when that item has no explicit value of its own.
+    INHERITED_ITEM_FIELDS = (
+        "purpose", "orientation", "paper", "printing", "finishing", "binding",
+        "deadline", "budget",
+    )
+    READINESS_TOOLS = frozenset({"recommend_processes", "prepare_handoff", "request_supplier_quote"})
+    CONFIRMATION_TOOLS = frozenset({"prepare_handoff", "request_supplier_quote"})
 
     @classmethod
     def _is_production_field(cls, key: str) -> bool:
@@ -438,11 +884,149 @@ class Agent:
         return key in cls.PRODUCTION_FIELD_KEYS
 
     def _low_confidence_fields(self, production_only: bool = False) -> list[str]:
-        fields = [key for key, meta in (self.state.get("fieldMeta") or {}).items()
-                  if meta.get("value") not in (None, "", {}) and float(meta.get("confidence", 1)) < 0.75]
+        metadata = self.state.get("fieldMeta") or {}
+        if not isinstance(metadata, dict):
+            return []
+        fields = []
+        for key, meta in metadata.items():
+            if not isinstance(meta, dict) or meta.get("value") in (None, "", {}):
+                continue
+            confidence = self._finite_confidence(meta.get("confidence", 1))
+            # A malformed confidence attached to a present field is treated as
+            # uncertain instead of raising during generation.
+            if confidence is None or confidence < 0.75:
+                fields.append(str(key))
         if production_only:
             fields = [key for key in fields if self._is_production_field(key)]
         return fields
+
+    @staticmethod
+    def _meta_low_confidence(meta: Any) -> bool:
+        """Return whether present field provenance is below the approval bar."""
+        if not isinstance(meta, dict) or meta.get("value") in (None, "", {}):
+            return False
+        try:
+            confidence = float(meta.get("confidence", 1))
+        except (TypeError, ValueError, OverflowError):
+            return True
+        return not math.isfinite(confidence) or confidence < 0.75
+
+    def _uncertain_fields_for_item(self, item_order: dict[str, Any] | None,
+                                   item_index: int | None) -> list[str]:
+        """Find low-confidence production fields effective for one item.
+
+        A multi-product item can inherit shared values from the top-level
+        compatibility order.  Check explicit item provenance first, then only
+        apply a top-level grade when the inherited value is equal to the
+        selected item's effective value.
+        """
+        field_meta = self.state.get("fieldMeta") or {}
+        if not isinstance(field_meta, dict):
+            return []
+        if item_order is None or not isinstance(item_index, int):
+            return [str(key) for key, meta in field_meta.items()
+                    if not str(key).startswith("items.")
+                    and self._is_production_field(str(key))
+                    and self._meta_low_confidence(meta)]
+
+        item_id = item_order.get("itemId") or f"item-{item_index + 1}"
+        prefix = f"items.{item_id}."
+        uncertain: list[str] = []
+
+        # Explicit item provenance takes precedence over shared fallback.
+        for raw_key, meta in field_meta.items():
+            key = str(raw_key)
+            if key.startswith(prefix) and self._is_production_field(key) \
+                    and self._meta_low_confidence(meta):
+                uncertain.append(key)
+
+        top_order = self.state.get("order") or {}
+
+        def top_value_for(key: str) -> Any:
+            if key.startswith("dimensions."):
+                dimensions = top_order.get("dimensions")
+                if isinstance(dimensions, dict):
+                    return dimensions.get(key.split(".", 1)[1])
+                return None
+            return top_order.get(key)
+
+        def has_value(value: Any) -> bool:
+            return value not in (None, "", {})
+
+        def inherited_meta(key: str, item_value: Any) -> None:
+            if not has_value(item_value) or key not in field_meta:
+                return
+            # An item-specific grade was already considered above.
+            if f"{prefix}{key}" in field_meta:
+                return
+            top_value = top_value_for(key)
+            if has_value(top_value) and self._equivalent_value(item_value, top_value) \
+                    and self._is_production_field(key) \
+                    and self._meta_low_confidence(field_meta.get(key)):
+                uncertain.append(key)
+
+        for key in self.INHERITED_ITEM_FIELDS:
+            inherited_meta(key, item_order.get(key))
+
+        # ``size`` and canonical dimensions can also be inherited from a
+        # single top-level phrase by ``_item_order``.
+        inherited_meta("size", item_order.get("size"))
+        item_dimensions = item_order.get("dimensions") if isinstance(item_order.get("dimensions"), dict) else {}
+        for key in DIMENSION_DEFAULTS:
+            inherited_meta(f"dimensions.{key}", item_dimensions.get(key))
+
+        return list(dict.fromkeys(uncertain))
+
+    def _tool_precondition(self, name: str, item_index: int | None = None) -> dict[str, Any] | None:
+        """Return a bounded readiness decision before a public production tool.
+
+        This is deliberately separate from ``_call``: internal workflow steps
+        may call domain tools as part of a validated operation, while every
+        external ``call_tool``/MCP invocation must pass this gate first.
+        """
+        if name not in self.READINESS_TOOLS:
+            return None
+        item_order = self._item_order(item_index) if isinstance(item_index, int) else None
+        order = item_order or self.state.get("order", {})
+        validation = validate_order(order)
+        missing = list(validation.get("missing") or []) + list(validation.get("productMissing") or [])
+        if missing:
+            return {
+                "sessionId": self.id,
+                "toolResult": {"status": "blocked", "reason": "order_not_ready", "missing": missing,
+                                "requiresHumanConfirmation": True},
+                "validation": validation,
+                "workflowStage": "collect" if validation.get("missing") else "clarify",
+                "confirmation": deepcopy(self.state.get("confirmation") or {"status": "not_ready"}),
+                "decision": {"stage": "clarify", "humanConfirmationRequired": True,
+                             "reason": "订单字段或品类参数尚未完整"},
+            }
+        uncertain = self._uncertain_fields_for_item(item_order, item_index)
+        if uncertain and name in self.CONFIRMATION_TOOLS:
+            return {
+                "sessionId": self.id,
+                "toolResult": {"status": "blocked", "reason": "low_confidence", "uncertain": uncertain,
+                                "requiresHumanConfirmation": True},
+                "validation": validation,
+                "workflowStage": "clarify",
+                "confirmation": deepcopy(self.state.get("confirmation") or {"status": "not_ready"}),
+                "decision": {"stage": "clarify", "humanConfirmationRequired": True,
+                             "reason": "存在低置信度生产字段"},
+            }
+        if name in self.CONFIRMATION_TOOLS:
+            selected = (item_order or {}).get("selectedOption") if item_order is not None else self.state.get("selectedOption")
+            if not selected:
+                return {
+                    "sessionId": self.id,
+                    "toolResult": {"status": "blocked", "reason": "selection_required",
+                                    "requiresHumanConfirmation": True},
+                    "validation": validation,
+                    "workflowStage": "recommend",
+                    "confirmation": deepcopy(self.state.get("confirmation") or {"status": "not_ready"}),
+                    "decision": {"stage": "recommend", "humanConfirmationRequired": True,
+                                 "reason": "请先选择工艺方案"},
+                }
+        return None
 
     def _record_conflict(self, key: str, previous: Any, current: Any, source: str) -> None:
         if previous in (None, "", {}) or current in (None, "", {}) or previous == current:
@@ -550,6 +1134,8 @@ class Agent:
             last_tool_name = ""
             last_tool_response: dict[str, Any] | None = None
             final_reply = ""
+            last_tool_signature: str | None = None
+            native_tool_call: dict[str, Any] | None = None
             for tool_round in range(MAX_PLANNER_TOOL_ROUNDS):
                 if not isinstance(plan, dict):
                     break
@@ -560,17 +1146,32 @@ class Agent:
                         final_reply = str(plan["reply"])
                     break
                 tool_name = str(planned_tool["name"])
-                if tool_name == last_tool_name:
+                arguments = planned_tool.get("arguments", {})
+                try:
+                    tool_signature = f"{tool_name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+                except (TypeError, ValueError):
+                    tool_signature = f"{tool_name}:<invalid>"
+                if tool_signature == last_tool_signature:
                     self.trace.append(f"阻止重复工具：{tool_name}")
+                    self._event("plan", "blocked", "模型重复请求相同工具参数", tool=tool_name,
+                                round=tool_round + 1)
                     break
+                last_tool_signature = tool_signature
                 last_tool_name = tool_name
+                native_tool_call = plan.get("_nativeToolCall") if isinstance(plan.get("_nativeToolCall"), dict) else None
+                self._event("plan", "tool_requested", "模型请求调用工具", tool=tool_name,
+                            round=tool_round + 1)
                 last_tool_response = self.call_tool(
-                    tool_name, planned_tool.get("arguments", {}), preserve_trace=True, remember=False,
+                    tool_name, arguments, preserve_trace=True, remember=False,
                 )
                 if tool_round + 1 >= MAX_PLANNER_TOOL_ROUNDS:
                     break
                 self.trace.append(f"调用模型总结工具结果：{getattr(self.planner, 'model', '已配置模型')}")
-                plan = self._ask_planner(text, {"name": tool_name, "result": last_tool_response.get("toolResult")})
+                plan = self._ask_planner(
+                    text,
+                    {"name": tool_name, "result": last_tool_response.get("toolResult")},
+                    tool_call=native_tool_call,
+                )
             if last_tool_response is not None:
                 result = last_tool_response.get("toolResult")
                 message = final_reply.strip() or self._planner_tool_fallback(last_tool_name, result)
@@ -581,6 +1182,25 @@ class Agent:
                     handoff=last_tool_response.get("handoff"), tool_result=result,
                 )
             if final_reply:
+                forced_tool = self._planner_fallback_tool(text)
+                if forced_tool is not None:
+                    forced_name, forced_arguments = forced_tool
+                    self._event("plan", "fallback_tool", "模型未请求必要工具，按本地意图执行",
+                                tool=forced_name)
+                    forced_response = self.call_tool(
+                        forced_name, forced_arguments, preserve_trace=True, remember=False,
+                    )
+                    result = forced_response.get("toolResult")
+                    # Preserve a model's useful clarification wording when the
+                    # only forced action is a read-only validation pass.
+                    message = (final_reply.strip() if forced_name == "validate_order" and final_reply.strip()
+                               else self._planner_tool_fallback(forced_name, result))
+                    self._remember("assistant", message)
+                    self._save()
+                    return self._result(
+                        [message], options=forced_response.get("options", []),
+                        handoff=forced_response.get("handoff"), tool_result=result,
+                    )
                 self.state["stage"] = "collect" if self._missing_fields() else "recommend"
                 self._remember("assistant", final_reply)
                 self._save()
@@ -652,6 +1272,16 @@ class Agent:
     def call_tool(self, name: str, payload: dict[str, Any] | None = None, preserve_trace: bool = False,
                   remember: bool = True) -> dict[str, Any]:
         """Public tool gateway used by a UI, MCP bridge, or an LLM planner."""
+        valid_name = isinstance(name, str) and bool(name.strip()) and len(name.strip()) <= MAX_TOOL_NAME_LENGTH
+        if not valid_name:
+            if not preserve_trace:
+                self._begin_run("tool:invalid")
+                self.trace = []
+            self.trace.append("工具名无效")
+            self._event("tool", "rejected", "工具名必须是有限长度的非空字符串", tool="invalid")
+            return self._tool_reply("工具名无效，未执行。", remember=remember,
+                                    tool_result={"status": "invalid_arguments", "reason": "tool_name"})
+        name = name.strip()
         if not preserve_trace:
             self._begin_run(f"tool:{name}")
             self.trace = []
@@ -661,6 +1291,69 @@ class Agent:
             self.trace.append(f"工具参数无效：{name}")
             self._event("tool", "rejected", f"工具 {name} 参数不是 JSON 对象", tool=name)
             return self._tool_reply("工具参数需要使用 JSON 对象，未执行。", remember=remember)
+        payload = dict(payload)
+        payload_error = self._validate_call_tool_payload(name, payload)
+        if payload_error:
+            self.trace.append(f"工具参数无效：{name}")
+            self._event("tool", "rejected", payload_error, tool=name)
+            return self._tool_reply(payload_error + "，未执行。", remember=remember,
+                                    tool_result={"status": "invalid_arguments", "reason": payload_error})
+        # Match MCP's normalization so a valid value padded by a transport
+        # does not silently select a different platform or get persisted as a
+        # path-looking filename.
+        for key in ("platformId", "question", "fileName", "expectedSize"):
+            if isinstance(payload.get(key), str):
+                payload[key] = payload[key].strip()
+        # ``order`` is a legacy provider-neutral argument.  The gateway always
+        # resolves the authoritative order from this session, so never forward
+        # or persist the caller-supplied copy.
+        payload.pop("order", None)
+        # High-risk public tools must use the same readiness decision as MCP.
+        # Internal ``_call`` invocations intentionally do not pass through this
+        # branch; they are made only after the surrounding workflow validates
+        # the order and avoids recursive tool dispatch.
+        if name in self.READINESS_TOOLS:
+            item_index = self._item_index(payload.get("itemIndex"))
+            blocked = self._tool_precondition(name, item_index)
+            if blocked is not None:
+                blocked_result = blocked.get("toolResult")
+                if not isinstance(blocked_result, dict):
+                    blocked_result = {"status": "blocked", "reason": "order_not_ready"}
+                blocked_stage = blocked.get("workflowStage")
+                if blocked_stage in WORKFLOW_LABELS:
+                    self.state["workflowStage"] = blocked_stage
+                reason = blocked_result.get("reason")
+                if reason == "low_confidence":
+                    fields = "、".join(str(field) for field in blocked_result.get("uncertain", []))
+                    message = f"存在低置信度生产字段，请先确认：{fields or '订单字段'}。"
+                elif reason == "selection_required":
+                    action = {
+                        "request_supplier_quote": "询价",
+                        "recommend_processes": "生成工艺方案",
+                    }.get(name, "生成交接单")
+                    message = f"请先选择工艺方案，再{action}。"
+                else:
+                    missing = "、".join(str(field) for field in blocked_result.get("missing", []))
+                    action = {
+                        "request_supplier_quote": "询价",
+                        "recommend_processes": "生成工艺方案",
+                    }.get(name, "生成交接单")
+                    message = (f"当前信息还不完整，暂不能{action}。请先补充：{missing}。"
+                               if missing else f"当前信息还不完整，暂不能{action}。")
+                self.trace.append(f"工具阻断：{name}")
+                self._event("tool", "blocked", message, tool=name,
+                            reason=str(reason or "precondition"))
+                response = self._tool_reply(message, remember=remember,
+                                            tool_result=deepcopy(blocked_result))
+                # ``_result`` normally derives these fields from global state;
+                # a selected item or a low-confidence gate can require the
+                # more precise MCP decision in the public response.
+                for key in ("validation", "workflowStage", "confirmation", "decision"):
+                    if key in blocked:
+                        response[key] = deepcopy(blocked[key])
+                if isinstance(blocked_stage, str) and blocked_stage in WORKFLOW_LABELS:
+                    response["workflowLabel"] = WORKFLOW_LABELS[blocked_stage]
+                return response
         if name == "recommend_processes":
             multi_product = _multi_product_info(self.state["order"])
             if multi_product:
@@ -1098,7 +1791,10 @@ class Agent:
                 "workflowStage": workflow_stage, "workflowLabel": WORKFLOW_LABELS[workflow_stage],
                 "runId": run["runId"] if run else None, "runTrace": deepcopy(run["events"] if run else []),
                 "lastRun": deepcopy(run),
+                "revision": self.state.get("revision", 0),
                 "fieldMeta": deepcopy(self.state.get("fieldMeta") or {}),
+                "rejectedFields": deepcopy(self.state.get("rejectedFields") or []),
+                "planMeta": deepcopy(self.state.get("planMeta") or {}),
                 "conflicts": deepcopy(self.state.get("conflicts") or []),
                 "activeItemIndex": self.state.get("activeItemIndex"),
                 "activeItemSelectedOption": active_item.get("selectedOption") if isinstance(active_item, dict) else None,
@@ -1159,6 +1855,34 @@ class Agent:
         return [{**deepcopy(meta), **deepcopy(TOOL_SCHEMAS.get(name, {}))}
                 for name, meta in TOOL_META.items()]
 
+    @classmethod
+    def planner_tools(cls) -> list[dict[str, Any]]:
+        """Return the small chat-planner catalog, separate from UI/MCP tools.
+
+        File preflight is driven by the browser upload flow and has no useful
+        chat arguments.  Order objects are authoritative session state and are
+        therefore removed from planner schemas; this keeps context small and
+        prevents the model from attempting a full order replacement.
+        """
+        result: list[dict[str, Any]] = []
+        for item in cls.available_tools():
+            if item.get("name") == "preflight_file":
+                continue
+            item = deepcopy(item)
+            schema = item.get("input")
+            if isinstance(schema, dict):
+                properties = schema.get("properties")
+                if isinstance(properties, dict):
+                    properties.pop("order", None)
+                required = schema.get("required")
+                if isinstance(required, list):
+                    schema["required"] = [key for key in required if key != "order"]
+                item["input"] = schema
+            # Output schemas are useful to adapters/MCP but waste chat context.
+            item.pop("output", None)
+            result.append(item)
+        return result
+
     def _summary(self) -> str:
         order = self.state["order"]
         parts = [f"{LABELS[key]}：{order[key]}" for key in ("productType", "quantity", "size", "pages", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget") if order.get(key)]
@@ -1208,7 +1932,7 @@ class Agent:
                      changes: dict[str, Any], *, source: str, confidence: float,
                      field_confidence: dict[str, float] | None, allowed_keys: set[str],
                      meta_prefix: str = "", list_fields: dict[str, Any] | None = None,
-                     settle=None) -> set[str]:
+                     settle=None, field_evidence: dict[str, dict[str, str]] | None = None) -> set[str]:
         """Shared constrained-patch engine for the whole order and each item.
 
         ``previous`` is the untouched pre-patch copy used for conflict and
@@ -1219,43 +1943,119 @@ class Agent:
         with the callers because order and items differ there.
         """
         valid: dict[str, Any] = {}
+        rejected_fields: list[str] = []
         quantity_keys = {"quantity", "quantityValue", "quantityUnit"}
+        # ``items``/``productTypes`` are order-only list patches handled by
+        # ``_update_order`` before this function, even when their normalized
+        # value happens to equal the current state.  Item-scoped patches do
+        # not get this exception.
+        list_patch_keys = {"items", "productTypes"} if list_fields is not None else set()
+        permitted_change_keys = set(allowed_keys) | quantity_keys | set(list_fields or {}) | list_patch_keys
+        # ``productSpecs`` is handled below as a nested allowlist.  Other
+        # unknown top-level keys are retained only in the audit trail.
+        for raw_key in changes:
+            # JSON patches have string keys.  Keep the lower-level gateway
+            # defensive for direct Python callers and custom mappings too:
+            # checking membership on an unhashable key would otherwise raise
+            # before the rest of the valid patch can be applied.
+            if not isinstance(raw_key, str):
+                rejected_fields.append(f"{meta_prefix}<non-string-patch-key>")
+                continue
+            key = raw_key.strip()
+            if key and raw_key not in permitted_change_keys:
+                rejected_fields.append(f"{meta_prefix}{key}")
         if any(key in changes for key in quantity_keys):
-            product = str(changes.get("productType") or target.get("productType") or "")
-            raw_quantity = changes.get("quantity")
-            if raw_quantity in (None, ""):
-                raw_quantity = changes.get("quantityValue", target.get("quantity"))
-            parsed_quantity = parse_quantity(raw_quantity, product, str(changes.get("quantityUnit") or ""))
-            if parsed_quantity:
-                display, numeric, unit = parsed_quantity
-                valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
-                if all(target.get(key) == value for key, value in
-                       (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit))):
-                    # Re-stating an identical quantity is still a confirmation:
-                    # it must be able to clear a low confidence grade.
-                    for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
-                        self._set_field_meta(f"{meta_prefix}{key}", value, source, confidence, field_confidence)
+            invalid_quantity = [
+                key for key in quantity_keys
+                if key in changes and changes.get(key) is not None
+                and (not self._is_patch_scalar(changes.get(key))
+                     or (isinstance(changes.get(key), str)
+                         and len(changes.get(key).strip()) > MAX_PATCH_VALUE))
+            ]
+            if invalid_quantity:
+                rejected_fields.extend(f"{meta_prefix}{key}" for key in invalid_quantity)
+            else:
+                product = str(changes.get("productType") or target.get("productType") or "")
+                raw_quantity = changes.get("quantity")
+                if raw_quantity in (None, ""):
+                    raw_quantity = changes.get("quantityValue", target.get("quantity"))
+                unit_hint = changes.get("quantityUnit") or ""
+                parsed_quantity = parse_quantity(raw_quantity, product, str(unit_hint))
+                if parsed_quantity:
+                    display, numeric, unit = parsed_quantity
+                    valid.update({"quantity": display, "quantityValue": numeric, "quantityUnit": unit})
+                    if all(target.get(key) == value for key, value in
+                           (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit))):
+                        # Re-stating an identical quantity is still a confirmation:
+                        # it must be able to clear a low confidence grade.
+                        for key, value in (("quantity", display), ("quantityValue", numeric), ("quantityUnit", unit)):
+                            self._set_field_meta(f"{meta_prefix}{key}", value, source, confidence,
+                                                 field_confidence, field_evidence)
+                else:
+                    # Keep malformed scalar quantities out of the order and
+                    # expose the rejection to the bridge/audit caller.
+                    rejected_fields.extend(
+                        f"{meta_prefix}{key}" for key in quantity_keys
+                        if key in changes and changes.get(key) is not None
+                    )
         for key, value in changes.items():
+            if not isinstance(key, str):
+                # Already recorded above; do not perform set membership on a
+                # possibly unhashable custom mapping key.
+                continue
             if key not in allowed_keys or value is None or key in quantity_keys:
                 continue
-            if key == "dimensions" and isinstance(value, dict):
+            if key == "dimensions":
+                if not isinstance(value, dict):
+                    rejected_fields.append(f"{meta_prefix}dimensions")
+                    continue
                 current_dimensions = dict(target.get("dimensions") or {})
                 next_dimensions = dict(DIMENSION_DEFAULTS)
                 next_dimensions.update({name: str(current_dimensions.get(name) or "").strip()
                                         for name in DIMENSION_DEFAULTS})
-                for name, dimension_value in value.items():
+                for raw_name, dimension_value in value.items():
+                    if not isinstance(raw_name, str):
+                        rejected_fields.append(f"{meta_prefix}dimensions.<non-string-key>")
+                        continue
+                    name = raw_name.strip()
                     if name not in DIMENSION_DEFAULTS:
+                        rejected_fields.append(f"{meta_prefix}dimensions.{name}")
+                        continue
+                    if (dimension_value is not None and (
+                            not self._is_patch_scalar(dimension_value)
+                            or (isinstance(dimension_value, float) and not math.isfinite(dimension_value)))):
+                        rejected_fields.append(f"{meta_prefix}dimensions.{name}")
                         continue
                     next_dimensions[name] = str(dimension_value).strip() if dimension_value is not None else ""
                 if next_dimensions != current_dimensions:
                     valid[key] = next_dimensions
-            elif key == "productSpecs" and isinstance(value, dict):
+            elif key == "productSpecs":
+                if not isinstance(value, dict):
+                    rejected_fields.append(f"{meta_prefix}productSpecs")
+                    continue
                 current_specs = dict(target.get("productSpecs") or {})
                 next_specs = dict(current_specs)
                 dimension_patch: dict[str, Any] = {}
-                for name, spec_value in value.items():
+                product_name = str(changes.get("productType") or target.get("productType") or "").strip()
+                allowed_specs = known_product_spec_keys(product_name or None)
+                for raw_name, spec_value in value.items():
+                    if not isinstance(raw_name, str):
+                        rejected_fields.append(f"{meta_prefix}productSpecs")
+                        continue
+                    name = raw_name.strip()
                     name = str(name).strip()
                     if not name:
+                        continue
+                    # Dimension aliases are normalized into the canonical
+                    # ``dimensions`` object; all other spec names must belong
+                    # to the selected product profile (or the union when the
+                    # product has not been identified yet).
+                    if name not in DIMENSION_DEFAULTS and name not in allowed_specs:
+                        rejected_fields.append(f"{meta_prefix}productSpecs.{name}")
+                        continue
+                    if (not self._is_patch_scalar(spec_value)
+                            or (isinstance(spec_value, float) and not math.isfinite(spec_value))):
+                        rejected_fields.append(f"{meta_prefix}productSpecs.{name}")
                         continue
                     normalized = str(spec_value).strip() if spec_value is not None else ""
                     if name in DIMENSION_DEFAULTS:
@@ -1263,9 +2063,11 @@ class Agent:
                         continue
                     if normalized:
                         if self._equivalent_value(next_specs.get(name), normalized):
-                            if source == "user":
+                            if source == "user" or self._has_field_signal(
+                                    f"{meta_prefix}productSpecs.{name}", field_confidence, field_evidence):
                                 self._set_field_meta(f"{meta_prefix}productSpecs.{name}",
-                                                     next_specs.get(name), source, confidence, field_confidence)
+                                                     next_specs.get(name), source, confidence,
+                                                     field_confidence, field_evidence)
                             continue
                         next_specs[name] = normalized
                     else:
@@ -1274,11 +2076,23 @@ class Agent:
                     valid[key] = next_specs
                 if dimension_patch:
                     valid["dimensions"] = merge_dimension_patch(target.get("dimensions"), dimension_patch)
-            elif str(value).strip():
-                normalized = str(value).strip()
+            elif not self._is_patch_scalar(value):
+                rejected_fields.append(f"{meta_prefix}{key}")
+                continue
+            else:
+                try:
+                    normalized = str(value).strip()
+                except (OverflowError, ValueError):
+                    rejected_fields.append(f"{meta_prefix}{key}")
+                    continue
+                normalized = normalized[:MAX_PATCH_VALUE]
+                if not normalized:
+                    continue
                 if self._equivalent_value(target.get(key), normalized):
-                    if source == "user":
-                        self._set_field_meta(f"{meta_prefix}{key}", target.get(key), source, confidence, field_confidence)
+                    if source == "user" or self._has_field_signal(
+                            f"{meta_prefix}{key}", field_confidence, field_evidence):
+                        self._set_field_meta(f"{meta_prefix}{key}", target.get(key), source, confidence,
+                                             field_confidence, field_evidence)
                     continue
                 valid[key] = normalized
         if list_fields:
@@ -1289,10 +2103,53 @@ class Agent:
         normalize_order_dimensions(target)
         if previous_dimensions != target.get("dimensions"):
             changed.add("dimensions")
-        if "productType" in changed and previous.get("productType") and previous.get("productType") != target.get("productType"):
+        if "productType" in changed and previous.get("productType") != target.get("productType"):
             # Product-specific fields belong to the old item and must not leak into a new draft.
+            # Preserve explicitly supplied fields for the *new* product when
+            # the caller changes productType and specs in one atomic patch.
+            # ``valid.productSpecs`` is normally a merge with the old map, so
+            # capture only keys explicitly present in this patch.  Otherwise
+            # changing a product while adding one new spec would resurrect
+            # specs belonging to the previous product.
+            incoming_specs: dict[str, Any] = {}
+            requested_specs = changes.get("productSpecs") if isinstance(changes.get("productSpecs"), dict) else {}
+            new_product_specs = known_product_spec_keys(str(target.get("productType") or "") or None)
+            for raw_name, value in requested_specs.items():
+                # ``requested_specs`` normally came from JSON, but direct
+                # planner adapters can provide arbitrary Python mappings.
+                # Keep restoration as strict as the main patch validator:
+                # names must be strings and booleans are never production text.
+                if (not isinstance(raw_name, str)):
+                    continue
+                name = raw_name.strip()
+                if (name and name not in DIMENSION_DEFAULTS and name in new_product_specs
+                        and value not in (None, "") and self._is_patch_scalar(value)):
+                    normalized = str(value).strip()
+                    if normalized:
+                        incoming_specs[name] = normalized
+            incoming_dimensions: dict[str, Any] | None = None
+            requested_dimensions = changes.get("dimensions") if isinstance(changes.get("dimensions"), dict) else None
+            if requested_dimensions is not None:
+                incoming_dimensions = {
+                    name: value for name, value in requested_dimensions.items()
+                    if isinstance(name, str) and name in DIMENSION_DEFAULTS
+                    and value not in (None, "") and self._is_patch_scalar(value)
+                }
+            for raw_name, value in requested_specs.items():
+                if isinstance(raw_name, str) and raw_name in DIMENSION_DEFAULTS \
+                        and value not in (None, "") and self._is_patch_scalar(value):
+                    if incoming_dimensions is None:
+                        incoming_dimensions = {}
+                    incoming_dimensions[raw_name] = value
             target["productSpecs"] = {}
             target["dimensions"] = deepcopy(DIMENSION_DEFAULTS)
+            if incoming_specs:
+                target["productSpecs"] = incoming_specs
+            if incoming_dimensions is not None:
+                target["dimensions"] = merge_dimension_patch(target["dimensions"], incoming_dimensions)
+            # Re-run migration after restoring the new product's specs so
+            # package/expanded/die-cut aliases populate canonical dimensions.
+            normalize_order_dimensions(target)
             changed.add("productSpecs")
             changed.add("dimensions")
             spec_prefix = f"{meta_prefix}productSpecs."
@@ -1310,7 +2167,7 @@ class Agent:
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
-                    self._set_field_meta(field, new_value, source, confidence, field_confidence)
+                    self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
             elif key == "dimensions":
                 before = previous.get("dimensions") or {}
                 after = target.get("dimensions") or {}
@@ -1319,33 +2176,46 @@ class Agent:
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
-                    self._set_field_meta(field, new_value, source, confidence, field_confidence)
+                    self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
             else:
                 field = f"{meta_prefix}{key}"
                 old_value, new_value = previous.get(key), target.get(key)
                 if old_value and new_value and old_value != new_value:
                     self._record_conflict(field, old_value, new_value, source)
-                self._set_field_meta(field, new_value, source, confidence, field_confidence)
+                self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
+        self._record_rejected_fields(rejected_fields)
         return changed
 
     def _update_item(self, index: int, changes: dict[str, Any], source: str = "rule",
                      confidence: float = 0.84,
-                     field_confidence: dict[str, float] | None = None) -> set[str]:
+                     field_confidence: dict[str, float] | None = None,
+                     field_evidence: dict[str, dict[str, str]] | None = None) -> set[str]:
         """Apply a constrained patch to one product item in a multi-product order."""
+        # A caller may have loaded or constructed state directly instead of
+        # going through Memory.load.  Repair IDs before deriving the provenance
+        # prefix so a duplicate item cannot record the patch under the wrong
+        # occurrence.
+        initial_mapping: list[dict[str, Any]] = []
+        normalize_order_items(self.state["order"], id_mapping=initial_mapping)
+        migrate_state_item_references(self.state, initial_mapping)
         items = self.state["order"].get("items")
         if not isinstance(items, list) or not (0 <= index < len(items)) or not isinstance(changes, dict):
             return set()
         previous = deepcopy(items[index])
+        previous_items = deepcopy(items)
         item = deepcopy(previous)
         item_id = item.get("itemId") or f"item-{index + 1}"
 
         def settle() -> None:
             items[index] = item
-            normalize_order_items(self.state["order"])
+            id_mapping: list[dict[str, Any]] = []
+            normalize_order_items(self.state["order"], id_mapping=id_mapping)
+            migrate_state_item_references(self.state, id_mapping, previous_items=previous_items)
 
         changed = self._apply_patch(
             item, previous, changes, source=source, confidence=confidence,
-            field_confidence=field_confidence, allowed_keys=ITEM_PATCH_KEYS,
+            field_confidence=field_confidence, field_evidence=field_evidence,
+            allowed_keys=ITEM_PATCH_KEYS,
             meta_prefix=f"items.{item_id}.", settle=settle)
         # normalize_order_items rebuilt the items list with fresh dicts; work
         # on the live item from here on.
@@ -1360,9 +2230,11 @@ class Agent:
         return changed
 
     def _update_order(self, changes: dict[str, Any], source: str = "rule", confidence: float = 0.84,
-                      field_confidence: dict[str, float] | None = None) -> set[str]:
+                      field_confidence: dict[str, float] | None = None,
+                      field_evidence: dict[str, dict[str, str]] | None = None) -> set[str]:
         order = self.state["order"]
         previous = deepcopy(order)
+        previous_items = deepcopy(order.get("items")) if isinstance(order.get("items"), list) else None
         # Order-only list patches: items must be normalized as whole items, and
         # a new items list derives the productTypes summary.
         list_fields: dict[str, Any] = {}
@@ -1382,10 +2254,16 @@ class Agent:
                     next_types = candidate.get("productTypes", [])
                     if next_types != order.get("productTypes", []):
                         list_fields["productTypes"] = next_types
+        def settle() -> None:
+            id_mapping: list[dict[str, Any]] = []
+            normalize_order_items(order, id_mapping=id_mapping)
+            migrate_state_item_references(self.state, id_mapping, previous_items=previous_items)
+
         changed = self._apply_patch(
             order, previous, changes, source=source, confidence=confidence,
-            field_confidence=field_confidence, allowed_keys=ORDER_PATCH_KEYS,
-            list_fields=list_fields, settle=lambda: normalize_order_items(order))
+            field_confidence=field_confidence, field_evidence=field_evidence,
+            allowed_keys=ORDER_PATCH_KEYS,
+            list_fields=list_fields, settle=settle)
         if changed & RECOMMENDATION_FIELDS:
             self.state["selectedOption"] = None
             self._invalidate_delivery_state()
@@ -1417,12 +2295,162 @@ class Agent:
         return "。".join(parts) + "。"
 
     def _apply_plan(self, plan: dict[str, Any]) -> None:
+        self._record_plan_meta(plan)
         patch = plan.get("patch") if isinstance(plan, dict) else None
         if not isinstance(patch, dict):
+            if isinstance(plan, dict):
+                self._record_rejected_fields(plan.get("rejectedFields"))
             return
-        changed = self._update_order(patch, source="model", confidence=0.68)
+        field_confidence = plan.get("confidence") if isinstance(plan.get("confidence"), dict) else None
+        field_evidence = self._normalize_field_evidence(plan.get("evidence"))
+        self._record_rejected_fields(plan.get("rejectedFields"))
+        items = self.state.get("order", {}).get("items")
+        active_index = self._item_index() if isinstance(items, list) and len(items) > 1 else None
+        if active_index is not None:
+            changed = self._update_item(
+                active_index, patch, source="model", confidence=0.68,
+                field_confidence=field_confidence, field_evidence=field_evidence)
+        else:
+            changed = self._update_order(
+                patch, source="model", confidence=0.68,
+                field_confidence=field_confidence, field_evidence=field_evidence)
         if changed:
-            self._event("plan", "ok", "模型提出了受限字段更新", changedFields=sorted(changed))
+            event_data: dict[str, Any] = {"changedFields": sorted(changed)}
+            rejected = self.state.get("rejectedFields") or []
+            if rejected:
+                event_data["rejectedFields"] = deepcopy(rejected)
+            self._event("plan", "ok", "模型提出了受限字段更新", **event_data)
+
+    @staticmethod
+    def _bridge_patch_paths(patch: dict[str, Any]) -> list[str]:
+        """Return deterministic accepted field paths for bridge receipts."""
+        paths: list[str] = []
+        if not isinstance(patch, dict):
+            return paths
+        for key, value in patch.items():
+            if not isinstance(key, str):
+                continue
+            if key in {"productSpecs", "dimensions"} and isinstance(value, dict):
+                for name in value:
+                    if isinstance(name, str) and name.strip():
+                        paths.append(f"{key}.{name.strip()}"[:256])
+                continue
+            paths.append(key.strip()[:256])
+        return list(dict.fromkeys(path for path in paths if path))
+
+    def apply_order_patch(self, plan: dict[str, Any],
+                          item_index: int | None = None,
+                          expected_revision: int | None = None,
+                          patch_id: str | None = None,
+                          patch_digest: str | None = None,
+                          source: str = "model") -> dict[str, Any]:
+        """Apply one normalized dsh plan through the shared patch kernel.
+
+        The MCP adapter performs transport/schema validation and calls this
+        method while holding the session lock. This method deliberately does
+        not accept a complete order replacement: callers can only provide the
+        normalized patch returned by the planner validator.
+        """
+        if not isinstance(plan, dict) or not isinstance(plan.get("patch"), dict):
+            raise ValueError("patch plan must be a normalized object")
+        if source not in {"model", "user", "rule", "recommendation"}:
+            raise ValueError("unsupported patch source")
+        before_state = deepcopy(self.state)
+        previous_run = (self.run_id, self.run_operation, deepcopy(self.run_events),
+                        list(self.trace))
+        previous_revision = self.state.get("revision", 0)
+        self._begin_run("apply_order_patch")
+        self.trace = []
+        try:
+            patch = plan.get("patch") or {}
+            self._record_plan_meta(plan)
+            self._record_rejected_fields(plan.get("rejectedFields"))
+            rejected_before = set(self.state.get("rejectedFields") or [])
+            field_confidence = plan.get("confidence") if isinstance(plan.get("confidence"), dict) else None
+            field_evidence = self._normalize_field_evidence(plan.get("evidence"))
+            accepted = self._bridge_patch_paths(patch)
+            changed: set[str]
+            if item_index is not None:
+                items = self.state.get("order", {}).get("items")
+                if not isinstance(items, list) or not (0 <= item_index < len(items)):
+                    raise ValueError("itemIndex out of range")
+                item_id = (items[item_index].get("itemId")
+                           if isinstance(items[item_index], dict) else None) or f"item-{item_index + 1}"
+                changed = self._update_item(
+                    item_index, patch, source=source, confidence=0.68,
+                    field_confidence=field_confidence, field_evidence=field_evidence)
+                accepted = [f"items.{item_id}.{path}"[:256] for path in accepted]
+                changed_fields = [
+                    f"items.{item_id}.{key}"[:256] for key in sorted(changed)
+                ]
+            else:
+                changed = self._update_order(
+                    patch, source=source, confidence=0.68,
+                    field_confidence=field_confidence, field_evidence=field_evidence)
+                changed_fields = sorted(str(key)[:256] for key in changed)
+            rejected = [str(value)[:256] for value in (plan.get("rejectedFields") or [])
+                        if isinstance(value, str) and value.strip()]
+            rejected = list(dict.fromkeys(rejected))
+            # The planner validator may accept a product-spec key using the
+            # union profile while the item-scoped kernel rejects it for the
+            # selected product. Reflect the kernel's actual rejection in the
+            # receipt instead of claiming that field was accepted.
+            newly_rejected = [
+                value for value in (self.state.get("rejectedFields") or [])
+                if value not in rejected_before and isinstance(value, str)
+            ]
+            for value in newly_rejected:
+                if value not in rejected:
+                    rejected.append(value[:256])
+            if item_index is not None:
+                accepted = [
+                    path for path in accepted
+                    if path not in set(rejected)
+                    and not any(path.endswith("." + value) for value in rejected)
+                ]
+            else:
+                accepted = [path for path in accepted if path not in set(rejected)]
+            predicted_revision = (
+                min(int(previous_revision) + 1, MAX_STATE_REVISION)
+                if isinstance(previous_revision, int) and not isinstance(previous_revision, bool)
+                else None
+            )
+            self._event(
+                "patch", "ok" if accepted else "rejected",
+                "已通过受控 bridge 应用字段 patch" if accepted else "patch 没有可应用字段",
+                patchId=patch_id, expectedRevision=expected_revision,
+                patchDigest=patch_digest,
+                previousRevision=previous_revision, revision=predicted_revision,
+                acceptedFields=accepted, changedFields=changed_fields,
+                rejectedFields=rejected,
+                knowledgeVersion=plan.get("knowledgeVersion") or None,
+            )
+            applied = bool(accepted)
+            tool_result = {
+                "status": "applied" if applied else "rejected",
+                **({} if applied else {"reason": "no_valid_fields"}),
+                "changedFields": changed_fields,
+                "acceptedFields": accepted,
+                "rejectedFields": rejected,
+                "knowledgeVersion": KNOWLEDGE_VERSION,
+                "reportedKnowledgeVersion": plan.get("knowledgeVersion", ""),
+            }
+            message = ("已通过受控 bridge 应用订单字段 patch。"
+                       if applied else "patch 中没有可应用的字段，未写入订单。")
+            response = self._result([message],
+                                    tool_result=tool_result)
+            revision = self.state.get("revision", previous_revision)
+            response["revision"] = revision
+            response["acceptedFields"] = accepted
+            response["rejectedFields"] = rejected
+            if isinstance(response.get("toolResult"), dict):
+                response["toolResult"]["revision"] = revision
+            return response
+        except Exception:
+            self.state = before_state
+            self.run_id, self.run_operation, self.run_events, self.trace = previous_run
+            self._cas_expected_revision = None
+            raise
 
     def _planner_order_digest(self) -> dict[str, Any]:
         """Compact order view for the planner: present fields only.
@@ -1461,18 +2489,26 @@ class Agent:
         digest["workflowStage"] = self._workflow_stage(validation)
         return digest
 
-    def _ask_planner(self, text: str, tool_result: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def _ask_planner(self, text: str, tool_result: dict[str, Any] | None = None,
+                     tool_call: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Call a provider with bounded context; provider failures stay inside the Agent."""
         history = self.state["messages"][:-1]
         digest = self._planner_order_digest()
         try:
             if tool_result is None:
-                return self.planner.plan(text, digest, self.available_tools(), history)
+                return self.planner.plan(text, digest, self.planner_tools(), history)
             try:
-                return self.planner.plan(text, digest, self.available_tools(), history, tool_result=tool_result)
+                return self.planner.plan(text, digest, self.planner_tools(), history,
+                                         tool_result=tool_result, tool_call=tool_call)
             except TypeError:
-                # Keep compatibility with an older custom planner implementation.
-                return self.planner.plan(text, digest, self.available_tools(), history)
+                try:
+                    # Keep compatibility with planners that support tool_result
+                    # but predate native tool-call metadata.
+                    return self.planner.plan(text, digest, self.planner_tools(), history,
+                                             tool_result=tool_result)
+                except TypeError:
+                    # Keep compatibility with older custom planner implementations.
+                    return self.planner.plan(text, digest, self.planner_tools(), history)
         except Exception:
             if hasattr(self.planner, "last_error"):
                 self.planner.last_error = "模型调用异常"
@@ -1499,11 +2535,54 @@ class Agent:
             return str(result["message"])
         return "工具已完成处理，请查看订单面板中的结果。"
 
+    def _planner_fallback_tool(self, text: str) -> tuple[str, dict[str, Any]] | None:
+        """Choose a bounded local tool when a model reply skipped a necessary call.
+
+        This is intentionally deterministic.  A provider may explain a result
+        without emitting a function call, but it must not be able to suppress
+        validation or an explicit price/term/quote request.  The normal
+        ``call_tool`` gateway still enforces readiness and confirmation.
+        """
+        raw = (text or "").strip()
+        if self._is_explanation_request(raw):
+            return "explain_print_term", {"question": raw}
+        if any(term in raw for term in ("多少钱", "价格", "报价", "预算估算")):
+            active_index = self._item_index()
+            return "estimate_price", ({"itemIndex": active_index} if active_index is not None else {})
+        if any(term in raw for term in ("询价", "问价", "查报价", "查价格")):
+            platform = self.state["order"].get("platform")
+            return "request_supplier_quote", ({"platformId": platform} if platform else {})
+        if any(term in raw for term in ("检查订单", "校验订单", "还缺什么", "检查一下")):
+            return "validate_order", {}
+        if self._missing_fields():
+            return "validate_order", {}
+        if any(term in raw for term in ("方案", "推荐", "工艺", "怎么印", "做", "印", "制作", "改成", "补充")):
+            active_index = self._item_index()
+            return "recommend_processes", ({"itemIndex": active_index} if active_index is not None else {})
+        return None
+
     def _remember(self, role: str, text: str) -> None:
         self.state["messages"] = (self.state["messages"] + [{"role": role, "text": text}])[-HISTORY_LIMIT:]
 
     def _save(self) -> None:
-        self.memory.save(self.id, self.state)
+        current_revision = self.state.get("revision")
+        if (not isinstance(current_revision, int) or isinstance(current_revision, bool)
+                or current_revision < 0 or current_revision > MAX_STATE_REVISION):
+            current_revision = 0
+            self.state["revision"] = current_revision
+        digest = self._state_digest(self.state)
+        if digest != self._saved_state_digest:
+            self.state["revision"] = min(current_revision + 1, MAX_STATE_REVISION)
+        expected_revision = self._cas_expected_revision
+        if expected_revision is not None:
+            ok, stored_revision = self.memory.save_if_revision(
+                self.id, self.state, expected_revision)
+            self._cas_expected_revision = None
+            if not ok:
+                raise RevisionConflictError(expected_revision, stored_revision)
+        else:
+            self.memory.save(self.id, self.state)
+        self._saved_state_digest = self._state_digest(self.state)
 
     @staticmethod
     def _perceive(text: str, allow_multi: bool = True) -> dict[str, Any]:

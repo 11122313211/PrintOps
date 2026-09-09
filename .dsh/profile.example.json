@@ -1,0 +1,43 @@
+{
+  "profileFormat": 1,
+  "name": "printops-readonly",
+  "enabled": false,
+  "description": "Example descriptor for dsh alpha.1; the copyable profile files live under profile.example/.",
+  "runtimeLock": "runtime.lock.json",
+  "manifestTemplate": "profile.example/package.json",
+  "patchTemplate": "profile.example/cordis.patch.yml",
+  "skills": {
+    "directory": ".dsh/skills",
+    "allow": [
+      "print-intake",
+      "print-specs",
+      "print-process",
+      "print-preflight",
+      "print-quote-handoff"
+    ]
+  },
+  "mcp": {
+    "serverName": "printops",
+    "transport": "stdio",
+    "command": "python3",
+    "argsTemplate": [
+      "<repo>/tools/dsh_mcp_launcher.py",
+      "--session-id",
+      "__BOUND_SESSION_ID__",
+      "--capabilities",
+      "L0"
+    ],
+    "firstSmokeTools": [
+      "validate_order",
+      "explain_print_term"
+    ],
+    "toolCallTimeoutMs": 60000,
+    "failOnStartupError": true
+  },
+  "operationalNotes": [
+    "This file is an example, not an auto-loaded dsh profile.",
+    "The session placeholder must be replaced by a trusted host before process creation; dsh passes argv without shell interpolation. The YAML template uses a dsh-evaluated JS expression for this non-secret session value.",
+    "Use the launcher with an explicit session id. Never add --allow-any-session.",
+    "L1 tools and any external side effects remain disabled for the first smoke."
+  ]
+}

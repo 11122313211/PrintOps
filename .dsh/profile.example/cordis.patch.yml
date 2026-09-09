@@ -1,0 +1,21 @@
+# Example only.  Keep this row disabled until a trusted host has supplied a
+# concrete session id in PRINTOPS_MCP_SESSION_ID and the paths are verified.
+- insert:
+    - id: printops-mcp
+      disabled: true
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: printops
+        transport: stdio
+        command: python3
+        args:
+          - !!js '`${process.cwd()}/tools/dsh_mcp_launcher.py`'
+          - --session-id
+          - !!js 'process.env.PRINTOPS_MCP_SESSION_ID ?? ""'
+          - --capabilities
+          - L0
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 60000
+        failOnStartupError: true
+        reconnect:
+          enabled: false

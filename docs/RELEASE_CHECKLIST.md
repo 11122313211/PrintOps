@@ -27,7 +27,7 @@
    必须逐项与原话核对后保留——没提过的字段删掉，提过的值不符合的改掉。
 3. 核对后把 JSON 粘贴进 `tests/eval_cases_real.json` 的 `cases` 数组，脱敏要求同上。
    （不使用工具时，按文件内 `_instructions` 的结构手写也可。）
-4. 运行 `PYTHONPATH=. python tests/evaluate_agent.py`：报告会单独输出"真实脱敏语料"
+4. 运行 `PYTHONPATH=. python3 tests/evaluate_agent.py`：报告会单独输出"真实脱敏语料"
    一节。达到 20 例后启用硬门槛——字段准确率 <95% 时脚本以非零码退出，CI 同步失败。
 5. 未达 100% 的用例会逐字段打印期望值与实际值；修复规则或在 `expected` 中纠正标注后重跑。
 
