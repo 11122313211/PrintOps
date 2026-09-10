@@ -198,6 +198,7 @@ Known limitations and the hardening backlog live in the [ROADMAP](docs/ROADMAP.m
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py"  # unit / contract / security tests (count varies by version)
 python3 tests/evaluate_agent.py                        # 111-case desensitized order evaluation + real-corpus evaluation
+python3 tools/repo_guard.py                            # check the local-file Git boundary
 python3 tools/secret_scan.py                           # secret scanning
 python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 tool-boundary smoke
 ```
@@ -225,6 +226,7 @@ See the full [ROADMAP](docs/ROADMAP.md).
 | [Architecture & data contracts](docs/ARCHITECTURE.md) | Module responsibilities, field contracts, confidence & migration strategy (Chinese) |
 | [Roadmap](docs/ROADMAP.md) | Milestones and the hardening backlog (Chinese) |
 | [1.1 release checklist](docs/RELEASE_CHECKLIST.md) | v1.1.0 integration gates plus inherited v1.0.0 real-corpus and manual walkthrough gates (Chinese) |
+| [File management & publishing boundary](docs/FILE_MANAGEMENT.md) | GitHub Desktop scope, local runtime data, and pre-push checks (Chinese) |
 | [DeepSeek Harness print-agent plan](docs/plan/dsh-print-agent.md) | dsh, first-party print skills, PrintOps MCP, and staged acceptance gates (Chinese) |
 
 ## 🤝 Contributing
@@ -234,6 +236,7 @@ Issues and PRs are welcome. Before submitting:
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py"
 python3 tests/evaluate_agent.py
+python3 tools/repo_guard.py
 python3 tools/secret_scan.py
 ```
 

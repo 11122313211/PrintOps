@@ -198,6 +198,7 @@ Get-NetTCPConnection -LocalPort 4174 -State Listen
 python3 -m unittest discover -s tests -p "test_*.py"  # 单元 / 契约 / 安全边界测试（数量随版本变化）
 python3 tests/evaluate_agent.py                        # 111 例脱敏订单评测 + 真实语料评测
 python3 tools/secret_scan.py                           # 敏感信息扫描
+python3 tools/repo_guard.py                            # 检查本地文件是否越过 Git 边界
 python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 工具边界 smoke
 ```
 
@@ -222,6 +223,7 @@ python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 工具边�
 | [架构与数据契约](docs/ARCHITECTURE.md) | 模块职责、字段契约、置信度与迁移策略 |
 | [路线图](docs/ROADMAP.md) | 版本里程碑、系统优化路线图 |
 | [1.1 发布门槛与验收清单](docs/RELEASE_CHECKLIST.md) | v1.1.0 集成门槛，以及继承的 v1.0.0 真实语料与真人走查 |
+| [文件管理与发布边界](docs/FILE_MANAGEMENT.md) | GitHub Desktop 提交范围、本地运行数据和发布前检查 |
 | [后续完善开发计划书](docs/DEVELOPMENT_PLAN.md) | 十条优化路径总纲与历史任务卡（v0.12 → v1.1；当前供应商计划顺延 v1.2+） |
 | [DeepSeek Harness 印刷 Agent 规划](docs/plan/dsh-print-agent.md) | dsh、第一方印刷 skill、PrintOps MCP 与分阶段验收路线 |
 | [开源选型参考](docs/OPEN_SOURCE_OPTIONS.md) | 后续可引入的组件选型 |

@@ -1,11 +1,36 @@
 # Local runtime state. Never commit sessions, logs, or model credentials.
+# Keep only the directory marker and the policy document in the repository.
 data/*
 !data/.gitkeep
+!data/README.md
+data/corrupted/
+data/uploads/
+data/exports/
+data/imports/
+data/backups/
 *.sqlite
 *.sqlite3
 *.sqlite3-*
 *.db
 *.db-*
+*.sqlite-wal
+*.sqlite-shm
+
+# Local-only user files and generated artifacts.
+# Put artwork, inbound files, exports, and one-off reports below these paths.
+local/
+runtime/
+inbox/
+outbox/
+uploads/
+exports/
+artifacts/
+reports/
+*.local
+*.local.*
+*.tmp
+*.temp
+*.bak
 
 # Python and local environments.
 __pycache__/
@@ -17,6 +42,15 @@ venv/
 .env
 .env.*
 !.env.example
+.envrc
+*.secret
+*.secret.*
+credentials/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
 .DS_Store
 *.log
 .coverage
@@ -26,3 +60,16 @@ htmlcov/
 
 # Local tool state
 .mimosa/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.hypothesis/
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.egg-info/
+.vscode/settings.json
