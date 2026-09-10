@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **零第三方依赖 · 本地优先 · 规则模式数据留本机 · 模型模式仅发送受限上下文 · 人工确认后才交接**
@@ -22,7 +22,7 @@ PrintOps 是一个面向市场、设计和采购团队的本地印刷订单 Agen
 
 > 定位：订单**前置整理与沟通**工具。它不自动下单、不替代印前检查、不承诺真实报价——所有对外动作都停在“人工确认”这道闸门之前。
 
-> 发布状态：当前是 `1.0.0` 代码基线候选版。项目只依赖 Python 标准库，发布前通过本地 Python 检查；真实脱敏语料达到 20 例和真人走查仍未完成，在这两项关闭前请不要把它视为通用稳定发布。
+> 发布状态：当前是 `1.1.0` 代码基线候选版（受控本地 MCP/dsh 集成版）。本版本加入标准库 MCP server、5 个印刷 skill、无 npm/pnpm 的本地 host、有界模型工具循环和上下文预算；项目仍只依赖 Python 标准库。真实脱敏语料达到 20 例、真人走查、真实 dsh headless/模型端到端和浏览器冒烟仍未完成，在这些门槛关闭前请不要把它视为通用稳定发布。v1.0.0 的订单内核和安全门槛作为历史基线保留；真实供应商 live 接入不属于本版本范围，顺延到 v1.2+。
 
 **北极星目标**：让非印刷专业用户在 10 分钟内把模糊需求整理成完整、可靠、可追溯的印刷订单。
 
@@ -201,16 +201,16 @@ python3 tools/secret_scan.py                           # 敏感信息扫描
 python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 工具边界 smoke
 ```
 
-发布门槛：合成语料当前字段准确率与可完成用例完整率均为 100%；真实脱敏语料仍待补充，达到 20 例后启用字段准确率 ≥95% 硬门槛。项目不依赖 GitHub Actions，发布前请在本机使用 Python 手动执行以上检查。
+发布门槛：合成语料当前字段准确率与可完成用例完整率均为 100%；真实脱敏语料仍待补充，达到 20 例后启用字段准确率 ≥95% 硬门槛。项目不依赖 GitHub Actions，发布前请在本机使用 Python 手动执行以上检查；1.1.0 新增的 MCP/dsh 与上下文门槛见 [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md)。
 
 当前工作区已验证：236 项 Python 测试、MCP smoke、上下文边界和 native tool-call 离线链路通过。真实 dsh headless、真实内网模型的三条端到端走查和浏览器级冒烟仍是发布前验收项。
 
-1.0 发布门槛与真人走查清单见 [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md)。
+1.1 发布门槛与真人走查清单见 [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md)；其中继承并保留 v1.0.0 的历史门槛。
 
 ## 🗺️ 路线图
 
-- **v1.0（当前代码基线，候选状态）**：自然语言建单、可解释方案、本地安全模型、受控导出；真实语料与真人走查门槛待闭合
-- **v1.1+**：受控供应商接入（能力档案 + 字段适配器 → 报价草稿 → 人工确认后提交）、真实报价回写、生产交期倒排
+- **v1.1.0（当前代码基线，候选状态）**：在 v1.0.0 订单内核上增加 MCP/dsh skill 边界、无 npm/pnpm 本地 host、原生/JSON 工具规划回退、最多三轮有界 tool loop 和受限上下文传输；真实语料、真人走查、真实 dsh/模型端到端与浏览器冒烟门槛待闭合
+- **v1.2+（规划）**：受控供应商接入（能力档案 + 字段适配器 → 报价草稿 → 人工确认后提交）、真实报价回写、生产交期倒排；当前没有真实供应商 live 提交
 - 持续：评测集真实语料替换、行业规则库扩充、LLM 锁与会话隔离优化
 
 详见 [ROADMAP](docs/ROADMAP.md)。
@@ -221,8 +221,8 @@ python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 工具边�
 | --- | --- |
 | [架构与数据契约](docs/ARCHITECTURE.md) | 模块职责、字段契约、置信度与迁移策略 |
 | [路线图](docs/ROADMAP.md) | 版本里程碑、系统优化路线图 |
-| [1.0 发布门槛与验收清单](docs/RELEASE_CHECKLIST.md) | 发布门槛、真实语料与真人走查 |
-| [后续完善开发计划书](docs/DEVELOPMENT_PLAN.md) | 十条优化路径总纲与任务卡（v0.12 → v1.1） |
+| [1.1 发布门槛与验收清单](docs/RELEASE_CHECKLIST.md) | v1.1.0 集成门槛，以及继承的 v1.0.0 真实语料与真人走查 |
+| [后续完善开发计划书](docs/DEVELOPMENT_PLAN.md) | 十条优化路径总纲与历史任务卡（v0.12 → v1.1；当前供应商计划顺延 v1.2+） |
 | [DeepSeek Harness 印刷 Agent 规划](docs/plan/dsh-print-agent.md) | dsh、第一方印刷 skill、PrintOps MCP 与分阶段验收路线 |
 | [开源选型参考](docs/OPEN_SOURCE_OPTIONS.md) | 后续可引入的组件选型 |
 

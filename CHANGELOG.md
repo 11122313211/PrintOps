@@ -1,10 +1,22 @@
 # Changelog
 
-## Unreleased — release status convergence
+## Unreleased
 
-- Restored Python 3.9 runtime compatibility by deferring evaluation of modern type annotations in the agent and real-corpus test entry points; run the local compile and test checks before release. The repository does not currently ship a GitHub Actions workflow.
-- Normalized repository text files to LF and added `.gitattributes` so `git diff --check` is not obscured by platform line-ending changes.
-- Clarified that `1.0.0` is the current code baseline in candidate status. The real-corpus (≥20 cases) and manual walkthrough gates remain open, so the general stable-release claim is intentionally deferred.
+- 后续变更待记录。
+
+## v1.1.0 - 2026-09-10（代码基线候选版）
+
+在 v1.0.0 本地订单内核和安全边界之上，增加受控的 MCP/dsh 本地集成层。此版本不是通用稳定版：真实脱敏语料（≥20 例）、真人走查、真实 dsh headless/模型端到端和浏览器冒烟仍待完成；真实供应商 live 接入不在本版本范围内。
+
+- **MCP/dsh 契约**：新增标准库 JSON-RPC stdio MCP server、session binding、L0/L1 capability 边界、受信 launcher、5 个印刷 skill、profile 示例和锁定的 dsh alpha 运行时元数据。
+- **无 npm/pnpm 本地路径**：新增 Python 标准库 local host 和 MCP transcript smoke，可发现 skill、执行 `initialize`/`tools/list` 与只读工具检查；明确标记为 fallback，不冒充真实 dsh 或 DeepSeek 模型。
+- **模型工具协作**：支持 OpenAI-compatible 原生 `tools[].function` 与 JSON envelope fallback；planner 最多 3 轮，按“工具名 + 参数”阻止完全重复调用；模型只返回自然语言时按本地意图补齐必要的只读工具。
+- **上下文传输优化**：历史限制为最近 8 条、单条最多 2,000 字符；订单摘要和工具结果分别限制 12KB；后续 native 轮次不重复发送完整工具 schema，工具参数不携带完整订单。
+- **确定性边界保持不变**：所有模型/MCP 请求仍经过本地 `Agent.call_tool()`、字段与参数校验、低置信度阻断和人工确认门；未实现真实供应商网络提交或报价回写。
+- **验证**：当前测试套件 236 项、111 例合成评测字段准确率 100%，MCP smoke、上下文边界和离线 native tool-call 链路通过；真实 provider/dsh/browser 验收仍是发布门槛。
+
+- Python 3.9 运行时兼容性恢复；发布检查以本地编译、单测、评测、敏感扫描和空白检查为准，仓库当前不包含 GitHub Actions workflow。
+- 仓库文本统一为 LF，并加入 `.gitattributes`，避免平台换行干扰 `git diff --check`。
 
 ## v1.0.0 - 2026-09-05
 
