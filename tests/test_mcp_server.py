@@ -12,6 +12,7 @@ from agent import Agent
 from mcp_server import (DEFAULT_MEMORY_PATH, MAX_MESSAGE_BYTES, MAX_SAFE_INTEGER,
                         MAX_METHOD_LENGTH,
                         MAX_SESSION_LOCKS, MCP_PROTOCOL_VERSION, PrintOpsMCP)
+from tools import TOOL_SCHEMAS
 
 
 class PrintOpsMCPTest(unittest.TestCase):
@@ -43,13 +44,87 @@ class PrintOpsMCPTest(unittest.TestCase):
         tools = result["result"]["tools"]
         names = {item["name"] for item in tools}
         self.assertEqual(names, {
-            "validate_order", "recommend_processes", "explain_print_term",
+            "validate_order", "get_order_context", "recommend_processes", "explain_print_term",
             "estimate_price", "match_supplier_capability",
         })
         validate = next(item for item in tools if item["name"] == "validate_order")
         self.assertIn("sessionId", validate["inputSchema"]["required"])
         self.assertTrue(validate["inputSchema"]["additionalProperties"] is False)
         self.assertNotIn("order", validate["inputSchema"]["properties"])
+
+    def test_get_order_context_is_read_only_and_bounded(self):
+        session_id = "context-session"
+        agent = Agent(self.server.memory, session_id)
+        agent.chat("做 500 张名片，A4，250g铜版纸，双面四色，下周内")
+        before = agent.state["revision"]
+        server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        response = self.request(server, 2, "tools/call", {
+            "name": "get_order_context", "arguments": {"sessionId": session_id},
+        })
+        self.assertNotIn("error", response)
+        context = response["result"]["structuredContent"]
+        self.assertEqual(context["revision"], before)
+        self.assertEqual(context["order"]["productType"], "名片")
+        self.assertEqual(context["workflowStage"], "recommend")
+        self.assertIn("validation", context)
+        self.assertIn("supplierCapability", context)
+        self.assertIn("knowledgeVersion", context)
+        self.assertNotIn("messages", context)
+        self.assertNotIn("history", context)
+        self.assertNotIn("llm", context)
+        self.assertNotIn("apiKey", json.dumps(context, ensure_ascii=False))
+        self.assertEqual(Agent(self.server.memory, session_id).state["revision"], before)
+
+    def test_get_order_context_can_scope_a_multi_product_item(self):
+        session_id = "context-item"
+        Agent(self.server.memory, session_id).chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        response = self.request(server, 2, "tools/call", {
+            "name": "get_order_context",
+            "arguments": {"sessionId": session_id, "itemIndex": 1},
+        })
+        context = response["result"]["structuredContent"]
+        self.assertEqual(context["activeItemIndex"], 1)
+        self.assertEqual(context["order"]["productType"], "折页")
+        self.assertNotIn("items", context["order"])
+
+    def test_l1_tools_list_exposes_handoff_session_schema(self):
+        server = PrintOpsMCP(self.db, bound_session_id="handoff-schema", capabilities="L0,L1")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+
+        result = self.request(server, 2, "tools/list")
+        tools = result["result"]["tools"]
+        names = {item["name"] for item in tools}
+        self.assertIn("prepare_handoff", names)
+
+        handoff = next(item for item in tools if item["name"] == "prepare_handoff")
+        self.assertNotIn("order", handoff["inputSchema"]["properties"])
+        self.assertNotIn("order", handoff["inputSchema"]["required"])
+        self.assertIn("platformId", handoff["inputSchema"]["properties"])
+        self.assertIs(handoff["inputSchema"]["additionalProperties"], False)
+
+    def test_mcp_shared_tool_schemas_track_public_contract(self):
+        server = PrintOpsMCP(self.db, bound_session_id="schema-parity", capabilities="L0,L1")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        result = self.request(server, 2, "tools/list")
+        listed = {item["name"]: item["inputSchema"] for item in result["result"]["tools"]}
+
+        self.assertTrue(set(TOOL_SCHEMAS).issubset(listed))
+        for name, public_contract in TOOL_SCHEMAS.items():
+            with self.subTest(tool=name):
+                public_schema = public_contract["input"]
+                mcp_schema = listed[name]
+                public_properties = set(public_schema.get("properties", {})) - {"order"}
+                mcp_properties = set(mcp_schema.get("properties", {})) - {"sessionId", "itemId"}
+                self.assertEqual(mcp_properties, public_properties)
+                self.assertEqual(
+                    set(mcp_schema.get("required", [])) - {"sessionId"},
+                    set(public_schema.get("required", [])) - {"order"},
+                )
+                self.assertNotIn("order", mcp_schema.get("properties", {}))
+                self.assertIs(mcp_schema.get("additionalProperties"), False)
 
     def test_tool_call_uses_persisted_session_and_returns_projected_result(self):
         self.initialize()
@@ -300,6 +375,8 @@ class PrintOpsMCPTest(unittest.TestCase):
         })
         self.assertFalse(encrypted["result"]["structuredContent"]["toolResult"]["ok"])
         self.assertIn("已加密", encrypted["result"]["structuredContent"]["toolResult"]["message"])
+        self.assertTrue(encrypted["result"]["structuredContent"]["toolResult"]["encrypted"])
+        self.assertTrue(encrypted["result"]["structuredContent"]["toolResult"]["readable"])
 
         unreadable = self.request(server, 3, "tools/call", {
             "name": "preflight_file",
@@ -309,6 +386,68 @@ class PrintOpsMCPTest(unittest.TestCase):
         })
         self.assertFalse(unreadable["result"]["structuredContent"]["toolResult"]["ok"])
         self.assertIn("无法读取", unreadable["result"]["structuredContent"]["toolResult"]["message"])
+        self.assertFalse(unreadable["result"]["structuredContent"]["toolResult"]["encrypted"])
+        self.assertFalse(unreadable["result"]["structuredContent"]["toolResult"]["readable"])
+
+    def test_preflight_schema_and_gateway_require_both_scanner_flags(self):
+        server = PrintOpsMCP(self.db, bound_session_id="preflight-contract", capabilities="L0,L1")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        listed = self.request(server, 2, "tools/list")
+        tool = next(item for item in listed["result"]["tools"] if item["name"] == "preflight_file")
+        self.assertEqual(
+            {"sessionId", "fileName", "sizeBytes", "encrypted", "readable"},
+            set(tool["inputSchema"]["required"]),
+        )
+        missing = self.request(server, 3, "tools/call", {
+            "name": "preflight_file",
+            "arguments": {"sessionId": "preflight-contract", "fileName": "x.pdf", "sizeBytes": 1},
+        })
+        self.assertEqual(missing["error"]["data"]["code"], "invalid_arguments")
+
+    def test_handoff_is_not_a_deliverable_when_supplier_capability_is_unsupported(self):
+        session_id = "unsupported-handoff"
+        agent = Agent(self.server.memory, session_id)
+        agent.state["order"].update({
+            "productType": "名片", "quantity": "500 张", "quantityValue": 500,
+            "quantityUnit": "张", "size": "A4", "paper": "PVC板",
+            "printing": "双面四色", "deadline": "下周", "platform": "shengda",
+        })
+        agent.state["selectedOption"] = "balanced"
+        agent.memory.save(session_id, agent.state)
+        server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0,L1")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        response = self.request(server, 2, "tools/call", {
+            "name": "prepare_handoff", "arguments": {"sessionId": session_id},
+        })
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["toolResult"]["status"], "blocked")
+        self.assertEqual(payload["toolResult"]["reason"], "supplier_unsupported")
+        self.assertNotIn("handoff", payload)
+
+    def test_handoff_accepts_a_valid_target_platform_without_mutating_session(self):
+        session_id = "handoff-target"
+        agent = Agent(self.server.memory, session_id)
+        agent.state["order"].update({
+            "productType": "名片", "quantity": "500 张", "quantityValue": 500,
+            "quantityUnit": "张", "size": "A4", "paper": "250g 铜版纸",
+            "printing": "双面四色", "deadline": "下周", "platform": "generic",
+        })
+        agent.state["selectedOption"] = "balanced"
+        agent.memory.save(session_id, agent.state)
+        server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0,L1")
+        self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
+        listed = self.request(server, 2, "tools/list")
+        schema = next(item for item in listed["result"]["tools"] if item["name"] == "prepare_handoff")["inputSchema"]
+        self.assertIn("platformId", schema["properties"])
+        response = self.request(server, 3, "tools/call", {
+            "name": "prepare_handoff",
+            "arguments": {"sessionId": session_id, "platformId": "shengda"},
+        })
+        self.assertNotIn("error", response)
+        payload = response["result"]["structuredContent"]
+        self.assertEqual(payload["toolResult"]["status"], "ready")
+        self.assertEqual(payload["toolResult"]["platform"]["name"], "盛大印刷")
+        self.assertEqual(Agent(self.server.memory, session_id).state["order"]["platform"], "generic")
 
     def test_multi_product_selectors_are_range_checked_and_item_id_resolves(self):
         session_id = "multi-session"

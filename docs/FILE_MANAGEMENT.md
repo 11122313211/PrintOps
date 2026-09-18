@@ -7,7 +7,7 @@ PrintOps 采用“源码/规则可提交，运行数据留本机”的目录策�
 
 | 范围 | 例子 | Git 策略 |
 | --- | --- | --- |
-| 共享源码与规则 | `*.py`、`app.js`、`styles.css`、`.dsh/skills/` | 提交 |
+| 共享源码与规则 | `*.py`、`app.js`、`markdown.js`、`styles.css`、`.dsh/skills/` | 提交 |
 | 共享文档与测试 | `README*`、`docs/`、`tests/` | 提交；测试样例必须脱敏 |
 | 运行状态 | `data/agent.sqlite3*`、`data/corrupted/` | 只留本机 |
 | 模型配置 | `data/llm_config.json`、`.env*`（`.env.example` 除外） | 只留本机 |

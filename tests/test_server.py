@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import server
 from agent import Agent, Memory
@@ -38,6 +39,15 @@ class ServerContractTest(unittest.TestCase):
 
         result = self.request("GET", "/api/tools")
         self.assertTrue(any(item["name"] == "validate_order" for item in result["tools"]))
+        by_name = {item["name"]: item for item in result["tools"]}
+        for item in by_name.values():
+            schema = item.get("input") or {}
+            self.assertNotIn("order", schema.get("properties", {}))
+            self.assertNotIn("order", schema.get("required", []))
+        self.assertEqual(
+            set(by_name["preflight_file"]["input"]["required"]),
+            {"fileName", "sizeBytes", "encrypted", "readable"},
+        )
 
         platforms = self.request("GET", "/api/platforms")
         self.assertTrue(platforms["platforms"])
@@ -49,6 +59,100 @@ class ServerContractTest(unittest.TestCase):
         self.assertTrue(catalog["knowledge"]["dimensionDefinitions"]["size"]["requiresConfirmation"])
         self.assertTrue(catalog["products"])
         self.assertEqual(catalog["products"][0]["knowledge"]["version"], catalog["knowledge"]["version"])
+
+    def test_model_test_uses_agent_capability_probe(self):
+        expected = {
+            "ok": True, "chat": True, "jsonPlan": True, "nativeTools": False,
+            "toolContinuation": False, "chosenProtocol": "json_fallback", "agentReady": True,
+            "message": "接口支持 JSON 规划，可使用兼容模式运行 Agent。", "latencyMs": 12,
+            "errors": {},
+        }
+
+        class FakePlanner:
+            timeout = 10
+            allow_private_hosts = True
+            base_url = "https://example.test/v1"
+            model = "saved-model"
+            api_key = "saved-key"
+
+            def __init__(self):
+                self.capability_calls = 0
+
+            def test_capabilities(self):
+                self.capability_calls += 1
+                return expected
+
+            def test_connection(self):
+                raise AssertionError("legacy connectivity probe must not be used")
+
+            def public_config(self):
+                return {"enabled": True, "model": self.model, "url": self.base_url}
+
+        planner = FakePlanner()
+        server.PLANNER = planner
+        handler = server.Handler.__new__(server.Handler)
+        handler.path = "/api/model/test"
+        handler._guard = lambda: True
+        handler.read_json = lambda: {}
+        handler.reply = lambda payload: payload
+        result = handler.do_POST()
+        self.assertEqual(result["test"], expected)
+        self.assertTrue(result["test"]["agentReady"])
+        self.assertEqual(result["test"]["chosenProtocol"], "json_fallback")
+        self.assertEqual(planner.capability_calls, 1)
+
+    def test_model_test_unsaved_override_reuses_saved_key_without_exposing_it(self):
+        class ProbePlanner:
+            timeout = 7
+            allow_private_hosts = True
+            base_url = ""
+            model = ""
+            api_key = ""
+
+            def __init__(self, timeout=0, allow_private_hosts=False):
+                self.timeout = timeout
+                self.allow_private_hosts = allow_private_hosts
+
+            def configure(self, url, model, key):
+                self.base_url, self.model, self.api_key = url, model, key
+
+            def test_capabilities(self):
+                return {"chosenProtocol": "chat_only", "agentReady": False, "chat": True}
+
+            def public_config(self):
+                return {"enabled": True, "url": self.base_url, "model": self.model,
+                        "keyConfigured": bool(self.api_key)}
+
+        server.PLANNER.base_url = "https://example.test/v1"
+        server.PLANNER.model = "saved-model"
+        server.PLANNER.api_key = "saved-key"
+        with patch.object(server, "OpenAICompatiblePlanner", ProbePlanner):
+            result = server.test_llm_capabilities({
+                "url": "https://example.test/v1", "model": "saved-model", "key": "",
+            })
+        self.assertTrue(result["llm"]["keyConfigured"])
+        self.assertNotIn("saved-key", repr(result))
+        self.assertEqual(result["test"]["chosenProtocol"], "chat_only")
+
+    def test_settings_ui_has_distinct_agent_capability_states(self):
+        app = (server.ROOT / "app.js").read_text(encoding="utf-8")
+        page = (server.ROOT / "index.html").read_text(encoding="utf-8")
+        for label in ("Agent 工具链可用 · 原生工具", "Agent 工具链可用 · JSON 兼容",
+                      "仅支持聊天 · 不满足 Agent 协议", "接口不可用"):
+            self.assertIn(label, app)
+        for element_id in ("capability-agent", "capability-json", "capability-native", "capability-chat"):
+            self.assertIn(f'id="{element_id}"', page)
+
+    def test_chat_bubbles_and_composer_preview_use_the_markdown_renderer(self):
+        app = (server.ROOT / "app.js").read_text(encoding="utf-8")
+        page = (server.ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("renderMessageBody(bubble, text)", app)
+        self.assertIn("markdown.render(value)", app)
+        self.assertIn("renderComposerPreview", app)
+        self.assertIn('id="composer-preview-body"', page)
+        self.assertIn('id="preview-toggle"', page)
+        self.assertLess(page.index("markdown.js"), page.index("app.js"))
+        self.assertTrue((server.ROOT / "markdown.js").is_file())
 
     def test_multi_product_item_index_is_preserved_across_http_requests(self):
         initial = {
@@ -139,16 +243,31 @@ class ServerContractTest(unittest.TestCase):
         session_id = result["sessionId"]
         blocked = self.request("POST", "/api/preflight", {
             "sessionId": session_id, "fileName": "artwork.pdf", "sizeBytes": 1024, "pageCount": 1,
+            "encrypted": False, "readable": True,
         })
         self.assertEqual(blocked["toolResult"]["reason"], "item_required")
 
         checked = self.request("POST", "/api/preflight", {
             "sessionId": session_id, "itemIndex": 1, "fileName": "fold.pdf",
             "sizeBytes": 1024, "pageCount": 1,
+            "encrypted": False, "readable": True,
         })
         self.assertTrue(checked["toolResult"]["ok"])
         self.assertEqual(checked["toolResult"]["itemIndex"], 1)
         self.assertEqual(checked["order"]["items"][1]["uploadedFile"], "fold.pdf")
+
+    def test_preflight_route_does_not_guess_encryption_or_readability(self):
+        with self.assertRaises(server.RequestError) as missing:
+            self.request("POST", "/api/preflight", {
+                "fileName": "artwork.pdf", "sizeBytes": 1024,
+            })
+        self.assertEqual(missing.exception.code, "INVALID_PAYLOAD")
+        with self.assertRaises(server.RequestError) as stringly:
+            self.request("POST", "/api/preflight", {
+                "fileName": "artwork.pdf", "sizeBytes": 1024,
+                "encrypted": "false", "readable": True,
+            })
+        self.assertEqual(stringly.exception.code, "INVALID_PAYLOAD")
 
     def test_bad_json_and_unknown_route_have_safe_request_ids(self):
         with self.assertRaises(server.RequestError) as unknown:

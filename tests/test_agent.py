@@ -67,6 +67,40 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(restored["order"]["quantityUnit"], "份")
         self.assertEqual(restored["toolTrace"], ["恢复会话记忆"])
 
+    def test_process_options_are_persisted_and_snapshot_does_not_recompute(self):
+        first = self.agent.chat("做 100 份 A5 名片，下周内拿到", {
+            "paper": "250g 铜版纸", "printing": "双面四色",
+        })
+        self.assertEqual(len(first["processOptions"]), 3)
+        restored_agent = Agent(self.memory, self.agent.id)
+        with mock_patch.object(restored_agent, "_call", side_effect=AssertionError("不应重新推荐")):
+            restored = restored_agent.snapshot()
+        self.assertEqual(len(restored["options"]), 3)
+        self.assertEqual(restored_agent.state["processOptions"][0]["id"], "economy")
+
+    def test_preflight_result_persists_and_becomes_stale_after_order_change(self):
+        self.agent.chat("做 100 份 A5 名片，下周内拿到", {
+            "paper": "250g 铜版纸", "printing": "双面四色",
+        })
+        self.agent.upload("art.pdf", 1024, 1, False, True,
+                          {"isPdf": True, "hasEof": True})
+        restored = Agent(self.memory, self.agent.id)
+        self.assertFalse(restored.state["preflightResults"]["stale"])
+        restored.chat("尺寸改成A4")
+        self.assertTrue(restored.state["preflightResults"]["stale"])
+        self.assertEqual(restored.state["preflightResults"]["status"], "stale")
+
+    def test_context_snapshot_excludes_history_and_provider_secrets(self):
+        self.agent.chat("做 100 份 A5 名片，下周内拿到", {
+            "paper": "250g 铜版纸", "printing": "双面四色",
+        })
+        self.agent.planner = type("Planner", (), {"api_key": "secret-key"})()
+        context = self.agent.context_snapshot()
+        self.assertNotIn("messages", context)
+        self.assertNotIn("history", context)
+        self.assertNotIn("api_key", json.dumps(context, ensure_ascii=False))
+        self.assertNotIn("secret-key", json.dumps(context, ensure_ascii=False))
+
     def test_old_session_quantity_is_migrated_to_structured_fields(self):
         legacy_id = "legacy-session"
         legacy = self.memory.fresh_state()
@@ -535,6 +569,91 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result["order"]["items"][1]["paper"], "250g 铜版纸")
         self.assertEqual(result["order"]["items"][0]["paper"], "157g 哑粉纸")
         self.assertEqual(result["activeItemIndex"], 1)
+
+    def test_ordinal_price_action_targets_item_without_overwriting_another_item(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+
+        result = self.agent.chat("第 2 项折页多少钱")
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertEqual(result["order"]["items"][0]["productType"], "名片")
+        self.assertEqual(result["order"]["items"][1]["productType"], "折页")
+        self.assertEqual(result["toolResult"]["itemIndex"], 1)
+        self.assertIsNotNone(result["toolResult"]["range"])
+        self.assertIn("调用工具：estimate_price", result["toolTrace"])
+
+    def test_explicit_item_index_with_action_does_not_stop_after_focusing(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+
+        result = self.agent.chat("多少钱", item_index=1)
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertEqual(result["toolResult"]["itemIndex"], 1)
+        self.assertIn("调用工具：estimate_price", result["toolTrace"])
+
+    def test_ordinal_price_action_is_forced_for_reply_only_planner(self):
+        class ReplyOnlyPlanner:
+            enabled = True
+            model = "reply-only"
+            last_error = ""
+
+            def plan(self, *_args, **_kwargs):
+                return {"reply": "我先文字回复。", "patch": {}, "tool": None}
+
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.planner = ReplyOnlyPlanner()
+
+        result = self.agent.chat("第 2 项多少钱")
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertEqual(result["toolResult"]["itemIndex"], 1)
+        self.assertIn("调用工具：estimate_price", result["toolTrace"])
+
+    def test_ordinal_field_update_without_focus_verb_is_item_local(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+
+        result = self.agent.chat("第 2 项三折")
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertEqual(result["order"]["items"][1]["productSpecs"]["folding"], "三折")
+        self.assertNotIn("folding", result["order"]["items"][0].get("productSpecs", {}))
+
+    def test_ordinal_quote_action_calls_selected_item_quote_tool(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("第 2 项三折")
+        self.agent.choose("balanced", item_index=1)
+
+        result = self.agent.chat("第 2 项询价")
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertEqual(result["toolResult"]["itemIndex"], 1)
+        self.assertEqual(result["toolResult"]["status"], "awaiting_human_confirmation")
+        self.assertIn("调用工具：request_supplier_quote", result["toolTrace"])
+
+    def test_explicit_tool_and_choose_item_indexes_update_focus(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("第 2 项三折")
+
+        estimated = self.agent.call_tool("estimate_price", {"itemIndex": 1})
+        self.assertEqual(estimated["activeItemIndex"], 1)
+        self.assertEqual(estimated["toolResult"]["itemIndex"], 1)
+
+        chosen = self.agent.choose("balanced", item_index=0)
+        self.assertEqual(chosen["activeItemIndex"], 0)
+        self.assertEqual(chosen["toolResult"]["itemIndex"], 0)
+
+    def test_ordinal_generate_action_keeps_aggregate_multi_product_boundary(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("第 2 项三折")
+        self.agent.choose("balanced", item_index=1)
+        self.agent.choose("balanced", item_index=0)
+
+        result = self.agent.chat("第 2 项生成订单")
+
+        self.assertEqual(result["activeItemIndex"], 1)
+        self.assertTrue(result["orderGenerated"])
+        self.assertEqual(result["handoff"]["status"], "ready")
+        self.assertEqual(len(result["handoff"]["items"]), 2)
 
     def test_multi_product_items_can_recommend_choose_and_generate_separately(self):
         self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")

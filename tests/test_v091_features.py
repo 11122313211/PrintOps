@@ -33,6 +33,11 @@ class SizeSemanticsTest(unittest.TestCase):
 
 
 class PerceptionFixTest(unittest.TestCase):
+    def test_unrelated_follow_up_does_not_emit_empty_dimension_patch(self) -> None:
+        data, _ = perceive("请生成交接单", product_hint="名片")
+        self.assertNotIn("size", data)
+        self.assertNotIn("dimensions", data)
+
     def test_negation_window_does_not_cross_punctuation(self) -> None:
         data, _ = perceive("不要烫金，改哑膜")
         self.assertEqual(data["finishing"], "哑膜")

@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Zero dependencies · Local-first · Rule mode stays local · Model mode sends only bounded context · Nothing ships without human confirmation**
@@ -22,7 +22,7 @@ PrintOps is a local-first print order agent for marketing, design, and procureme
 
 > Positioning: a **pre-order intake and communication** tool. It does not place orders automatically, does not replace prepress checks, and does not promise real quotes — every outward-facing action stops before the human-confirmation gate.
 
-> Release status: this is the `1.1.0` code baseline in candidate status, focused on controlled local MCP/dsh integration. It adds the standard-library MCP server, five print skills, an npm/pnpm-free local host, a bounded model tool loop, and explicit context budgets; runtime dependencies remain limited to the Python standard library. The 20-case real-corpus gate, manual walkthrough, real dsh headless/model end-to-end checks, and browser smoke tests are still pending, so do not treat it as a general stable release. The v1.0.0 order kernel and security gates remain the historical baseline; live supplier integration is out of scope for this release and moves to v1.2+.
+> Release status: this is the `1.2.0` code baseline in candidate status, focused on local runtime hardening and a zero-dependency Markdown renderer. On top of the v1.1.0 controlled MCP/dsh integration it adds the model tool protocol and a session-context endpoint, graceful shutdown for MCP and HTTP, concurrency and timeout bounds, structured request logging, and a startup self-check; runtime dependencies remain limited to the Python standard library. The 20-case real-corpus gate, manual walkthrough, real dsh headless/model end-to-end checks, and browser smoke tests are still pending, so do not treat it as a general stable release. The v1.0.0 order kernel and the v1.1.0 integration boundary remain the historical baseline; the controlled live supplier integration planned for v1.2 moves to v1.3+.
 
 **North star**: let a non-printer person turn a vague requirement into a complete, reliable, traceable print order within 10 minutes.
 
@@ -32,12 +32,13 @@ PrintOps is a local-first print order agent for marketing, design, and procureme
 - 🗣️ Natural-language intake: product type, quantity, size, paper, color, finishing, binding, deadline, budget; supports revisions and negations (“change quantity to 1200”, “no lamination”)
 - 📐 Four size semantics: finished size / expanded size / die-cut size / package 3D size; labeled inputs are routed by meaning; inner vs outer box sizes supported
 - 🧩 Multi-product orders: each item gets a stable `itemId` with its own parameters, plan, and hand-off state
+- 💬 Chat bubbles render Markdown (headings, lists, tables, code, quotes, links); text is HTML-escaped before parsing, only http(s)/mailto links are emitted, and the composer has a preview toggle
 
 **Professional rules up front (explainable, versioned)**
 - 🏭 Gang-run vs dedicated press: per-plan print mode, batch color-shift caveats, spot-color limits, dedicated-press premium factor
 - 💰 Reference prices: sample price parameter table (category base × quantity tier × finishing factor × print-mode factor, versioned) — explicitly “not a quote”
 - 📏 Minimum-quantity hints, imposition hints (sheet counts and utilization on 大度/正度 sheets), saddle-stitch page-count rules, and other trade practices
-- 🧾 Category-specific parameters: a 16-product catalog (business cards, labels, boxes, bags, cups, wide-format prints…) with category-aware follow-up questions
+- 🧾 Category-specific parameters: a 17-product catalog (business cards, labels, boxes, bags, cups, wide-format prints…) with category-aware follow-up questions
 
 **Explainable, confirmable**
 - 🔍 Field provenance: every field records its source (user / rule / model) and confidence; low-confidence production fields block the hand-off until confirmed
@@ -186,7 +187,7 @@ Full design in [Architecture & data contracts](docs/ARCHITECTURE.md) (Chinese).
 ## 🔐 Security Model
 
 - **Local access token**: every endpoint except `/api/health` requires `X-PrintOps-Token` (a per-process random token injected into the served page); cross-origin requests get 403
-- **Static whitelist**: only `/`, `/index.html`, `/app.js`, `/styles.css` are served; source, docs, and runtime data return 404
+- **Static whitelist**: only `/`, `/index.html`, `/app.js`, `/markdown.js`, `/styles.css` are served; source, docs, and runtime data return 404
 - **SSRF protection**: LLM endpoint URLs reject loopback / private / CGNAT / reserved / link-local hosts by default; trusted internal endpoints require the explicit `PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1` opt-in
 - **API keys**: stored only in local `data/llm_config.json` (permission 600), never in logs, exports, or Git; the UI warns about plaintext storage — prefer environment variables
 - **Durability**: SQLite runs with WAL and a 5s busy timeout; corrupted sessions are quarantined (backed up to `data/corrupted/`) without taking the service down
@@ -203,18 +204,20 @@ python3 tools/secret_scan.py                           # secret scanning
 python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 tool-boundary smoke
 ```
 
-Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. The project does not depend on GitHub Actions; run the Python checks locally before release. The 1.1.0 MCP/dsh and context gates are listed in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md).
+Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. The project does not depend on GitHub Actions; run the Python checks locally before release. The v1.2.0 runtime and rendering gates, plus the inherited MCP/dsh and context gates, are listed in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md).
 
-The current worktree has verified 236 Python tests, MCP smoke, context-boundary
-tests, and the offline native-tool loop. Real dsh headless, three live internal
-model walkthroughs, and browser-level smoke tests remain release acceptance items.
+The current worktree holds 325 Python tests (the committed v1.1.0 baseline has 236),
+alongside passing MCP smoke, context-boundary tests, and the offline native-tool loop.
+Real dsh headless, three live internal model walkthroughs, and browser-level smoke
+tests remain release acceptance items.
 
-The 1.1 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese) and retains the v1.0.0 historical gates.
+The 1.2 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese) and retains the v1.0.0 and v1.1.0 historical gates.
 
 ## 🗺️ Roadmap
 
-- **v1.1.0 (current code baseline, candidate status)**: the v1.0.0 order kernel plus MCP/dsh skill boundaries, an npm/pnpm-free local host, native/JSON tool-planning fallback, a bounded three-round tool loop, and bounded context transport; real-corpus, manual, real dsh/model, and browser gates remain open
-- **v1.2+ (planned)**: controlled supplier integration (capability profiles + field adapters → quote drafts → human-confirmed submission), real quote write-back, and production lead-time scheduling; no live supplier submission is included today
+- **v1.2.0 (current code baseline, candidate status)**: local runtime hardening and a zero-dependency Markdown renderer on top of the v1.1.0 integration boundary; real-corpus, manual, real dsh/model, and browser gates remain open
+- **v1.1.0 (historical baseline)**: the v1.0.0 order kernel plus MCP/dsh skill boundaries, an npm/pnpm-free local host, native/JSON tool-planning fallback, a bounded three-round tool loop, and bounded context transport
+- **v1.3+ (planned)**: controlled supplier integration (capability profiles + field adapters → quote drafts → human-confirmed submission), real quote write-back, and production lead-time scheduling; no live supplier submission is included today
 - Ongoing: replacing synthetic evaluation cases with real desensitized orders, expanding the trade-rule library, LLM lock and session isolation improvements
 
 See the full [ROADMAP](docs/ROADMAP.md).
@@ -225,7 +228,7 @@ See the full [ROADMAP](docs/ROADMAP.md).
 | --- | --- |
 | [Architecture & data contracts](docs/ARCHITECTURE.md) | Module responsibilities, field contracts, confidence & migration strategy (Chinese) |
 | [Roadmap](docs/ROADMAP.md) | Milestones and the hardening backlog (Chinese) |
-| [1.1 release checklist](docs/RELEASE_CHECKLIST.md) | v1.1.0 integration gates plus inherited v1.0.0 real-corpus and manual walkthrough gates (Chinese) |
+| [1.2 release checklist](docs/RELEASE_CHECKLIST.md) | v1.2.0 runtime and rendering gates plus inherited v1.0.0/v1.1.0 corpus, walkthrough, and integration gates (Chinese) |
 | [File management & publishing boundary](docs/FILE_MANAGEMENT.md) | GitHub Desktop scope, local runtime data, and pre-push checks (Chinese) |
 | [DeepSeek Harness print-agent plan](docs/plan/dsh-print-agent.md) | dsh, first-party print skills, PrintOps MCP, and staged acceptance gates (Chinese) |
 

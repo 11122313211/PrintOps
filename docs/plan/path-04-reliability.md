@@ -2,6 +2,10 @@
 
 > 优先级 P1　目标版本 v0.12.0　预估工作量 2-3 人日　依赖：无（与路径 1 同期实施最优）
 
+> ⚠️ 排期已作废（2026-09-18）：本路径原定目标版本未发布，实际发布线为 v0.11.0 → v1.0.0 → v1.1.0。
+> 本文保留方案设计、接口契约与任务卡作为设计参考；文中代码快照与行数取自 2026-09-05。
+> 当前进度与优先级以 `docs/ROADMAP.md` 与 `docs/RELEASE_CHECKLIST.md` 为准。
+
 ## 1. 现状与问题（逐项对应 ROADMAP P1/P2 遗留）
 
 1. **全局 LLM_LOCK 串行化**：`server.py` 的 `LLM_LOCK` 在 `/api/settings`、`/api/model/test` 之外并未覆盖 chat（chat 直接使用共享 `PLANNER`），但 `PLANNER.last_error` 是实例级共享状态——两个会话并发聊天时，A 会话的错误信息会被 B 会话覆盖，UI 显示的"上次调用失败"可能张冠李戴；`configure()`（保存设置）也可能在另一线程的 `plan()` 进行中改写 `base_url`。

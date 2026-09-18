@@ -144,6 +144,37 @@ class ToolBoundaryTest(unittest.TestCase):
         self.assertIn("paper", quote["toolResult"]["uncertain"])
         self.assertEqual(self.agent.state["quoteRequests"], [])
 
+    def test_public_handoff_blocks_unsupported_supplier_and_has_no_handoff_payload(self):
+        self.agent.state["order"].update({
+            "productType": "名片", "quantity": "500 张", "quantityValue": 500,
+            "quantityUnit": "张", "size": "A4", "paper": "PVC板",
+            "printing": "双面四色", "deadline": "下周", "platform": "shengda",
+        })
+        self.agent.state["selectedOption"] = "balanced"
+        self.agent.memory.save(self.agent.id, self.agent.state)
+
+        result = self.agent.call_tool("prepare_handoff", {}, remember=False)
+        self.assertEqual(result["toolResult"]["status"], "blocked")
+        self.assertEqual(result["toolResult"]["reason"], "supplier_unsupported")
+        self.assertIsNone(result["handoff"])
+
+    def test_handoff_platform_override_is_validated_and_not_persisted(self):
+        self.agent.state["order"].update({
+            "productType": "名片", "quantity": "500 张", "quantityValue": 500,
+            "quantityUnit": "张", "size": "A4", "paper": "250g 铜版纸",
+            "printing": "双面四色", "deadline": "下周", "platform": "generic",
+        })
+        self.agent.state["selectedOption"] = "balanced"
+        self.agent.memory.save(self.agent.id, self.agent.state)
+
+        invalid = self.agent.call_tool("prepare_handoff", {"platformId": "unknown"}, remember=False)
+        self.assertEqual(invalid["toolResult"]["status"], "invalid_arguments")
+
+        result = self.agent.call_tool("prepare_handoff", {"platformId": "shengda"}, remember=False)
+        self.assertEqual(result["toolResult"]["status"], "ready")
+        self.assertEqual(result["toolResult"]["platform"]["name"], "盛大印刷")
+        self.assertEqual(self.agent.state["order"]["platform"], "generic")
+
     def test_product_switch_restoration_rejects_alias_keys_and_booleans(self):
         class AliasKey:
             def __str__(self):

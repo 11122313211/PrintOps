@@ -11,7 +11,9 @@ import unicodedata
 from copy import deepcopy
 from typing import Any
 
-from order_model import QUANTITY_CAPTURE, _is_three_dimensional_size, normalize_order_dimensions, parse_quantity
+from order_model import (DIMENSION_DEFAULTS, QUANTITY_CAPTURE,
+                         _is_three_dimensional_size,
+                         normalize_order_dimensions, parse_quantity)
 from product_knowledge import alias_map, find_product
 
 
@@ -201,7 +203,14 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
             # Placeholder values ("需确认刀模文件") mark an inference, not a
             # user statement, so they must be confirmed before generation.
             confidence[f"productSpecs.{key}"] = 0.55 if "需确认" in str(value) else 0.85
-    normalize_order_dimensions(data)
+    # ``normalize_order_dimensions`` is a state normalizer and therefore adds
+    # all canonical keys.  A perception result is a sparse patch: adding empty
+    # dimensions to an unrelated follow-up (for example "生成交接单") would
+    # erase the remembered size and invalidate the user's selected option.
+    dimension_specs = set(DIMENSION_DEFAULTS) | {"boxSize", "bagSize"}
+    if ("size" in data or "dimensions" in data
+            or any(key in dimension_specs for key in (data.get("productSpecs") or {}))):
+        normalize_order_dimensions(data)
     if allow_multi:
         mentions = _find_product_mentions(text)
         distinct_products = list(dict.fromkeys(item[0] for item in mentions))

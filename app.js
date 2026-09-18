@@ -452,6 +452,42 @@ function scrollFeedToBottom() {
   feed.scrollTop = feed.scrollHeight;
 }
 
+let markdownFallbackReported = false;
+
+/* 渲染器缺失最典型的成因：本地服务是在本次更新前启动的，静态白名单里没有 markdown.js（404）。
+   这类失败必须可见，否则气泡会安静地退回纯文本，看起来像"功能没生效"。 */
+function reportMissingMarkdownRenderer() {
+  if (markdownFallbackReported) return;
+  markdownFallbackReported = true;
+  console.warn("[PrintOps] markdown.js 未加载，气泡已回退为纯文本。请重启本地服务（python3 server.py）并强制刷新页面。");
+  showToast("Markdown 渲染器未加载：请重启本地服务后刷新页面", "error");
+}
+
+/* 气泡正文统一交给 markdown.js 渲染；脚本未加载时退回纯文本，保证内容不丢。 */
+function renderMessageBody(node, text) {
+  const value = String(text ?? "");
+  const markdown = window.PrintOpsMarkdown;
+  if (markdown?.render) node.innerHTML = markdown.render(value);
+  else {
+    node.textContent = value;
+    reportMissingMarkdownRenderer();
+  }
+}
+
+/* 输入框预览只影响展示：发送给后端的始终是 #message-input 里的原始文本。 */
+function renderComposerPreview() {
+  const input = $("#message-input");
+  const toggle = $("#preview-toggle");
+  const preview = $("#composer-preview");
+  const body = $("#composer-preview-body");
+  if (!input || !toggle || !preview || !body) return;
+  const hasContent = Boolean(input.value.trim());
+  toggle.hidden = !hasContent;
+  const active = hasContent && toggle.getAttribute("aria-pressed") === "true";
+  preview.hidden = !active;
+  if (active) renderMessageBody(body, input.value);
+}
+
 function addMessage(role, text) {
   const stick = isFeedNearBottom();
   const message = document.createElement("div");
@@ -461,8 +497,8 @@ function addMessage(role, text) {
   avatar.textContent = role === "assistant" ? "AI" : "我";
   const content = document.createElement("div");
   const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
+  bubble.className = "bubble markdown-body";
+  renderMessageBody(bubble, text);
   const meta = document.createElement("div");
   meta.className = "message-meta";
   meta.textContent = `${role === "assistant" ? "印刷订单智能体" : "我"} · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date())}`;
@@ -529,7 +565,7 @@ function setComposerBusy(busy) {
   if (quoteCancel && busy) quoteCancel.disabled = true;
   const platform = $("#platform-select");
   if (platform) platform.disabled = busy;
-  document.querySelectorAll("#quick-replies button, #tool-list button, #catalog-list button, #parameter-form input").forEach((item) => { item.disabled = busy; });
+  document.querySelectorAll("#quick-replies button, #tool-list button, #catalog-list button, #parameter-form input, #preview-toggle").forEach((item) => { item.disabled = busy; });
   if (busy) {
     $("#agent-status").innerHTML = '<span class="status-dot thinking"></span>正在处理';
     $("#agent-trace").textContent = "正在分析需求…";
@@ -587,9 +623,12 @@ function renderSettings(data) {
   const hasError = enabled && Boolean(llmSettings.lastError);
   const protocolLabel = { native_tools: "原生工具", json_fallback: "JSON 兼容", error: "连接异常" }[llmSettings.protocolMode] || "自动协议";
   const stateText = $("#settings-state");
-  if (stateText) stateText.textContent = enabled
-    ? (hasError ? `已配置：${llmSettings.model}（上次调用失败，已回退 · ${protocolLabel}）` : `已启用：${llmSettings.model} · ${protocolLabel}`)
-    : "当前使用规则模式";
+  if (stateText) {
+    stateText.textContent = enabled
+      ? (hasError ? `已配置：${llmSettings.model}（上次调用失败，已回退 · ${protocolLabel}）` : `已启用：${llmSettings.model} · ${protocolLabel}`)
+      : "当前使用规则模式";
+    stateText.classList.remove("is-ready", "is-warning", "is-error");
+  }
   const note = $("#settings-note");
   if (note) note.textContent = data?.keyStorageWarning
     || (llmSettings.privateHostsAllowed
@@ -606,6 +645,48 @@ function renderSettings(data) {
   }
   const button = $("#settings-button");
   if (button) button.textContent = hasError ? "接口异常" : enabled ? "接口已启用" : "接口设置";
+  const capabilities = $("#settings-capabilities");
+  if (capabilities) capabilities.hidden = true;
+}
+
+function modelCapabilityPresentation(test = {}) {
+  if (test.agentReady && test.chosenProtocol === "native_tools") {
+    return { label: "Agent 工具链可用 · 原生工具", tone: "ready" };
+  }
+  if (test.agentReady && test.chosenProtocol === "json_fallback") {
+    return { label: "Agent 工具链可用 · JSON 兼容", tone: "ready" };
+  }
+  if (test.chosenProtocol === "chat_only" || (test.chat && !test.agentReady)) {
+    return { label: "仅支持聊天 · 不满足 Agent 协议", tone: "warning" };
+  }
+  return { label: "接口不可用", tone: "error" };
+}
+
+function renderModelCapabilities(test = {}) {
+  const presentation = modelCapabilityPresentation(test);
+  const latency = Number.isFinite(Number(test.latencyMs)) ? ` · ${Number(test.latencyMs)}ms` : "";
+  const stateText = $("#settings-state");
+  if (stateText) {
+    stateText.textContent = `${presentation.label}${latency}（尚未保存）`;
+    stateText.classList.remove("is-ready", "is-warning", "is-error");
+    stateText.classList.add(`is-${presentation.tone}`);
+  }
+
+  const setCapability = (selector, supported, detail = "") => {
+    const node = $(selector);
+    if (!node) return;
+    node.textContent = detail || (supported ? "支持" : "不支持");
+    node.className = supported ? "is-supported" : "is-unsupported";
+  };
+  setCapability("#capability-agent", Boolean(test.agentReady),
+    test.agentReady ? "可用" : "不可用");
+  setCapability("#capability-json", Boolean(test.jsonPlan));
+  setCapability("#capability-native", Boolean(test.nativeTools),
+    test.nativeTools && !test.toolContinuation ? "可调用，续接失败" : "");
+  setCapability("#capability-chat", Boolean(test.chat));
+  const capabilities = $("#settings-capabilities");
+  if (capabilities) capabilities.hidden = false;
+  return presentation;
 }
 
 function hasValue(value) {
@@ -1467,6 +1548,7 @@ async function sendMessage(text, patch) {
   addMessage("user", text);
   $("#message-input").value = "";
   autoGrowComposer();
+  renderComposerPreview();
   setComposerBusy(true);
   pendingMessage = addPendingMessage();
   try {
@@ -1512,7 +1594,12 @@ async function callTool(toolName, payload = {}) {
 }
 
 $("#message-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#message-input").value); });
-$("#message-input").addEventListener("input", autoGrowComposer);
+$("#message-input").addEventListener("input", () => { autoGrowComposer(); renderComposerPreview(); });
+$("#preview-toggle").addEventListener("click", () => {
+  const toggle = $("#preview-toggle");
+  toggle.setAttribute("aria-pressed", String(toggle.getAttribute("aria-pressed") !== "true"));
+  renderComposerPreview();
+});
 $("#message-input").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#message-form").requestSubmit(); } });
 $("#generate-order").addEventListener("click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { showToast(apiErrorText(error, "订单生成失败，请重试"), "error"); } });
 $("#confirm-order").addEventListener("click", async () => {
@@ -1753,11 +1840,8 @@ $("#settings-test").addEventListener("click", async () => {
     const result = await api("/api/model/test", {
       url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value
     });
-    const stateText = $("#settings-state");
-    if (stateText) stateText.textContent = result.test?.ok
-      ? `连接正常 · ${result.test.latencyMs}ms（尚未保存）`
-      : result.test?.message || "模型连接失败";
-    showToast(result.test?.ok ? `连接正常 · ${result.test.latencyMs}ms` : result.test?.message || "模型连接失败");
+    const presentation = renderModelCapabilities(result.test);
+    showToast(presentation.label, presentation.tone === "ready" ? "success" : presentation.tone);
   } catch (error) {
     showToast(error.message || "模型连接测试失败", "error");
   } finally {

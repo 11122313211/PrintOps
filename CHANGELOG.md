@@ -1,8 +1,22 @@
 # Changelog
 
-## Unreleased
+## v1.2.0 - 2026-09-18（代码基线候选版）
 
-- 后续变更待记录。
+本版把 v1.1.0 的受控本地集成层推进到可运维状态：模型工具协议补齐回执与受限账簿，MCP 补上信号关闭，本地服务从裸 `ThreadingHTTPServer` 升级为有界、可观测、可优雅关闭的运行时，并新增零依赖 Markdown 渲染。
+
+**发布定位与 v1.1.0 一致，仍为候选版**：真实脱敏语料（≥20 例）、真人走查、真实 dsh headless / 模型端到端和浏览器冒烟四个门槛仍未闭合，在这些门槛关闭前请不要把它视为通用稳定发布。原规划中属于 v1.2 的“受控供应商接入”顺延至 v1.3+。
+
+- **模型工具协议**：planner 增加工具回执与受限工具账簿；原生 `tools[].function` 与 JSON envelope 回退共用同一条有界循环，完全相同的“工具名 + 参数”不会重复调用，工具结果裁剪后回传总结。
+- **会话上下文端点**：新增 `/api/session/context`，返回精简订单投影供模型与外部宿主使用；前端设置面板增加模型能力探测与展示。
+- **MCP 生命周期**：`mcp_server.py` 增加 SIGINT/SIGTERM 优雅关闭，补齐工具描述、schema 与参数白名单；L0/L1 capability 边界保持不变。
+- **本地运行时加固**：`server.py` 增加优雅关闭（等待在途请求后退出，退出码 0）、并发连接上限与超限拒绝、单请求 socket 超时、结构化请求日志（requestId / 方法 / 路径 / 状态 / 耗时），以及启动自检 `python3 server.py --check`。
+- **部署可配置**：新增 `PRINTOPS_MEMORY_PATH`（与 MCP 侧对齐——此前 HTTP 与 MCP 可能落到不同数据库）以及 `PRINTOPS_MAX_CONNECTIONS`、`PRINTOPS_REQUEST_TIMEOUT`、`PRINTOPS_SLOW_REQUEST_MS`、`PRINTOPS_SHUTDOWN_GRACE_SECONDS`、`PRINTOPS_LOG_LEVEL`；非法 `PRINTOPS_PORT` 改为启动期报错而非静默回落。
+- **关键失败路径**：会话库改为首次使用时构造，路径不可写时 `--check` 给出可读原因而不是 import 期裸 traceback；模型接口 URL 被拒时透出真实原因（内网地址 / 协议 / 凭据 / 查询参数），不再统一显示“格式不正确”。
+- **Markdown 渲染**：新增零依赖渲染器 `markdown.js`，对话气泡与用户消息按 Markdown 展示标题、列表、表格、代码块、引用与链接；渲染前先转义 HTML，链接只放行 `http(s)/mailto`，未闭合标记按纯文本兜底，`_斜体_` 不解析以免误伤文件名。
+- **输入框预览**：composer 增加“预览”开关，按同一渲染器核对排版；发送给后端的仍是 `#message-input` 的原始文本，`nlu.py` 解析路径不变。
+- **静态白名单**：新增 `/markdown.js` 放行项与对应 MIME 类型；README 白名单说明同步更新。
+- **升级提示**：静态白名单保存在服务进程内存中，更新代码后必须重启 `server.py`，否则 `/markdown.js` 返回 404；渲染器缺失时页面会给出提示而不是静默回退。
+- **测试**：工作区共 325 项 Python 测试（已提交的 v1.1.0 基线为 236 项），新增 planner loop、模型协议、runtime hardening 与 Markdown 渲染覆盖；Markdown 契约测试经 node 驱动，断言输出只含白名单标签、无 `on*` 事件处理器、链接只放行 `http(s)` 与 `mailto`。
 
 ## v1.1.0 - 2026-09-10（代码基线候选版）
 

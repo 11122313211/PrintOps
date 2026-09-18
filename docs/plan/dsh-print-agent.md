@@ -1,6 +1,9 @@
 # DeepSeek Harness 印刷 Agent 规划
 
-> 状态：PoC 阶段（2026-09-09）
+> 状态：契约层已实现，真实运行验收未完成（2026-09-18 更新）
+> 已落地：MCP stdio server、session binding、L0/L1 capability 边界、受信 launcher 与 5 个印刷 skill 已通过离线测试
+> （见 `docs/RELEASE_CHECKLIST.md` 门槛 8/9/10）；真实 dsh headless、真实模型端到端与 on/off parity 仍待验收（门槛 12）。
+> 下文为 2026-09-09 的设计规划，保留供追溯。
 > 范围：纸品/商业印刷订单前置整理、工艺解释、印前信息收集和人工确认前的报价交接
 > 本文是架构计划，不引入 dsh 运行依赖，也不改变当前 PrintOps 的生产路径。
 

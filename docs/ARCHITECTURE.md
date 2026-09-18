@@ -6,7 +6,7 @@
 输入 -> 感知字段 -> 读取/更新记忆 -> 模型规划（可选） -> 调用白名单工具 -> 模型总结 -> 结构化响应 -> 运行记录
 ```
 
-实现布局：`order_model.py` 持有订单数据契约、规范化与 `schemaVersion` 迁移；`nlu.py` 持有规则感知与置信度分级；`tools.py` 持有工具注册表与契约；`agent.py` 保留会话记忆、工作流和工具网关并 re-export 公共符号。
+实现布局：`order_model.py` 持有订单数据契约、规范化与 `schemaVersion` 迁移；`nlu.py` 持有规则感知与置信度分级；`tools.py` 持有工具注册表与契约；`agent.py` 保留会话记忆、工作流和工具网关并 re-export 公共符号；`llm_adapter.py` 负责模型协议与 planner；`mcp_server.py` 提供 stdio MCP 适配；前端由 `app.js` 与 `markdown.js` 组成。
 
 - `Agent`：维护任务状态；模型可提出字段补丁和受限工具调用，工具结果会回传模型总结，最多三轮，失败时回到确定性规则。每次运行生成 `runId` 与步骤事件，并保存字段来源、置信度和冲突。规则感知的置信度按证据强度分级（显式标签/单位 0.9+，裸数字与氛围词低于 0.75），生产字段低置信度时阻止生成交接单。
 - `Memory`：SQLite 会话记忆，保存订单、最近 80 条消息和当前阶段；刷新页面可恢复完整对话。
@@ -17,6 +17,56 @@
 - `match_supplier_capability`：将标准订单逐字段匹配到目标平台能力档案，明确支持、待询价确认和不支持项；当前档案是静态示例，不代表实时产能或报价。
 - `server.py`：轻量 JSON API。请求体限制为 1 MB，API 异常统一返回 `code/message/requestId`，同一会话在加载状态前加锁；后续可以替换为 FastAPI，不影响 Agent 接口。
 - `dispatch_get` / `dispatch_post`：解析后的 API 契约边界。路由参数转换与 Agent 调用在无网络副作用的纯分发层集中维护，便于回归测试和后续替换 HTTP 框架。
+- `llm_adapter.py`：OpenAI 兼容适配器与 planner。同时支持原生 `tools[].function` / `tool_calls` 和 JSON envelope 两种协议；模型输出只作为候选计划，仍须经过本地白名单校验。
+- `mcp_server.py`：标准库 JSON-RPC stdio MCP server。会话绑定、L0/L1 capability 边界、参数校验与审计；对外只暴露审阅过的 MCP schema，所有执行都回到 `Agent.call_tool()`。
+- `tools/dsh_mcp_launcher.py` / `tools/printops_local_host.py`：受信 launcher 与无 Node/npm/pnpm 的本地 fallback host。launcher 要求由受信宿主提供 session id，不接受 `--allow-any-session`。
+- `markdown.js`：零依赖 Markdown 渲染器，供对话气泡与输入预览共用；先转义再解析，链接只放行 `http(s)` / `mailto`。
+
+## 模型协作与本地集成层（v1.1.0）
+
+该层在规则内核之上增加受控的模型与外部宿主集成，但不改变确定性边界：模型和 MCP 客户端都只能提出受限请求，是否执行仍由本地代码决定。
+
+### Planner 工具循环
+
+两种模型协议（原生 `tool_calls` 与 JSON envelope 回退）解析后收敛到同一份候选计划结构。
+
+- 工具轮与最终总结轮是**分开的预算**：模型最多使用三轮本地工具轮，之后仍有独立的总结轮；
+- 完全相同的「工具名 + 参数」组合会被阻断，避免重复调用；
+- 提供方把三轮浪费在劣质计划上时，显式用户请求仍有一条独立、有界的本地补偿预算（`MAX_PLANNER_REQUIRED_CALLS`），防止错误或畸形的模型调用压掉必要的确定性工具；
+- 规划账本有界（`MAX_PLANNER_LEDGER_ENTRIES` / `MAX_PLANNER_LEDGER_BYTES`），不保留无界 transcript，也不落原始推理文本；
+- 上下文传输预算明确：历史取最近 `MAX_CONTEXT_HISTORY`（8）条、单条消息 `MAX_CONTEXT_MESSAGE_CHARS`（2,000）字符，订单摘要与工具结果各限 `MAX_CONTEXT_ORDER_BYTES` / `MAX_CONTEXT_TOOL_RESULT_BYTES`（12KB）；后续原生轮次不重复发送完整工具 schema。
+
+模型完全不发起工具调用时，规则 Agent 会按本地意图补齐必要的校验、估价、术语解释或工艺推荐。这是兜底，不是把决策权交回模型。
+
+### MCP server
+
+`mcp_server.py` 是零依赖 JSON-RPC stdio MCP server（协议版本 `2024-11-05`，兼容 `2025-03-26`），面向 dsh 这类 MCP 客户端。
+
+- **会话绑定**：session id 必须匹配 `^[A-Za-z0-9_-]{1,64}$`，由受信宿主在启动 launcher 前提供；
+- **能力分级**：L0 只含只读工具——内部 8 个工具中的 `validate_order`、`recommend_processes`、`explain_print_term`、`estimate_price`、`match_supplier_capability`，加上 MCP 层新增的 `get_order_context`；L1 追加 `preflight_file`、`prepare_handoff`、`request_supplier_quote` 三个内部工具，以及 MCP 层新增的 `apply_order_patch`；**L2（外部副作用）不由本 server 实现**，必须放在独立进程中。因此 MCP 对外共 10 个工具，比内部注册表多出的两个只在 MCP 层存在；
+- **不转发内部 schema**：对外暴露审阅过的 MCP schema，而不是内部 `TOOL_SCHEMAS` 原文；
+- **单一执行入口**：所有工具执行都经过 `Agent.call_tool()`，状态机、校验、审计和人工确认门保持权威；
+- 字符串长度、`inspection` 元数据与请求体都有字节上限（`MAX_STRING_LENGTH`、`MAX_INSPECTION_BYTES`、`MAX_MESSAGE_BYTES`）。
+
+### dsh launcher 与本地 fallback host
+
+- `tools/dsh_mcp_launcher.py` 为一个受信 dsh 会话启动 stdio MCP server。dsh 以 argv 数组启动子进程且不展开 shell 变量，因此 session id 必须由受信宿主提前注入；launcher 刻意不提供 `--allow-any-session`，`--dry-run` 用于检查 profile 应使用的 argv。
+- `tools/printops_local_host.py` 是 dsh 无法安装时的本地 fallback：只用 Python 标准库。它通过同一个 stdio launcher 验证 skill/MCP 契约，再把对话交给确定性 Agent。
+- 两者都只是本地内核的宿主，**不宣称 dsh 运行时存在或正在调用远程模型**。真实 dsh headless、真实模型端到端与 on/off parity 仍是发布门槛（见 `docs/RELEASE_CHECKLIST.md` 门槛 12）。
+
+## 前端渲染边界
+
+`markdown.js` 是对话气泡与输入框预览共用的零依赖 Markdown 渲染器，浏览器与测试环境共享同一实现。设计取舍：
+
+1. **先转义、再解析**：原始 HTML 永远按文字显示，模型或用户输入无法注入标签；
+2. **只覆盖真实出现的语法**：标题、列表、表格、代码块、引用、链接与加粗，不追求完整 Markdown 兼容；
+3. **不解析 `_斜体_`**：避免误伤 `a_b_c.pdf` 这类文件名；
+4. **容忍未闭合标记**：输出被截断时余下文字仍按纯文本展示，不会整段吞掉；
+5. **链接白名单**：只放行 `http(s)` 与 `mailto`。
+
+发送给后端的始终是输入框原始文本，渲染只影响展示，`nlu.py` 的解析路径不变。
+
+静态资源由 `server.py` 的 `STATIC_FILES` 白名单控制（`/`、`/index.html`、`/app.js`、`/markdown.js`、`/styles.css`）。白名单保存在进程内存中，修改代码后必须重启服务，否则新增资源会返回 404。
 
 知识清单由 `product_knowledge.py` 的 `KNOWLEDGE_MANIFEST` 维护，包含版本、复核日期、来源范围、成品/展开/刀模/包装三维尺寸定义和人工确认策略。`/api/products` 返回完整清单，订单校验、估算、供应商能力匹配和 Agent 会话响应返回 `knowledgeVersion`；供应商静态能力另带 `supplierProfileVersion`。版本元数据用于追溯规则依据，不表示来源具有实时产能、价格或交期保证。
 

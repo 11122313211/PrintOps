@@ -119,12 +119,17 @@
           <div class="quick-replies" id="quick-replies" aria-label="快捷回答"></div>
 
           <form class="composer" id="message-form">
+            <div class="composer-preview" id="composer-preview" hidden>
+              <span class="composer-preview-label">发送预览</span>
+              <div class="bubble markdown-body" id="composer-preview-body"></div>
+            </div>
             <label class="sr-only" for="message-input">输入印刷需求</label>
             <textarea id="message-input" rows="2" placeholder="例如：我要做 500 份 A4 宣传册，下周一要用……"></textarea>
             <div class="composer-footer">
               <div class="composer-tools">
                 <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
                 <button class="tool-button" id="upload-button" type="button" title="上传 PDF 文件">上传文件</button>
+                <button class="tool-button" id="preview-toggle" type="button" aria-pressed="false" hidden title="按 Markdown 预览输入内容">预览</button>
                 <span class="tool-hint">支持 PDF，单个文件不超过 20 MB</span>
               </div>
               <button class="send-button" type="submit">
@@ -288,6 +293,24 @@
           <button class="settings-close" id="settings-cancel" type="button" aria-label="关闭接口设置" title="关闭">×</button>
         </div>
         <p class="settings-state" id="settings-state">当前使用规则模式</p>
+        <dl class="settings-capabilities" id="settings-capabilities" aria-label="模型能力检测结果" hidden>
+          <div>
+            <dt>Agent 工具链</dt>
+            <dd id="capability-agent">未检测</dd>
+          </div>
+          <div>
+            <dt>JSON 规划</dt>
+            <dd id="capability-json">未检测</dd>
+          </div>
+          <div>
+            <dt>原生工具</dt>
+            <dd id="capability-native">未检测</dd>
+          </div>
+          <div>
+            <dt>基础聊天</dt>
+            <dd id="capability-chat">未检测</dd>
+          </div>
+        </dl>
         <div class="settings-fields">
           <label class="settings-field" for="settings-url">
             <span>API URL</span>
@@ -314,6 +337,7 @@
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
-    <script src="app.js?v=20260905-5"></script>
+    <script src="markdown.js?v=20260918-1"></script>
+    <script src="app.js?v=20260918-1"></script>
   </body>
 </html>

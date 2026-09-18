@@ -109,7 +109,7 @@ class HttpGateTest(unittest.TestCase):
     # -- static whitelist --------------------------------------------------
 
     def test_whitelisted_static_files_are_served(self):
-        for path in ("/", "/index.html", "/app.js?v=20260905-6", "/styles.css"):
+        for path in ("/", "/index.html", "/app.js?v=20260905-6", "/markdown.js?v=20260918-1", "/styles.css"):
             status, _ = self.request(path, method="GET")
             self.assertEqual(status, 200, path)
 

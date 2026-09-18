@@ -15,11 +15,12 @@ import atexit
 import json
 import re
 import shutil
+import signal
 import sqlite3
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,44 @@ atexit.register(_cleanup_temp_dirs)
 
 class LocalHostError(RuntimeError):
     """A bounded, user-facing local host error."""
+
+
+class ShutdownRequested(BaseException):
+    """Raised in the main thread when the host receives SIGINT/SIGTERM.
+
+    ``BaseException`` keeps the ``except Exception`` handlers around the MCP
+    smoke and the Agent loop from swallowing an operator's stop request.
+    """
+
+
+def install_signal_handlers() -> Callable[[], None]:
+    """Turn SIGINT/SIGTERM into one structured JSON failure; return a restore callable.
+
+    dsh-side wrappers and CI parse stdout, so a signalled run must not die with
+    empty output.  Raising instead of exiting also lets the normal exit path
+    run ``atexit`` cleanup, which releases a disposable temp session directory
+    that a hard kill would leak.
+    """
+    previous: dict[int, Any] = {}
+
+    def _handle(signum, frame) -> None:
+        raise ShutdownRequested(f"interrupted by signal {signum}")
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _handle)
+        except (ValueError, OSError, AttributeError):
+            previous.pop(signum, None)
+
+    def restore() -> None:
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler)
+            except (ValueError, OSError, TypeError):
+                pass
+
+    return restore
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
@@ -271,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="read one message per stdin line and emit one JSON result per line")
     parser.add_argument("--no-mcp", action="store_true",
                         help="skip MCP transcript validation (not recommended for acceptance)")
+    restore_signals = install_signal_handlers()
     try:
         args = parser.parse_args(argv)
         if args.smoke and (args.message or args.interactive or args.no_mcp):
@@ -290,11 +330,15 @@ def main(argv: list[str] | None = None) -> int:
             initial["mode"] = "smoke"
         if not args.interactive:
             print(json.dumps(initial, ensure_ascii=False, allow_nan=False,
-                             separators=(",", ":")))
+                             separators=(",", ":")), flush=True)
             return 0
 
+        # The interactive protocol is line-oriented, and stdout is block
+        # buffered when it is a pipe, so the first document must be flushed:
+        # otherwise a dsh-side wrapper waits for a line that is still in the
+        # child's buffer.
         print(json.dumps(initial, ensure_ascii=False, allow_nan=False,
-                         separators=(",", ":")))
+                         separators=(",", ":")), flush=True)
         # Reopen the same persisted session for stdin messages.  This keeps the
         # command simple and makes each output line independently inspectable.
         db_path = Path(initial["memoryPath"])
@@ -309,6 +353,18 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, ensure_ascii=False, allow_nan=False,
                              separators=(",", ":")), flush=True)
         return 0
+    except ShutdownRequested as error:
+        # Still emit one strict JSON document, and release the disposable temp
+        # session directory that a bare signal death would leave behind.
+        _cleanup_temp_dirs()
+        payload = {
+            "ok": False,
+            "runtime": "python-stdlib",
+            "error": {"type": error.__class__.__name__, "message": str(error)[:1024]},
+        }
+        print(json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                         separators=(",", ":")))
+        return 1
     except (LocalHostError, OSError, ValueError, TypeError, sqlite3.Error) as error:
         # This CLI is consumed by dsh-side wrappers and CI, so failures are a
         # single strict JSON document too.  Keep diagnostics bounded and avoid
@@ -324,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, allow_nan=False,
                          separators=(",", ":")))
         return 1
+    finally:
+        restore_signals()
 
 
 if __name__ == "__main__":

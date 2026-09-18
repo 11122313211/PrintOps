@@ -22,41 +22,83 @@ Tool = Callable[..., Any]
 TOOLS: dict[str, Tool] = {}
 TOOL_META: dict[str, dict[str, Any]] = {}
 
-# A small, provider-neutral contract.  The UI can render these contracts and
-# an eventual LangGraph/MCP adapter can pass them to a model without coupling
-# the core agent to one SDK.  Property descriptions keep the model from
-# guessing argument semantics from names alone.
+# Public tool calls resolve the order from the bound Agent session.  Keeping
+# ``order`` out of this shared contract prevents the UI, planner and adapters
+# from advertising a parameter that the gateway deliberately ignores.
+_ITEM_INDEX_SCHEMA = {
+    "type": ["integer", "null"], "minimum": 0,
+    "maximum": 2**53 - 1,
+    "description": "多产品订单中要处理的产品项下标；单产品可省略",
+}
+_PLATFORM_ID_SCHEMA = {
+    "type": ["string", "null"], "maxLength": 128,
+    "description": "目标平台 ID，可选值见 /api/platforms",
+}
+
+
+def _public_input(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {"type": "object", "properties": deepcopy(properties),
+            "required": list(required or []), "additionalProperties": False}
+
+
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "recommend_processes": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象（含品类、数量、尺寸、材料等已填字段）"}}, "required": ["order"]},
+        "input": _public_input({"itemIndex": _ITEM_INDEX_SCHEMA}),
         "output": {"type": "array", "items": {"type": "object"}},
     },
     "explain_print_term": {
-        "input": {"type": "object", "properties": {"question": {"type": "string", "description": "用户的印刷术语问题原文，例如“哑粉纸和铜版纸有什么区别”"}}, "required": ["question"]},
+        "input": _public_input(
+            {"question": {"type": "string", "minLength": 1, "maxLength": 2000,
+                          "description": "用户的印刷术语问题原文，例如“哑粉纸和铜版纸有什么区别”"}},
+            ["question"],
+        ),
         "output": {"type": "object", "properties": {"topic": {"type": "string"}, "answer": {"type": "string"}}},
     },
     "preflight_file": {
-        "input": {"type": "object", "properties": {"fileName": {"type": "string", "description": "PDF 文件名（含扩展名）"}, "sizeBytes": {"type": "integer", "description": "文件大小（字节）"}, "pageCount": {"type": ["integer", "null"], "description": "浏览器解析到的页数；解析失败填 null"}, "inspection": {"type": ["object", "null"], "description": "浏览器本地轻量扫描得到的 PDF 元数据对象"}, "expectedSize": {"type": ["string", "null"], "description": "订单成品尺寸（如 210×285MM），用于与页面框比对"}, "itemIndex": {"type": ["integer", "null"], "description": "多产品订单中绑定文件的产品项下标"}}, "required": ["fileName", "sizeBytes"]},
-        "output": {"type": "object", "properties": {"ok": {"type": "boolean"}, "warnings": {"type": "array"}}},
+        "input": _public_input(
+            {
+                "fileName": {"type": "string", "minLength": 1, "maxLength": 255,
+                             "description": "PDF 文件名（含扩展名），不能包含路径"},
+                "sizeBytes": {"type": "integer", "minimum": 0, "maximum": 2**53 - 1,
+                              "description": "文件大小（字节）"},
+                "pageCount": {"type": ["integer", "null"], "minimum": 0,
+                              "maximum": 2**53 - 1,
+                              "description": "浏览器解析到的页数；解析失败填 null"},
+                "encrypted": {"type": "boolean",
+                              "description": "是否检测到 PDF 加密；必须由本地扫描明确提供"},
+                "readable": {"type": "boolean",
+                             "description": "文件是否可被本地扫描读取；必须明确提供"},
+                "inspection": {"type": ["object", "null"],
+                               "description": "浏览器本地轻量扫描得到的 PDF 元数据对象"},
+                "expectedSize": {"type": ["string", "null"], "maxLength": 128,
+                                 "description": "订单成品尺寸，用于与页面框比对"},
+                "itemIndex": _ITEM_INDEX_SCHEMA,
+            },
+            ["fileName", "sizeBytes", "encrypted", "readable"],
+        ),
+        "output": {"type": "object", "properties": {
+            "ok": {"type": "boolean"}, "warnings": {"type": "array"},
+            "encrypted": {"type": "boolean"}, "readable": {"type": "boolean"},
+        }},
     },
     "validate_order": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象；校验缺失字段、品类参数和生产风险"}}, "required": ["order"]},
+        "input": _public_input({}),
         "output": {"type": "object", "properties": {"ok": {"type": "boolean"}, "missing": {"type": "array"}, "risks": {"type": "array"}}},
     },
     "estimate_price": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象；按示例价格参数表估算费用量级"}, "itemIndex": {"type": ["integer", "null"], "description": "多产品订单中要估算的产品项下标"}}, "required": ["order"]},
+        "input": _public_input({"itemIndex": _ITEM_INDEX_SCHEMA}),
         "output": {"type": "object", "properties": {"range": {"type": "string"}, "missing": {"type": "array"}}},
     },
     "prepare_handoff": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象；生成面向目标平台的交接文本"}, "itemIndex": {"type": ["integer", "null"], "description": "多产品订单中要交接的产品项下标"}}, "required": ["order"]},
+        "input": _public_input({"platformId": _PLATFORM_ID_SCHEMA, "itemIndex": _ITEM_INDEX_SCHEMA}),
         "output": {"type": "object", "properties": {"text": {"type": "string"}, "supplierReadiness": {"type": "object"}}},
     },
     "match_supplier_capability": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象；与平台能力档案逐字段比对"}, "platformId": {"type": "string", "description": "目标平台 ID，可选值见 /api/platforms"}, "itemIndex": {"type": ["integer", "null"], "description": "多产品订单中要匹配的产品项下标"}}, "required": ["order"]},
+        "input": _public_input({"platformId": _PLATFORM_ID_SCHEMA, "itemIndex": _ITEM_INDEX_SCHEMA}),
         "output": {"type": "object", "properties": {"status": {"type": "string"}, "supported": {"type": "array"}, "needsReview": {"type": "array"}, "unsupported": {"type": "array"}}},
     },
     "request_supplier_quote": {
-        "input": {"type": "object", "properties": {"order": {"type": "object", "description": "当前订单对象；准备待人工确认的询价请求，不会发送给供应商"}, "platformId": {"type": "string", "description": "目标平台 ID，可选值见 /api/platforms"}, "itemIndex": {"type": ["integer", "null"], "description": "多产品订单中要询价的产品项下标"}}, "required": ["order"]},
+        "input": _public_input({"platformId": _PLATFORM_ID_SCHEMA, "itemIndex": _ITEM_INDEX_SCHEMA}),
         "output": {"type": "object", "properties": {"status": {"type": "string"}, "requestId": {"type": "string"}, "mappedOrder": {"type": "object"}, "requiresHumanConfirmation": {"type": "boolean"}}},
     },
 }
@@ -340,7 +382,8 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
     else:
         message = "基础检查通过；出血、颜色和字体仍需正式印前检查。"
     return {"ok": not errors, "message": message, "fileName": file_name, "sizeBytes": size_bytes,
-            "pageCount": page_count, "encrypted": encrypted, "checks": checks,
+            "pageCount": page_count, "encrypted": encrypted, "readable": readable,
+            "checks": checks,
             "warnings": warnings, "suggestions": suggestions,
             "inspectionLevel": "metadata" if inspection else "basic"}
 
@@ -481,12 +524,29 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
     platform_id = order.get("platform") or "generic"
     platform = PLATFORMS.get(platform_id, PLATFORMS["generic"])
     adapter = get_adapter(platform_id)
-    supplier_profile = platform.get("supplierProfile", {})
     readiness = match_supplier_capability(order)
     multi_product = _multi_product_info(order)
+    if readiness.get("unsupported"):
+        fields = [item.get("field", "能力") for item in readiness["unsupported"]]
+        return {
+            "status": "blocked",
+            "reason": "supplier_unsupported",
+            "platform": platform,
+            "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
+            "mappedOrder": {},
+            "text": ("目标平台存在明确不支持项，未生成交接单：" + "、".join(str(field) for field in fields)
+                     + "。请切换平台或先人工确认生产能力。"),
+            "productProfile": parameter_state(order),
+            "supplierReadiness": readiness,
+            "unsupported": deepcopy(readiness["unsupported"]),
+            "knowledgeVersion": KNOWLEDGE_VERSION,
+            "multiProduct": multi_product,
+            "requiresHumanConfirmation": True,
+        }
     if multi_product:
         return {
             "status": "blocked",
+            "reason": "multi_product",
             "platform": platform,
             "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
             "mappedOrder": {},

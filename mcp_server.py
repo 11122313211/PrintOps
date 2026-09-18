@@ -15,18 +15,19 @@ import json
 import math
 import os
 import re
+import signal
 import sys
 import threading
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent import Agent, Memory, RevisionConflictError
 from llm_adapter import OpenAICompatiblePlanner
 from order_model import DIMENSION_DEFAULTS, parse_quantity
 from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, catalog_payload
 from supplier_adapters import PLATFORMS
-from tools import validate_order
+from tools import TOOL_SCHEMAS, validate_order
 
 
 SERVER_NAME = "printops-mcp"
@@ -51,6 +52,46 @@ MAX_PATCH_BYTES = 64 * 1024
 MAX_PATCH_ID_LENGTH = 128
 PATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
+
+class ShutdownRequested(BaseException):
+    """Raised in the main thread when a supervisor asks this stdio server to stop.
+
+    Deriving from ``BaseException`` keeps the ``except Exception`` blocks that
+    guard individual tool calls from swallowing a shutdown request.
+    """
+
+
+def install_signal_handlers() -> Callable[[], None]:
+    """Turn SIGINT/SIGTERM into one clean exit; return a restore callable.
+
+    The dsh host manages this process and stops it with a signal.  Without a
+    handler the default action terminates the interpreter immediately, which
+    can truncate a protocol line and report a crash (exit 143).  Raising from
+    the handler instead unwinds ``readline`` and lets ``main`` flush the stdio
+    pipes and exit 0.
+    """
+    previous: dict[int, Any] = {}
+
+    def _handle(signum, frame) -> None:
+        raise ShutdownRequested(f"signal {signum}")
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _handle)
+        except (ValueError, OSError, AttributeError):
+            previous.pop(signum, None)
+
+    def restore() -> None:
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler)
+            except (ValueError, OSError, TypeError):
+                pass
+
+    return restore
+
+
 # These are the order fields that ``Agent._item_order`` may inherit from the
 # top-level compatibility projection when a multi-product item leaves them
 # blank.  Their top-level provenance therefore still applies to a selected
@@ -64,6 +105,7 @@ INHERITED_ITEM_FIELDS = (
 # is not implemented by this server and must live in a separate process.
 L0_TOOLS = {
     "validate_order",
+    "get_order_context",
     "recommend_processes",
     "explain_print_term",
     "estimate_price",
@@ -199,96 +241,82 @@ ITEM_ID_PROPERTY = {
 }
 
 
+MCP_TOOL_DESCRIPTIONS = {
+    "validate_order": "校验绑定会话的当前订单，不接受外部 order 覆盖。",
+    "get_order_context": "读取绑定会话的精简订单上下文，供跨轮规划使用；只读且不返回聊天历史、密钥或原始文件。",
+    "recommend_processes": "为绑定会话的当前订单生成可比较的印刷工艺方案。",
+    "explain_print_term": "解释一个印刷术语或工艺选择问题。",
+    "estimate_price": "按版本化示例参数表估算费用量级，不构成供应商报价。",
+    "match_supplier_capability": "将当前订单与静态供应商能力档案逐字段匹配。",
+    "preflight_file": "根据浏览器提供的 PDF 元数据做轻量预检；结果仍需人工印前复核。",
+    "prepare_handoff": "生成当前订单的本地交接草稿；不会联系供应商。",
+    "request_supplier_quote": "生成待人工确认的询价草稿；不会发起外部网络请求。",
+    "apply_order_patch": "将经过证据和置信度校验的增量订单 patch 写入绑定会话；不会接受完整 order/items 替换。",
+}
+
+
+def _mcp_input_schema(name: str, *, item_scoped: bool = False) -> dict[str, Any]:
+    """Adapt the shared public contract to MCP's explicit session envelope.
+
+    The internal tool functions receive an order, but public callers receive
+    it from the bound session.  Deriving this schema from ``TOOL_SCHEMAS``
+    keeps ``required`` and parameter types synchronized across planner, HTTP
+    and MCP surfaces.  MCP-only selectors are added after the shared copy.
+    """
+    # ``get_order_context`` is an MCP-only read operation.  It deliberately
+    # has no entry in the executable local-tool registry, so its schema is
+    # defined here instead of being advertised to the LLM as a callable write.
+    if name == "get_order_context":
+        return _schema(
+            {"sessionId": deepcopy(SESSION_PROPERTY),
+             "itemIndex": deepcopy(ITEM_INDEX_PROPERTY),
+             "itemId": deepcopy(ITEM_ID_PROPERTY)},
+            ["sessionId"],
+        )
+    source = TOOL_SCHEMAS.get(name, {}).get("input", {})
+    source_properties = source.get("properties") if isinstance(source, dict) else {}
+    properties = deepcopy(source_properties) if isinstance(source_properties, dict) else {}
+    properties.pop("order", None)
+    if item_scoped:
+        properties["itemId"] = deepcopy(ITEM_ID_PROPERTY)
+    properties = {"sessionId": deepcopy(SESSION_PROPERTY), **properties}
+    source_required = source.get("required") if isinstance(source, dict) else []
+    required = ["sessionId"]
+    if isinstance(source_required, list):
+        required.extend(key for key in source_required if key != "order" and key != "sessionId")
+    return _schema(properties, list(dict.fromkeys(required)))
+
+
 def _tool_definitions(allowed: set[str]) -> list[dict[str, Any]]:
-    """Return reviewed MCP schemas, never the internal provider-neutral ones."""
+    """Return reviewed MCP schemas derived from the shared public contract."""
+    item_scoped = {"recommend_processes", "estimate_price", "match_supplier_capability",
+                   "preflight_file", "prepare_handoff", "request_supplier_quote"}
     definitions: dict[str, dict[str, Any]] = {
-        "validate_order": {
-            "description": "校验绑定会话的当前订单，不接受外部 order 覆盖。",
-            "inputSchema": _schema({"sessionId": SESSION_PROPERTY}, ["sessionId"]),
-        },
-        "recommend_processes": {
-            "description": "为绑定会话的当前订单生成可比较的印刷工艺方案。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY, "itemIndex": ITEM_INDEX_PROPERTY,
-                 "itemId": ITEM_ID_PROPERTY},
-                ["sessionId"],
-            ),
-        },
-        "explain_print_term": {
-            "description": "解释一个印刷术语或工艺选择问题。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY,
-                 "question": {"type": "string", "maxLength": 2000}},
-                ["sessionId", "question"],
-            ),
-        },
-        "estimate_price": {
-            "description": "按版本化示例参数表估算费用量级，不构成供应商报价。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY, "itemIndex": ITEM_INDEX_PROPERTY,
-                 "itemId": ITEM_ID_PROPERTY},
-                ["sessionId"],
-            ),
-        },
-        "match_supplier_capability": {
-            "description": "将当前订单与静态供应商能力档案逐字段匹配。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY,
-                 "platformId": {"type": ["string", "null"], "maxLength": 128},
-                 "itemIndex": ITEM_INDEX_PROPERTY, "itemId": ITEM_ID_PROPERTY},
-                ["sessionId"],
-            ),
-        },
-        "preflight_file": {
-            "description": "根据浏览器提供的 PDF 元数据做轻量预检；结果仍需人工印前复核。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY,
-                 "fileName": {"type": "string", "maxLength": 255},
-                 "sizeBytes": {"type": "integer", "minimum": 0, "maximum": MAX_SAFE_INTEGER},
-                 "pageCount": {"type": ["integer", "null"], "minimum": 0,
-                               "maximum": MAX_SAFE_INTEGER},
-                 "encrypted": {"type": "boolean"},
-                 "readable": {"type": "boolean"},
-                 "inspection": {"type": ["object", "null"]},
-                 "expectedSize": {"type": ["string", "null"], "maxLength": 128},
-                 "itemIndex": ITEM_INDEX_PROPERTY, "itemId": ITEM_ID_PROPERTY},
-                ["sessionId", "fileName", "sizeBytes", "encrypted", "readable"],
-            ),
-        },
-        "prepare_handoff": {
-            "description": "生成当前订单的本地交接草稿；不会联系供应商。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY, "itemIndex": ITEM_INDEX_PROPERTY,
-                 "itemId": ITEM_ID_PROPERTY},
-                ["sessionId"],
-            ),
-        },
-        "request_supplier_quote": {
-            "description": "生成待人工确认的询价草稿；不会发起外部网络请求。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY,
-                 "platformId": {"type": ["string", "null"], "maxLength": 128},
-                 "itemIndex": ITEM_INDEX_PROPERTY, "itemId": ITEM_ID_PROPERTY},
-                ["sessionId"],
-            ),
-        },
-        "apply_order_patch": {
-            "description": "将经过证据和置信度校验的增量订单 patch 写入绑定会话；不会接受完整 order/items 替换。",
-            "inputSchema": _schema(
-                {"sessionId": SESSION_PROPERTY,
-                 "patch": {"type": "object", "maxProperties": 32},
-                 "evidence": {"type": ["array", "object"], "maxProperties": 128,
-                              "maxItems": 128},
-                 "confidence": {"type": ["object", "null"], "maxProperties": 128},
-                 "knowledgeVersion": {"type": ["string", "null"], "maxLength": 128},
-                 "reportedKnowledgeVersion": {"type": ["string", "null"], "maxLength": 128},
-                 "expectedRevision": {"type": "integer", "minimum": 0,
-                                      "maximum": MAX_SAFE_INTEGER},
-                 "patchId": {"type": ["string", "null"], "maxLength": MAX_PATCH_ID_LENGTH},
-                 "itemIndex": ITEM_INDEX_PROPERTY, "itemId": ITEM_ID_PROPERTY},
-                ["sessionId", "patch", "expectedRevision"],
-            ),
-        },
+        name: {"description": MCP_TOOL_DESCRIPTIONS[name],
+               "inputSchema": _mcp_input_schema(name, item_scoped=name in item_scoped)}
+        for name in (
+            "validate_order", "get_order_context", "recommend_processes", "explain_print_term", "estimate_price",
+            "match_supplier_capability", "preflight_file", "prepare_handoff",
+            "request_supplier_quote",
+        )
+    }
+    definitions["apply_order_patch"] = {
+        "description": MCP_TOOL_DESCRIPTIONS["apply_order_patch"],
+        "inputSchema": _schema(
+            {"sessionId": SESSION_PROPERTY,
+             "patch": {"type": "object", "maxProperties": 32},
+             "evidence": {"type": ["array", "object"], "maxProperties": 128,
+                          "maxItems": 128},
+             "confidence": {"type": ["object", "null"], "maxProperties": 128},
+             "knowledgeVersion": {"type": ["string", "null"], "maxLength": 128},
+             "reportedKnowledgeVersion": {"type": ["string", "null"], "maxLength": 128},
+             "expectedRevision": {"type": "integer", "minimum": 0,
+                                  "maximum": MAX_SAFE_INTEGER},
+             "patchId": {"type": ["string", "null"], "maxLength": MAX_PATCH_ID_LENGTH},
+             "itemIndex": deepcopy(ITEM_INDEX_PROPERTY),
+             "itemId": deepcopy(ITEM_ID_PROPERTY)},
+            ["sessionId", "patch", "expectedRevision"],
+        ),
     }
     return [{"name": name, "description": definitions[name]["description"],
              "inputSchema": definitions[name]["inputSchema"]}
@@ -398,9 +426,10 @@ class PrintOpsMCP:
         common = {"itemIndex", "itemId"}
         allowed: dict[str, set[str]] = {
             "validate_order": set(),
+            "get_order_context": common,
             "recommend_processes": common,
             "estimate_price": common,
-            "prepare_handoff": common,
+            "prepare_handoff": {"platformId", "itemIndex", "itemId"},
             "explain_print_term": {"question"},
             "match_supplier_capability": {"platformId", "itemIndex", "itemId"},
             "request_supplier_quote": {"platformId", "itemIndex", "itemId"},
@@ -434,7 +463,7 @@ class PrintOpsMCP:
                 raise MCPError("invalid_arguments", "参数 itemId 不能为空")
         if name == "explain_print_term":
             args["question"] = _string(args.get("question"), "question", 2000, required=True)
-        if name in {"match_supplier_capability", "request_supplier_quote"}:
+        if name in {"match_supplier_capability", "request_supplier_quote", "prepare_handoff"}:
             args["platformId"] = _string(args.get("platformId"), "platformId", 128)
             if args["platformId"] is not None and args["platformId"] not in PLATFORMS:
                 raise MCPError("invalid_arguments", "未知目标平台")
@@ -503,14 +532,16 @@ class PrintOpsMCP:
             raise MCPError("invalid_arguments", "itemIndex 和 itemId 只能选择一个")
         items = agent.state.get("order", {}).get("items")
         is_multi = isinstance(items, list) and len(items) > 1
-        item_scoped = name in {"recommend_processes", "estimate_price", "prepare_handoff",
+        item_scoped = name in {"get_order_context", "recommend_processes", "estimate_price", "prepare_handoff",
                                "match_supplier_capability", "request_supplier_quote",
                                "preflight_file", "apply_order_patch"}
         if (has_index or has_id) and not item_scoped:
             raise MCPError("invalid_arguments", f"工具 {name} 不支持产品项选择器")
         if not is_multi and (has_index or has_id):
             raise MCPError("invalid_arguments", "当前会话不是多产品订单，不能使用产品项选择器")
-        if is_multi and item_scoped and not (has_index or has_id):
+        # Context reads may intentionally omit a selector: the bound session's
+        # active item (or the compact multi-item order summary) is returned.
+        if is_multi and item_scoped and name != "get_order_context" and not (has_index or has_id):
             raise MCPError("item_required", "多产品订单必须指定 itemIndex 或 itemId")
         if not (has_index or has_id):
             return
@@ -538,7 +569,7 @@ class PrintOpsMCP:
         keys = ("sessionId", "order", "toolResult", "validation", "workflowStage",
                 "confirmation", "decision", "runId", "runTrace", "fieldMeta",
                 "conflicts", "messages", "nextAction", "rejectedFields", "planMeta",
-                "revision", "acceptedFields")
+                "revision", "acceptedFields", "processOptions", "preflightResults")
         projected = {key: deepcopy(response[key]) for key in keys if key in response}
         return PrintOpsMCP._fit_response(projected)
 
@@ -832,6 +863,11 @@ class PrintOpsMCP:
                               "revision": error.current},
                     ) from error
                 return self._public_response(response)
+            if name == "get_order_context":
+                # This is a read-only MCP operation.  Do not route it through
+                # call_tool, which would create a run receipt or attempt a
+                # domain tool invocation.
+                return self._fit_response(agent.context_snapshot(args.get("itemIndex")))
             # Keep the domain gateway authoritative for both successful calls
             # and readiness rejections.  Besides avoiding two subtly different
             # precondition paths, this records blocked MCP calls in the same
@@ -1033,7 +1069,18 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, MCPError) as error:
         print(f"PrintOps MCP startup failed: {error}", file=sys.stderr)
         return 2
-    server.serve()
+    restore_signals = install_signal_handlers()
+    try:
+        server.serve()
+    except (ShutdownRequested, KeyboardInterrupt) as error:
+        print(f"PrintOps MCP: received {error}, exiting cleanly", file=sys.stderr)
+    finally:
+        restore_signals()
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
     return 0
 
 

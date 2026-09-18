@@ -657,6 +657,13 @@ def migrate_state_item_references(state: dict[str, Any],
         state["fieldMeta"] = _remap_field_meta_ids(state.get("fieldMeta"), maps)
     if "itemOptions" in state:
         state["itemOptions"] = _remap_item_options_ids(state.get("itemOptions"), maps)
+    if "processOptions" in state:
+        state["processOptions"] = _remap_item_options_ids(state.get("processOptions"), maps)
+    if "preflightResults" in state and isinstance(state.get("preflightResults"), dict):
+        raw_results = state.get("preflightResults")
+        # A single result has a fileName/ok marker and is not an item map.
+        if not any(key in raw_results for key in ("status", "ok", "fileName")):
+            state["preflightResults"] = _remap_item_options_ids(raw_results, maps)
     if "rejectedFields" in state:
         state["rejectedFields"] = _remap_rejected_fields(state.get("rejectedFields"), maps)
     active_request_id = (state.get("activeQuoteRequestId").strip()
@@ -1038,6 +1045,95 @@ def _normalize_state_item_options(value: Any) -> dict[str, list[dict[str, Any]]]
     return result
 
 
+def _normalize_state_process_options(value: Any) -> list[dict[str, Any]] | dict[str, list[dict[str, Any]]]:
+    """Normalize cached process recommendations for single and multi-item orders.
+
+    Single-item sessions use a list; multi-item sessions use an item-ID map.
+    Keeping both shapes lets old ``itemOptions`` sessions migrate without
+    forcing a lossy flattening of independent product recommendations.
+    """
+    if isinstance(value, list):
+        options: list[dict[str, Any]] = []
+        for raw_option in value[:16]:
+            if not isinstance(raw_option, dict):
+                continue
+            option: dict[str, Any] = {}
+            for key, item in raw_option.items():
+                if not isinstance(key, str):
+                    continue
+                safe = _safe_state_scalar(item)
+                if safe is not _STATE_MISSING:
+                    option[key[:128]] = safe
+            if isinstance(option.get("id"), str) and option["id"].strip():
+                options.append(option)
+        return options
+    # Reuse the established item-options sanitizer for the keyed form.
+    if isinstance(value, dict):
+        return _normalize_state_item_options(value)
+    return []
+
+
+def _normalize_state_preflight_result(value: Any) -> dict[str, Any] | None:
+    """Keep a metadata-only file preflight summary safe across restarts."""
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("status", "fileName", "inspectionLevel", "staleReason", "updatedAt", "itemId"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            result[key] = raw.strip()[:512 if key != "fileName" else 255]
+    for key in ("ok", "encrypted", "readable", "stale"):
+        if isinstance(value.get(key), bool):
+            result[key] = value[key]
+    for key in ("sizeBytes", "pageCount", "itemIndex"):
+        raw = value.get(key)
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            result[key] = raw
+    for key in ("warnings", "suggestions"):
+        raw = value.get(key)
+        if isinstance(raw, list):
+            result[key] = [str(item)[:512] for item in raw
+                           if isinstance(item, (str, int, float))][:32]
+    raw_checks = value.get("checks")
+    if isinstance(raw_checks, list):
+        checks: list[dict[str, Any]] = []
+        for raw in raw_checks[:32]:
+            if not isinstance(raw, dict):
+                continue
+            check: dict[str, Any] = {}
+            for key in ("label", "status", "detail"):
+                item = raw.get(key)
+                if isinstance(item, (str, int, float, bool)):
+                    check[key] = deepcopy(item)
+            if check:
+                checks.append(check)
+        result["checks"] = checks
+    return result or None
+
+
+def _normalize_state_preflight_results(value: Any) -> dict[str, dict[str, Any]] | dict[str, Any] | list[dict[str, Any]]:
+    """Normalize either one preflight summary or an item-keyed collection."""
+    if isinstance(value, list):
+        results: list[dict[str, Any]] = []
+        for raw in value[:32]:
+            normalized = _normalize_state_preflight_result(raw)
+            if normalized is not None:
+                results.append(normalized)
+        return results
+    if not isinstance(value, dict):
+        return {}
+    if "status" in value or "ok" in value or "fileName" in value:
+        return _normalize_state_preflight_result(value) or {}
+    results_by_item: dict[str, dict[str, Any]] = {}
+    for raw_id, raw_result in list(value.items())[:32]:
+        if not isinstance(raw_id, str) or not raw_id.strip():
+            continue
+        normalized = _normalize_state_preflight_result(raw_result)
+        if normalized is not None:
+            results_by_item[raw_id.strip()[:128]] = normalized
+    return results_by_item
+
+
 def _normalize_state_quote_requests(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -1053,6 +1149,41 @@ def _normalize_state_quote_requests(value: Any) -> list[dict[str, Any]]:
             continue
         requests.append(safe)
     return requests
+
+
+def _normalize_state_tool_receipts(value: Any) -> list[dict[str, Any]]:
+    """Keep the bounded planner observation ledger safe across restarts."""
+    if not isinstance(value, list):
+        return []
+    receipts: list[dict[str, Any]] = []
+    for raw in value[-16:]:
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        result: dict[str, Any] = {
+            "name": name.strip()[:128],
+            "status": raw.get("status")[:64] if isinstance(raw.get("status"), str) else "ok",
+            "stale": raw.get("stale") if isinstance(raw.get("stale"), bool) else False,
+        }
+        for key in ("inputFingerprint", "callId", "signature", "runId"):
+            item = raw.get(key)
+            if isinstance(item, str) and item:
+                result[key] = item[:512]
+        item_index = raw.get("itemIndex")
+        if isinstance(item_index, int) and not isinstance(item_index, bool) and item_index >= 0:
+            result["itemIndex"] = item_index
+        round_number = raw.get("round")
+        if isinstance(round_number, int) and not isinstance(round_number, bool) and round_number >= 0:
+            result["round"] = round_number
+        for key in ("arguments", "result"):
+            safe = _safe_state_tree(raw.get(key))
+            if safe is not _STATE_MISSING:
+                result[key] = safe
+        receipts.append(result)
+    # The newest entries are the useful ones after a crash/restart.
+    return receipts[-8:]
 
 
 def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -1147,7 +1278,20 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
     state["activeItemIndex"] = (raw_index if isinstance(raw_index, int) and not isinstance(raw_index, bool)
                                  and item_count > 1 and 0 <= raw_index < item_count else None)
     state["itemOptions"] = _normalize_state_item_options(state.get("itemOptions"))
+    raw_process_options = state.get("processOptions", _STATE_MISSING)
+    if raw_process_options is _STATE_MISSING:
+        # Migrate the old multi-item cache name without changing its shape.
+        raw_process_options = state.get("itemOptions")
+    state["processOptions"] = _normalize_state_process_options(raw_process_options)
+    # Keep the legacy field available to older UI callers.  Both fields are
+    # normalized copies so mutating a response cannot alter persisted state.
+    if isinstance(state["processOptions"], dict):
+        state["itemOptions"] = deepcopy(state["processOptions"])
+    elif not state.get("itemOptions"):
+        state["itemOptions"] = {}
+    state["preflightResults"] = _normalize_state_preflight_results(state.get("preflightResults"))
     state["quoteRequests"] = _normalize_state_quote_requests(state.get("quoteRequests"))
+    state["toolReceipts"] = _normalize_state_tool_receipts(state.get("toolReceipts"))
     active_quote_id = state.get("activeQuoteRequestId")
     state["activeQuoteRequestId"] = active_quote_id.strip() if isinstance(active_quote_id, str) and active_quote_id.strip() else None
     schema_version = state.get("schemaVersion")

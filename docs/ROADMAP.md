@@ -14,7 +14,7 @@
 
 ## 当前阶段：v1.1.0（代码基线，候选状态）
 
-v1.1.0 是在 v1.0.0 订单内核和安全边界之上的受控本地集成版：新增标准库 JSON-RPC stdio MCP server、L0/L1 capability 边界、受信 dsh launcher、5 个印刷 skill、无 npm/pnpm 的 Python local host，以及 OpenAI-compatible 原生 tools/JSON fallback planner。模型工具循环最多 3 轮，完全相同的“工具名 + 参数”会被阻断；历史、订单摘要、工具结果和后续工具 schema 都有明确传输预算。当前测试套件包含 236 项，111 例合成评测已通过；真实脱敏语料、真人走查、真实 dsh headless/模型端到端和浏览器冒烟仍是开放门槛，因此当前按候选版本管理。真实供应商 live 接入、报价回写和生产交期倒排不属于本版本，顺延至 v1.2+。
+v1.1.0 是在 v1.0.0 订单内核和安全边界之上的受控本地集成版：新增标准库 JSON-RPC stdio MCP server、L0/L1 capability 边界、受信 dsh launcher、5 个印刷 skill、无 npm/pnpm 的 Python local host，以及 OpenAI-compatible 原生 tools/JSON fallback planner。模型工具循环最多 3 轮，完全相同的“工具名 + 参数”会被阻断；历史、订单摘要、工具结果和后续工具 schema 都有明确传输预算。已提交基线的测试套件包含 236 项，当前工作区已增至 325 项可发现用例（2026-09-18，未提交）；111 例合成评测已通过；真实脱敏语料、真人走查、真实 dsh headless/模型端到端和浏览器冒烟仍是开放门槛，因此当前按候选版本管理。真实供应商 live 接入、报价回写和生产交期倒排不属于本版本，顺延至 v1.2+。
 
 - MCP/dsh 适配层与本地 fallback host 已完成契约实现和离线 smoke，但没有把 smoke 结果等同于真实 dsh headless 或真实模型 provider 验收。
 - 上下文传输已限制为最近 8 条历史（每条最多 2,000 字符）、订单摘要/工具结果各 12KB；本地 SQLite 仍是订单状态唯一权威来源。
@@ -80,7 +80,7 @@ v1.0.0 汇集 v0.9.x–v0.11.x 的全部代码成果：自然语言建单、可�
 ### P0 安全
 - ✅ 本地 API 无鉴权与限流：v0.11.0 起启动时生成本地 token 注入页面，除 `/api/health` 外全部接口要求 `X-PrintOps-Token`；带 Origin 的跨来源请求返回 403。限流仍未做，作为后续项。
 - ✅ `/api/settings` 保存的 API Key 以明文 JSON 落盘：设置面板与 `/api/settings` 响应已加 `keyStorageWarning` 明文风险提醒；改用系统凭据库（Windows 凭据管理器 / keyring）仍是后续增强（依赖零安装的前提下需评估方案）。
-- ✅ 静态服务直接暴露根目录：静态路由白名单已生效（仅 /、/index.html、/app.js、/styles.css、/api/*），`/.git`、源码与数据文件一律 404。
+- ✅ 静态服务直接暴露根目录：静态路由白名单已生效（仅 /、/index.html、/app.js、/markdown.js、/styles.css、/api/*），`/.git`、源码与数据文件一律 404。
 - ✅ LLM URL 由用户任意填写存在 SSRF 面：配置时校验主机，拒绝环回/私有/CGNAT/保留/链路本地地址（含解析后指向内网的域名）；无法解析的主机名放行（请求时自然失败）。剩余风险：配置时校验与实际请求之间理论上存在 DNS 重绑定窗口，对单机工具可接受。
 
 ### P1 可靠性

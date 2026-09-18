@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import re
 import secrets
+import signal
+import socket
+import sqlite3
+import sys
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
 from agent import Agent, Memory, PLATFORMS, SUPPLIER_PROFILE_VERSION, TOOL_META, TOOL_SCHEMAS
@@ -19,7 +26,13 @@ from llm_adapter import OpenAICompatiblePlanner, read_saved_config, write_saved_
 
 
 ROOT = Path(__file__).parent
-MEMORY = Memory(ROOT / "data/agent.sqlite3")
+# A deployment (systemd, read-only install directory, packaged app) may place
+# the session database outside the repository.  The default is unchanged.
+MEMORY_PATH = Path(os.getenv("PRINTOPS_MEMORY_PATH", "").strip() or (ROOT / "data/agent.sqlite3"))
+# The store is built on first use instead of at import: constructing it here
+# would raise before ``--check`` could explain an unusable path, leaving the
+# "session database is not writable" startup check unreachable.
+MEMORY: Memory | None = None
 LLM_CONFIG_PATH = ROOT / "data/llm_config.json"
 SAVED_LLM_CONFIG = read_saved_config(LLM_CONFIG_PATH)
 ALLOW_PRIVATE_LLM_HOSTS = os.getenv("PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS", "").strip().lower() in {
@@ -35,10 +48,53 @@ LLM_LOCK = threading.Lock()
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 MAX_BODY_BYTES = 1 * 1024 * 1024
+# Scratch table used only by the startup write probe; the probe rolls back, so
+# a successful start never persists it.
+PROBE_TABLE = "printops_startup_probe"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 LOGGER = logging.getLogger("printops.server")
 DEFAULT_PORT = 4174
-PORT = int(os.getenv("PRINTOPS_PORT", str(DEFAULT_PORT)))
+LOOPBACK_HOST = "127.0.0.1"
+DEFAULT_MAX_CONNECTIONS = 64
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_SLOW_REQUEST_MS = 1000.0
+DEFAULT_SHUTDOWN_GRACE_SECONDS = 5.0
+
+
+def _env_number(name: str, default: Any, cast: Callable[[str], Any]) -> Any:
+    """Read a numeric tuning knob without letting a typo abort module import."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        LOGGER.warning("忽略无效的 %s=%r，使用默认值 %s", name, raw, default)
+        return default
+
+
+def _port_from_env() -> tuple[int, str | None]:
+    """Parse ``PRINTOPS_PORT`` and remember an invalid value as a startup problem."""
+    raw = os.getenv("PRINTOPS_PORT", "").strip()
+    if not raw:
+        return DEFAULT_PORT, None
+    try:
+        return int(raw), None
+    except ValueError:
+        return DEFAULT_PORT, f"环境变量 PRINTOPS_PORT={raw!r} 不是有效端口号"
+
+
+PORT, PORT_ENV_ERROR = _port_from_env()
+MAX_CONNECTIONS = max(
+    1, int(_env_number("PRINTOPS_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS, int))
+)
+REQUEST_TIMEOUT_SECONDS = float(
+    _env_number("PRINTOPS_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT_SECONDS, float)
+)
+SLOW_REQUEST_MS = float(_env_number("PRINTOPS_SLOW_REQUEST_MS", DEFAULT_SLOW_REQUEST_MS, float))
+SHUTDOWN_GRACE_SECONDS = float(
+    _env_number("PRINTOPS_SHUTDOWN_GRACE_SECONDS", DEFAULT_SHUTDOWN_GRACE_SECONDS, float)
+)
 
 # Local access token: generated per process, injected into the served page,
 # and required on every API call except /api/health. A random website cannot
@@ -50,11 +106,12 @@ ACCESS_TOKEN = secrets.token_urlsafe(24)
 # docs, .git or runtime data. Non-API paths outside this set return 404.
 STATIC_FILES = {
     "": "index.html", "/": "index.html", "/index.html": "index.html",
-    "/app.js": "app.js", "/styles.css": "styles.css",
+    "/app.js": "app.js", "/markdown.js": "markdown.js", "/styles.css": "styles.css",
 }
 STATIC_CONTENT_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "markdown.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
 KEY_STORAGE_WARNING = ("API Key 以明文保存在本机 data/llm_config.json（文件权限 600）。"
@@ -109,6 +166,26 @@ def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
     return payload
 
 
+def test_llm_capabilities(body: dict[str, object]) -> dict[str, object]:
+    """Probe the configured or unsaved endpoint for Agent protocol support."""
+    with LLM_LOCK:
+        has_override = any(key in body for key in ("url", "model", "key"))
+        tester = PLANNER
+        if has_override:
+            tester = OpenAICompatiblePlanner(
+                timeout=PLANNER.timeout,
+                allow_private_hosts=getattr(PLANNER, "allow_private_hosts", False),
+            )
+            test_url = str(body.get("url", "")).strip()
+            test_model = str(body.get("model", "")).strip()
+            test_key = str(body.get("key", "")).strip()
+            if not test_key and test_url == PLANNER.base_url and test_model == PLANNER.model:
+                test_key = PLANNER.api_key
+            tester.configure(test_url, test_model, test_key)
+        result = tester.test_capabilities()
+        return {"llm": tester.public_config(), "test": result}
+
+
 def _session_id(value: object) -> str | None:
     """Accept only opaque, bounded IDs generated by this app."""
     if value in (None, ""):
@@ -128,10 +205,34 @@ def _item_index(body: dict[str, object]) -> int | None:
     return int(value) if value is not None else None
 
 
+def _preflight(agent: Agent, body: dict[str, object]):
+    """Dispatch file preflight without guessing scanner state.
+
+    ``Agent.upload`` keeps historical defaults for trusted in-process callers,
+    but an HTTP payload is an untrusted transport boundary.  Requiring both
+    booleans here keeps the browser API, public tool gateway and MCP contract
+    aligned: an omitted flag means the client failed to provide inspection
+    evidence, rather than meaning ``False``/``True``.
+    """
+    missing = [key for key in ("encrypted", "readable") if key not in body]
+    if missing:
+        raise RequestError("预检必须明确提供 encrypted 和 readable", code="INVALID_PAYLOAD")
+    encrypted = body.get("encrypted")
+    readable = body.get("readable")
+    if not isinstance(encrypted, bool) or not isinstance(readable, bool):
+        raise RequestError("参数 encrypted 和 readable 必须是布尔值", code="INVALID_PAYLOAD")
+    return agent.upload(
+        str(body.get("fileName", "")), int(body.get("sizeBytes", 0)),
+        int(body["pageCount"]) if body.get("pageCount") is not None else None,
+        encrypted, readable, body.get("inspection"), body.get("expectedSize"), _item_index(body),
+    )
+
+
 def dispatch_post(path: str, body: dict[str, object], agent: Agent):
     """Dispatch a parsed API payload without doing network I/O."""
     routes = {
         "/api/session": lambda: agent.snapshot(),
+        "/api/session/context": lambda: agent.context_snapshot(_item_index(body)),
         "/api/chat": lambda: agent.chat(str(body.get("text", "")), body.get("patch"), _item_index(body)),
         "/api/choose": lambda: agent.choose(str(body.get("optionId", "")), _item_index(body)),
         "/api/generate": lambda: agent.generate(),
@@ -141,11 +242,7 @@ def dispatch_post(path: str, body: dict[str, object], agent: Agent):
             str(body.get("requestId", "")).strip() or None,
             str(body.get("reason", "用户取消询价")),
         ),
-        "/api/preflight": lambda: agent.upload(
-            str(body.get("fileName", "")), int(body.get("sizeBytes", 0)),
-            int(body["pageCount"]) if body.get("pageCount") is not None else None,
-            body.get("encrypted") is True, body.get("readable") is not False,
-            body.get("inspection"), body.get("expectedSize"), _item_index(body)),
+        "/api/preflight": lambda: _preflight(agent, body),
         "/api/platform": lambda: agent.set_platform(str(body.get("platformId", "generic"))),
         "/api/tools/call": lambda: agent.call_tool(str(body.get("toolName", "")), body.get("payload", {})),
     }
@@ -172,7 +269,312 @@ def dispatch_get(path: str) -> dict[str, object] | None:
     return None
 
 
+class InFlightRequests:
+    """Count the HTTP requests being handled so shutdown can drain them."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._active = 0
+
+    def enter(self) -> None:
+        with self._condition:
+            self._active += 1
+
+    def leave(self) -> None:
+        with self._condition:
+            self._active -= 1
+            if self._active <= 0:
+                self._condition.notify_all()
+
+    def active(self) -> int:
+        with self._condition:
+            return self._active
+
+    def wait_for_idle(self, timeout: float) -> bool:
+        """Wait until no request is in flight; ``False`` means the grace period expired."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._condition:
+            while self._active > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
+            return True
+
+
+IN_FLIGHT = InFlightRequests()
+
+
+def reject_overloaded(request) -> None:
+    """Answer a connection we cannot serve with a bounded 503 and close it.
+
+    The rejection happens before any worker thread exists, so a flood of slow
+    connections cannot grow the thread count or open more SQLite connections.
+    """
+    body = json.dumps({"ok": False, "code": "SERVER_BUSY", "message": "服务繁忙，请稍后重试"},
+                      ensure_ascii=False).encode("utf-8")
+    response = b"".join((
+        b"HTTP/1.1 503 Service Unavailable\r\n",
+        b"Content-Type: application/json; charset=utf-8\r\n",
+        b"Content-Length: ", str(len(body)).encode("ascii"), b"\r\n",
+        b"Connection: close\r\n",
+        b"Retry-After: 1\r\n",
+        b"\r\n",
+        body,
+    ))
+    try:
+        request.sendall(response)
+    except OSError:
+        pass
+    finally:
+        try:
+            request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            request.close()
+        except OSError:
+            pass
+
+
+class PrintOpsHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with bounded concurrency and prompt, non-blocking shutdown.
+
+    ``ThreadingHTTPServer`` starts one thread per accepted connection with no
+    upper bound, so stalled clients can exhaust threads and file descriptors.
+    ``daemon_threads`` keeps a stuck client from blocking interpreter exit and
+    ``block_on_close = False`` keeps ``server_close()`` from joining handler
+    threads: a shutdown must never wait on a slow client.
+    """
+
+    daemon_threads = True
+    block_on_close = False
+    allow_reuse_address = True
+    request_queue_size = 32
+
+    def __init__(self, server_address, RequestHandlerClass,
+                 max_connections: int | None = None) -> None:
+        self.max_connections = max(1, int(max_connections or MAX_CONNECTIONS))
+        self._connection_slots = threading.BoundedSemaphore(self.max_connections)
+        self.rejected_connections = 0
+        super().__init__(server_address, RequestHandlerClass)
+
+    def process_request(self, request, client_address) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            self.rejected_connections += 1
+            LOGGER.warning("连接被拒绝：已达并发上限 maxConnections=%s rejectedTotal=%s",
+                           self.max_connections, self.rejected_connections)
+            reject_overloaded(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            # Release in the worker thread so a crashing handler still frees
+            # its slot instead of permanently shrinking the connection budget.
+            self._connection_slots.release()
+
+    def has_free_connection_slot(self) -> bool:
+        """Report whether a new connection could be accepted right now."""
+        if not self._connection_slots.acquire(blocking=False):
+            return False
+        self._connection_slots.release()
+        return True
+
+    def wait_for_idle(self, timeout: float) -> bool:
+        return IN_FLIGHT.wait_for_idle(timeout)
+
+
+def memory_path() -> Path:
+    """Return the session database path the process should use.
+
+    The module attribute wins over the constant so replacing ``server.MEMORY``
+    (the seam the tests already use) still redirects the startup probe.
+    """
+    memory = MEMORY
+    return memory.path if memory is not None else MEMORY_PATH
+
+
+def session_memory() -> Memory:
+    """Return the process-wide session store, building it on first use."""
+    global MEMORY
+    memory = MEMORY
+    if memory is None:
+        memory = Memory(MEMORY_PATH)
+        MEMORY = memory
+    return memory
+
+
+def memory_write_probe(path: str | Path) -> None:
+    """Prove the session database can be opened and written, without changing data.
+
+    A write transaction is required, not just ``W_OK`` on the directory: it is
+    the only check that also covers a read-only mount, a read-only database
+    file and a missing permission to create the journal/WAL sidecar.  The
+    transaction is rolled back, so the probe leaves no rows or tables behind.
+    """
+    database = Path(path)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(database), timeout=5.0)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(f"CREATE TABLE IF NOT EXISTS {PROBE_TABLE} (id INTEGER PRIMARY KEY)")
+        connection.execute(f"INSERT INTO {PROBE_TABLE} (id) VALUES (1)")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
+def startup_checks(port: int | None = None) -> list[str]:
+    """Return actionable startup problems; an empty list means safe to serve.
+
+    These run before the socket opens so a broken deployment fails fast with a
+    readable message instead of a traceback, or a UI that loads and then 500s
+    on the first request.  ``port`` is only probed on demand because the real
+    bind happens immediately afterwards during a normal start.
+    """
+    problems: list[str] = []
+    if PORT_ENV_ERROR:
+        problems.append(PORT_ENV_ERROR)
+    for name in sorted(set(STATIC_FILES.values())):
+        if not (ROOT / name).is_file():
+            problems.append(f"缺少静态资源 {name}（部署包不完整）")
+    try:
+        memory_write_probe(memory_path())
+    except (OSError, sqlite3.Error) as error:
+        problems.append(f"会话数据库不可写：{memory_path()}（{error}）")
+    if port is not None:
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind((LOOPBACK_HOST, int(port)))
+            finally:
+                probe.close()
+        except (OSError, ValueError, OverflowError) as error:
+            problems.append(f"端口 {port} 不可用：{error}"
+                            "（端口可能已被占用；可用 PRINTOPS_PORT 更换）")
+    return problems
+
+
+def configure_logging() -> None:
+    """Send operational logs to stderr; ``PRINTOPS_LOG_LEVEL`` overrides the level."""
+    level_name = os.getenv("PRINTOPS_LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, None)
+    if not isinstance(level, int) or isinstance(level, bool):
+        level = logging.INFO
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=level, stream=sys.stderr,
+                            format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    LOGGER.setLevel(level)
+
+
+def build_server(port: int, host: str = LOOPBACK_HOST,
+                 max_connections: int | None = None) -> PrintOpsHTTPServer:
+    """Bind the development-grade HTTP server to the loopback interface."""
+    return PrintOpsHTTPServer((host, int(port)), Handler, max_connections=max_connections)
+
+
+def install_signal_handlers(server: Any, stream: Any = None) -> Callable[[], None]:
+    """Route SIGINT/SIGTERM into a graceful shutdown; return a restore callable.
+
+    ``shutdown()`` must not run inside the signal handler itself: it waits for
+    ``serve_forever`` to return, which would deadlock the main thread.  A short
+    helper thread requests the stop instead, and a second signal exits hard so
+    an operator is never forced to reach for SIGKILL.
+    """
+    previous: dict[int, Any] = {}
+    log_stream = stream if stream is not None else sys.stderr
+    seen = {"count": 0}
+
+    def _handle(signum, frame) -> None:
+        seen["count"] += 1
+        if seen["count"] > 1:
+            print(f"PrintOps: 再次收到信号 {signum}，强制退出", file=log_stream, flush=True)
+            os._exit(128 + int(signum))
+        LOGGER.info("收到停止信号 signal=%s，开始优雅关闭", signum)
+        threading.Thread(target=server.shutdown, name="printops-graceful-shutdown",
+                         daemon=True).start()
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _handle)
+        except (ValueError, OSError, AttributeError):
+            previous.pop(signum, None)
+
+    def restore() -> None:
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler)
+            except (ValueError, OSError, TypeError):
+                pass
+
+    return restore
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the local HTTP API with fail-fast startup and graceful shutdown."""
+    parser = argparse.ArgumentParser(prog="server.py",
+                                     description="PrintOps 本地 HTTP API（纯标准库）")
+    parser.add_argument("--port", type=int, default=None,
+                        help=f"监听端口（默认 PRINTOPS_PORT，回退 {DEFAULT_PORT}）")
+    parser.add_argument("--check", action="store_true",
+                        help="只运行启动自检（含端口探测）并退出，不提供服务")
+    args = parser.parse_args(argv)
+    configure_logging()
+    port = PORT if args.port is None else args.port
+    if not 0 <= port <= 65535:
+        print(f"PrintOps 启动失败：端口 {port} 超出 0-65535", file=sys.stderr)
+        return 1
+
+    problems = startup_checks(port if args.check else None)
+    if args.check:
+        print(json.dumps({"ok": not problems, "port": port,
+                          "memoryPath": str(memory_path()), "problems": problems},
+                         ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+        return 1 if problems else 0
+    if problems:
+        for problem in problems:
+            print(f"PrintOps 启动自检失败：{problem}", file=sys.stderr)
+        return 1
+
+    try:
+        httpd = build_server(port)
+    except OSError as error:
+        print(f"PrintOps 启动失败：无法监听 {LOOPBACK_HOST}:{port}（{error}）。"
+              f"若端口被占用，可先结束占用进程（macOS: lsof -nP -iTCP:{port} -sTCP:LISTEN）"
+              f"或用 PRINTOPS_PORT 换端口。", file=sys.stderr)
+        return 1
+
+    restore_signals = install_signal_handlers(httpd)
+    try:
+        bound_port = httpd.server_address[1]
+        LOGGER.info("listening url=http://localhost:%s maxConnections=%s pid=%s",
+                    bound_port, httpd.max_connections, os.getpid())
+        print(f"PrintOps order agent: http://localhost:{bound_port}")
+        print(f"本地访问令牌（curl 调试用 -H 'X-PrintOps-Token: ...'）：{ACCESS_TOKEN}")
+        httpd.serve_forever(poll_interval=0.25)
+    finally:
+        restore_signals()
+        if not httpd.wait_for_idle(SHUTDOWN_GRACE_SECONDS):
+            LOGGER.warning("优雅关闭超时，仍有 %s 个请求在途", IN_FLIGHT.active())
+        httpd.server_close()
+        LOGGER.info("server stopped pid=%s", os.getpid())
+    return 0
+
+
 class Handler(BaseHTTPRequestHandler):
+    # Bound how long a client may occupy a worker thread mid-request; a stalled
+    # read must not hold a slot (and a SQLite connection) forever.
+    timeout = REQUEST_TIMEOUT_SECONDS if REQUEST_TIMEOUT_SECONDS > 0 else None
+
     def _origin_allowed(self) -> bool:
         """Same-origin check: a present Origin header must match Host."""
         origin = self.headers.get("Origin")
@@ -222,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        self.request_id = uuid.uuid4().hex[:12]
+        self._begin_request()
         path = unquote(urlsplit(self.path).path)
         try:
             if path.startswith("/api/"):
@@ -235,14 +637,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve_static(path)
         except RequestError as error:
             return self.error_response(error)
+        except socket.timeout:
+            return self.error_response(RequestError("请求读取超时，请重试", 408, "REQUEST_TIMEOUT"))
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception:
             LOGGER.exception("GET request failed requestId=%s path=%s", self.request_id, path)
             return self.error_response(RequestError("服务暂时无法处理请求，请重试", 500, "INTERNAL_ERROR"))
+        finally:
+            self._finish_request()
 
     def do_POST(self):
-        self.request_id = uuid.uuid4().hex[:12]
+        self._begin_request()
         path = unquote(urlsplit(self.path).path)
         try:
             if not self._guard():
@@ -254,43 +660,33 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as error:
                     raise RequestError(str(error), 400, "INVALID_SETTINGS")
             if path == "/api/model/test":
-                with LLM_LOCK:
-                    has_override = any(key in body for key in ("url", "model", "key"))
-                    tester = PLANNER
-                    if has_override:
-                        tester = OpenAICompatiblePlanner(
-                            timeout=PLANNER.timeout,
-                            allow_private_hosts=getattr(PLANNER, "allow_private_hosts", False),
-                        )
-                        try:
-                            test_url = str(body.get("url", "")).strip()
-                            test_model = str(body.get("model", "")).strip()
-                            test_key = str(body.get("key", "")).strip()
-                            if not test_key and test_url == PLANNER.base_url and test_model == PLANNER.model:
-                                test_key = PLANNER.api_key
-                            tester.configure(test_url, test_model, test_key)
-                        except ValueError as error:
-                            raise RequestError(str(error), 400, "INVALID_SETTINGS")
-                    result = tester.test_connection()
-                    return self.reply({"llm": tester.public_config(), "test": result})
+                try:
+                    return self.reply(test_llm_capabilities(body))
+                except ValueError as error:
+                    raise RequestError(str(error), 400, "INVALID_SETTINGS")
             session_id = _session_id(body.get("sessionId"))
             if session_id:
                 # Lock before loading state so concurrent requests cannot read
                 # the same snapshot and overwrite each other's changes.
                 with _session_lock(session_id):
-                    return self.reply(dispatch_post(path, body, Agent(MEMORY, session_id, planner=PLANNER)))
-            agent = Agent(MEMORY, planner=PLANNER)
+                    agent = Agent(session_memory(), session_id, planner=PLANNER)
+                    return self.reply(dispatch_post(path, body, agent))
+            agent = Agent(session_memory(), planner=PLANNER)
             with _session_lock(agent.id):
                 return self.reply(dispatch_post(path, body, agent))
         except RequestError as error:
             return self.error_response(error)
         except (TypeError, ValueError):
             return self.error_response(RequestError("请求参数格式不正确", 400, "INVALID_PAYLOAD"))
+        except socket.timeout:
+            return self.error_response(RequestError("请求读取超时，请重试", 408, "REQUEST_TIMEOUT"))
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception:
             LOGGER.exception("POST request failed requestId=%s path=%s", self.request_id, path)
             return self.error_response(RequestError("本次处理失败，请重试", 500, "AGENT_ERROR"))
+        finally:
+            self._finish_request()
 
     def read_json(self) -> dict[str, object]:
         content_length = self.headers.get("Content-Length")
@@ -367,9 +763,52 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply({"ok": False, "code": error.code, "message": error.message,
                            "requestId": getattr(self, "request_id", "")}, error.status)
 
+    def _begin_request(self) -> None:
+        self.request_id = uuid.uuid4().hex[:12]
+        self._request_started = time.monotonic()
+        self._response_status = None
+        IN_FLIGHT.enter()
+
+    def _finish_request(self) -> None:
+        """Emit one structured line per request and release the drain counter."""
+        IN_FLIGHT.leave()
+        started = getattr(self, "_request_started", None)
+        duration_ms = max(0.0, (time.monotonic() - started) * 1000.0) if started else 0.0
+        status = getattr(self, "_response_status", None) or 0
+        request_id = getattr(self, "request_id", "")
+        command = getattr(self, "command", "") or ""
+        path = unquote(urlsplit(getattr(self, "path", "") or "").path)
+        LOGGER.info("requestId=%s method=%s path=%s status=%s durationMs=%.1f",
+                    request_id, command, path, status, duration_ms,
+                    extra={"request_id": request_id, "status": status,
+                           "duration_ms": round(duration_ms, 1)})
+        if SLOW_REQUEST_MS > 0 and duration_ms >= SLOW_REQUEST_MS:
+            LOGGER.warning("慢请求 requestId=%s method=%s path=%s status=%s durationMs=%.1f",
+                           request_id, command, path, status, duration_ms)
+
+    def log_request(self, code="-", size="-"):
+        """Remember the status code; ``_finish_request`` logs it once, with latency."""
+        self._response_status = code
+
     def log_message(self, format, *args):
-        # Log only the normalized path; request query strings can contain secrets.
-        LOGGER.info("%s %s", self.command, unquote(urlsplit(self.path).path))
+        """Log a protocol-level error without leaking query strings.
+
+        ``log_error`` also runs for connections that die before a request line
+        is parsed (socket timeout, reset), when ``command`` and ``path`` are
+        not set yet; reading them blindly would raise AttributeError inside the
+        error path itself.
+        """
+        command = getattr(self, "command", "") or "-"
+        raw_path = getattr(self, "path", "") or ""
+        try:
+            path = unquote(urlsplit(raw_path).path) or "-"
+        except ValueError:
+            path = "-"
+        try:
+            detail = format % args if args else str(format)
+        except (TypeError, ValueError):
+            detail = str(format)
+        LOGGER.info("%s %s %s", command, path, detail)
 
 
 def index_html_with_token(raw: bytes) -> bytes:
@@ -384,6 +823,4 @@ def index_html_with_token(raw: bytes) -> bytes:
 
 
 if __name__ == "__main__":
-    print(f"PrintOps order agent: http://localhost:{PORT}")
-    print(f"本地访问令牌（curl 调试用 -H 'X-PrintOps-Token: ...'）：{ACCESS_TOKEN}")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    raise SystemExit(main())

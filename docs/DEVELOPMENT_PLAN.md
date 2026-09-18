@@ -4,10 +4,13 @@
 > 文档结构：本文件是总纲；十条优化路径各自独立成篇，另有四个附录（A 风险登记册、
 > B 技术债务登记册、C 接口契约变更总表、D 度量与可观测性体系），均位于 `docs/plan/` 目录。
 >
-> 注：本计划书保留 2026-09-05 的排期快照；当前运行状态、测试计数和 dsh/MCP 适配以
-> [`docs/STATUS_REPORT_2026-09-09.md`](STATUS_REPORT_2026-09-09.md) 为准。
-> 当前产品版本已推进到 `1.1.0` 候选基线；本计划书的 v1.1.0 供应商接入排期属于历史计划，
-> 真实供应商 live 接入尚未实现，当前顺延至 v1.2+。本文件其余任务卡和估算不随版本同步改写。
+> ⚠️ 排期已作废（2026-09-18）：本计划书的**版本框架、里程碑与优先级不再有效**，仅作为设计参考保留。
+> 原定的 v0.12.0「响应感与工程化」与 v0.13.0「文件与交付」从未发布，实际发布线为
+> v0.11.0 → v1.0.0 → v1.1.0；原 v1.1.0「受控供应商接入」顺延至 v1.2+。
+> 当前进度与优先级以 [`docs/ROADMAP.md`](ROADMAP.md) 与
+> [`docs/RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) 为准。
+> 本文件及十篇路径文档中的代码快照、行数和「现状」描述取自 2026-09-05，不代表当前工作区；
+> 任务卡编号（S1-01 等）仅用于方案引用，不承载执行状态。
 > 每篇路径文档包含统一的十二个部分：现状与问题、目标与非目标、方案设计、接口与数据契约、
 > 分阶段实施步骤、测试与验收、风险与对策、工作量估算、依赖与顺序、任务卡分解、
 > 关键结构定义与测试矩阵（部分路径追加了 13 节深化设计）。
@@ -36,31 +39,35 @@ socket 级 HTTP 测试、Key 风险提示与敏感扫描扩充、补丁引擎合
 
 ## 二、当前资产盘点（计划的出发点）
 
-### 2.1 代码资产（约 8,600 行源码）
+### 2.1 代码资产（约 12,600 行核心源码）
 
-| 模块 | 规模 | 职责 | 已知问题 |
+> 下表按 2026-09-18 当前工作区实测行数重写。原表为 2026-09-05 的估算，与现状偏差较大，已废弃。
+
+| 模块 | 规模（2026-09-18 实测） | 职责 | 已知问题 |
 | --- | --- | --- | --- |
-| agent.py | 约 1,450 行 | Agent 状态机、会话记忆（Memory）、工作流、工具网关、`_apply_patch` 统一补丁引擎 | `chat()` 约 185 行仍偏长；多产品拆分时单产品阶段的 provenance 不迁移到 `items.*` 键 |
-| app.js | 1,848 行 | UI 状态、对话、API 交互、渲染 | 约 15 个模块级可变全局；`render()` 每次全量重绘约 11 个面板；重建输入框丢焦点；零测试 |
-| tools.py | 674 行 | 白名单工具注册表（validate_order、recommend_processes、estimate_price、prepare_handoff、request_supplier_quote 等） | 工具执行与 Agent 的职责边界清晰，暂无重大问题 |
-| order_model.py | 约 330 行 | 订单数据契约、数量/尺寸规范化、schemaVersion 迁移 | `normalize_state` 已是唯一迁移入口，健康 |
-| nlu.py | 约 350 行 | 规则感知：字段抽取、置信度分级、否定窗口、多产品拆分 | 与 LLM 双轨行为差异未固化断言 |
-| llm_adapter.py | 约 330 行 | OpenAI 兼容适配器、本地配置读写、SSRF 主机校验 | 同步阻塞（20s×2）；2 次尝试 80ms 固定退避；`last_error` 共享状态 |
-| server.py | 约 330 行 | 本地静态服务（白名单+令牌）与 JSON API | 全局 `LLM_LOCK`；`SESSION_LOCKS` 只增不减 |
-| product_knowledge.py | 约 700 行 | 品类目录、专属参数、印刷知识、示例价格参数表（带版本） | 行业风险规则（折页压痕线、专色配置等）待补 |
-| supplier_adapters.py | 约 160 行 | 平台能力档案、品类分层字段映射协议 | 静态示例数据；无真实外部交互 |
-| styles.css / index.html | 56KB / 16KB | 设计令牌、三栏工作台、抽屉模式 | 全部选择器已收敛到令牌体系 |
+| agent.py | 3,716 行 | Agent 状态机、会话记忆（Memory）、工作流、工具网关、`_apply_patch` 统一补丁引擎 | `chat()` 仍偏长；多产品拆分时单产品阶段的 provenance 不迁移到 `items.*` 键 |
+| app.js | 1,948 行 | UI 状态、对话、API 交互、渲染 | 约 15 个模块级可变全局；`render()` 每次全量重绘；重建输入框丢焦点；零测试 |
+| llm_adapter.py | 1,782 行 | OpenAI 兼容适配器、原生 tool_calls/JSON fallback planner、本地配置读写、SSRF 主机校验 | 同步阻塞（20s×2）；2 次尝试 80ms 固定退避；`last_error` 共享状态 |
+| order_model.py | 1,336 行 | 订单数据契约、数量/尺寸规范化、schemaVersion 迁移 | `normalize_state` 已是唯一迁移入口，健康 |
+| mcp_server.py | 1,088 行 | 标准库 JSON-RPC stdio MCP server：session binding、L0/L1 capability、参数校验与审计 | 真实 dsh headless 与 on/off parity 未验收（RELEASE_CHECKLIST 门槛 12） |
+| server.py | 826 行 | 本地静态服务（白名单+令牌）与 JSON API | 全局 `LLM_LOCK`；`SESSION_LOCKS` 只增不减 |
+| tools.py | 734 行 | 白名单工具注册表（validate_order、recommend_processes、estimate_price、prepare_handoff、request_supplier_quote 等） | 工具执行与 Agent 的职责边界清晰，暂无重大问题 |
+| nlu.py | 432 行 | 规则感知：字段抽取、置信度分级、否定窗口、多产品拆分 | 与 LLM 双轨行为差异未固化断言 |
+| product_knowledge.py | 443 行 | 品类目录、专属参数、印刷知识、示例价格参数表（带版本） | 行业风险规则（折页压痕线、专色配置等）待补 |
+| markdown.js | 226 行（未提交） | 零依赖 Markdown 渲染器：对话气泡与输入预览共用，渲染前转义 HTML | 静态白名单在内存中，改代码后必须重启 server 才生效 |
+| supplier_adapters.py | 102 行 | 平台能力档案、品类分层字段映射协议 | 静态示例数据；无真实外部交互 |
+| styles.css / index.html | 59KB / 17KB | 设计令牌、三栏工作台、抽屉模式 | 全部选择器已收敛到令牌体系 |
 
 ### 2.2 测试资产
 
-- 当前测试套件包含 236 个单元/契约测试（覆盖 agent、server 契约、HTTP handler、persistence、安全边界、real-corpus pipeline、annotate_case 以及 dsh/MCP 与本地 host 契约）；测试数量随实现演进，以发布前实际运行结果为准；
+- 已提交的 v1.1.0 基线包含 236 个单元/契约测试；当前工作区（2026-09-18，未提交）已增至 325 项可发现用例，新增 planner loop、模型协议、runtime hardening 与 Markdown 渲染覆盖。覆盖范围包括 agent、server 契约、HTTP handler、persistence、安全边界、real-corpus pipeline、annotate_case 以及 dsh/MCP 与本地 host 契约；测试数量随实现演进，以发布前实际运行结果为准；
 - 评测：111 例合成脱敏语料（按基础/否定/修改/歧义/多产品/尺寸格式/数量表达分组），字段准确率 100%、可完成用例完整率 100%；真实脱敏语料机制就绪（`tests/eval_cases_real.json` + `tools/annotate_case.py` 标注辅助 + 四态判定 + ≥20 例 ≥95% 硬门槛）；
 - 发布检查：当前仓库不包含 GitHub Actions workflow，按 README 与 `docs/RELEASE_CHECKLIST.md` 在本机执行单测 → 评测 → 编译 → 敏感扫描 → 空白检查；跨平台验证仍是发布前人工门禁；
 - 缺口：前端零测试、无并发压力测试、无 LLM 流式解析测试（路径一引入）。
 
 ### 2.3 文档资产
 
-README（快速开始 + 安全边界）、ARCHITECTURE（架构与数据契约）、ROADMAP（持续目标与 P0-P2 议题清单，v0.11.0 已消化 P0 全部）、RELEASE_CHECKLIST（1.0 门槛与走查脚本）、CHANGELOG（逐版本）、本计划书及其十条路径。
+README（快速开始 + 安全边界）、ARCHITECTURE（架构与数据契约，仍停留在 v1.0 视角，未覆盖 MCP/local host/planner tool-loop）、FILE_MANAGEMENT（目录与发布边界）、ROADMAP（当前阶段的权威状态与 P0-P2 议题清单）、RELEASE_CHECKLIST（1.1 门槛与走查脚本，当前门禁的权威来源）、CHANGELOG（逐版本）、本计划书及其十条路径（设计参考）。
 
 ### 2.4 已确立的工程约束（所有路径必须遵守）
 

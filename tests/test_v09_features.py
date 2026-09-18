@@ -209,10 +209,10 @@ class PlannerDigestTest(unittest.TestCase):
             return self.payload
 
     def test_plan_payload_sends_compact_order_and_described_tools(self) -> None:
-        captured = {}
+        captured = []
 
         def fake_urlopen(request, timeout):
-            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured.append(json.loads(request.data.decode("utf-8")))
             return PlannerDigestTest._FakeResponse({"choices": [{"message": {"content": '{"reply": "好的，我来整理", "patch": {}, "tool": null}'}}]})
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,7 +220,11 @@ class PlannerDigestTest(unittest.TestCase):
             agent = Agent(Memory(Path(tmp) / "agent.sqlite3"), planner=planner)
             with mock_patch("llm_adapter.urllib.request.urlopen", fake_urlopen):
                 agent.chat("做 500 份 A4 宣传册，32页骑马钉", {"paper": "待推荐"})
-        user_content = json.loads(captured["body"]["messages"][-1]["content"])
+        # The planner may issue a tools-disabled synthesis request after its
+        # first response.  Assert the initial request, where the tool catalog
+        # is actually advertised, instead of whichever request happened to be
+        # captured last.
+        user_content = json.loads(captured[0]["messages"][-1]["content"])
         order = user_content["order"]
         self.assertTrue(order, "digest should carry the filled fields")
         self.assertNotIn("items", order)
