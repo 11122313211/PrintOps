@@ -1,0 +1,12 @@
+{
+  "name": "printops-development-checks",
+  "private": true,
+  "description": "Optional development browser checks. PrintOps runtime remains Python standard library only.",
+  "scripts": {
+    "test:browser": "playwright test --config tests/browser_smoke.config.mjs",
+    "test:browser:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

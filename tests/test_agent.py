@@ -160,7 +160,8 @@ class AgentTest(unittest.TestCase):
 
     def test_runtime_stage_reflects_quote_and_file_preflight_tools(self):
         quote = self.agent.call_tool("estimate_price")
-        self.assertEqual(quote["workflowStage"], "quote")
+        self.assertEqual(quote["workflowStage"], "collect")
+        self.assertEqual(quote["toolResult"]["status"], "blocked")
         preflight = self.agent.upload("artwork.pdf", 1024, page_count=1)
         self.assertEqual(preflight["workflowStage"], "preflight")
 
@@ -251,7 +252,7 @@ class AgentTest(unittest.TestCase):
             "paper": "250g 铜版纸", "printing": "双面四色",
             "finishing": "哑膜", "binding": "骑马钉"
         })
-        self.assertEqual(result["order"]["paper"], "250g 铜版纸")
+        self.assertEqual(result["order"]["paper"], '250 g/m² 铜版纸')
         self.assertEqual(result["order"]["printing"], "双面四色")
         self.assertEqual(result["order"]["finishing"], "哑膜")
         self.assertEqual(result["order"]["binding"], "骑马钉")
@@ -268,9 +269,10 @@ class AgentTest(unittest.TestCase):
         result = prepare_handoff(order)
         self.assertEqual(result["knowledgeVersion"], KNOWLEDGE_VERSION)
         readiness = result["supplierReadiness"]
-        self.assertTrue(any(item["field"] == "品类" for item in readiness["supported"]))
-        self.assertTrue(any(item["value"] == "250g 铜版纸" for item in readiness["supported"]))
-        self.assertTrue(any(item["value"] == "哑膜" for item in readiness["supported"]))
+        self.assertEqual(readiness["supported"], [])
+        self.assertFalse(readiness["verified"])
+        self.assertEqual(readiness["connectionStatus"], "unconfigured")
+        self.assertTrue(any(item["field"] == "品类" for item in readiness["needsReview"]))
         self.assertTrue(any(item["field"] == "成品尺寸" for item in readiness["needsReview"]))
         self.assertTrue(any(item["field"] == "交期" for item in readiness["needsReview"]))
 
@@ -286,9 +288,11 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("price", result)
 
         unsupported = {**order, "productType": "PVC", "paper": "PVC板"}
-        blocked = request_supplier_quote(unsupported)
-        self.assertEqual(blocked["status"], "blocked")
-        self.assertTrue(blocked["requiresHumanConfirmation"])
+        draft = request_supplier_quote(unsupported)
+        self.assertEqual(draft["status"], "awaiting_human_confirmation")
+        self.assertFalse(draft["sent"])
+        self.assertFalse(draft["verified"])
+        self.assertTrue(draft["requiresHumanConfirmation"])
 
     def test_quote_request_is_persisted_and_retries_are_idempotent(self):
         self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
@@ -336,17 +340,19 @@ class AgentTest(unittest.TestCase):
         self.assertTrue(repeated["toolResult"]["idempotent"])
         self.assertEqual(repeated["quoteRequest"]["status"], "cancelled")
 
-    def test_supplier_capability_matches_dimensions_and_flags_unsupported_material(self):
+    def test_unconfigured_supplier_dimensions_and_material_require_review(self):
         supported = match_supplier_capability({**ORDER_DEFAULTS, "platform": "shengda", "productType": "名片",
                                                "size": "A4", "paper": "250g 铜版纸", "finishing": "哑膜",
                                                "deadline": "下周"})
         self.assertEqual(supported["status"], "review")
-        self.assertTrue(any(item["field"] == "成品尺寸" and item["value"] == "A4" for item in supported["supported"]))
+        self.assertEqual(supported["supported"], [])
+        self.assertTrue(any(item["field"] == "成品尺寸" for item in supported["needsReview"]))
         self.assertFalse(supported["unsupported"])
         unsupported = match_supplier_capability({**ORDER_DEFAULTS, "platform": "shengda", "productType": "名片",
                                                  "size": "A4", "paper": "PVC板", "finishing": "击凸",
                                                  "deadline": "下周"})
-        self.assertTrue(any(item["field"] == "纸张/材料" for item in unsupported["unsupported"]))
+        self.assertEqual(unsupported["unsupported"], [])
+        self.assertTrue(any(item["field"] == "纸张/材料" for item in unsupported["needsReview"]))
 
     def test_generate_is_idempotent_after_draft_exists(self):
         self.agent.chat("做 500 份 A4 名片，250g铜版纸，双面四色，下周内")
@@ -381,14 +387,15 @@ class AgentTest(unittest.TestCase):
         self.agent.confirm()
         changed = self.agent.chat("数量改为 800 份")
         self.assertFalse(changed["orderGenerated"])
-        self.assertEqual(changed["confirmation"]["status"], "not_ready")
+        self.assertEqual(changed["confirmation"]["status"], "stale")
         self.assertIsNone(changed["handoff"])
 
     def test_platform_is_not_hardcoded(self):
         result = self.agent.set_platform("shengda")
         self.assertEqual(result["order"]["platform"], "shengda")
         result = self.agent.set_platform("unknown")
-        self.assertEqual(result["order"]["platform"], "generic")
+        self.assertEqual(result["order"]["platform"], "shengda")
+        self.assertEqual(result["toolResult"]["reason"], "unknown_provider")
 
     def test_common_printing_language_reaches_tool_stage(self):
         result = self.agent.chat("做 500 册 A4 宣传册，157克哑粉纸，双面彩印，三天后要用，预算不要太高")
@@ -396,7 +403,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result["order"]["quantity"], "500 册")
         self.assertEqual(result["order"]["quantityValue"], 500)
         self.assertEqual(result["order"]["quantityUnit"], "册")
-        self.assertEqual(result["order"]["paper"], "157g 哑粉纸")
+        self.assertEqual(result["order"]["paper"], '157 g/m² 哑粉纸')
         self.assertEqual(result["order"]["deadline"], "三天后")
         self.assertEqual(result["toolTrace"][-1], "调用工具：recommend_processes")
 
@@ -408,34 +415,34 @@ class AgentTest(unittest.TestCase):
 
     def test_a4_without_quantity_is_not_misread_as_four(self):
         result = self.agent.chat("做 A4 宣传册")
-        self.assertEqual(result["order"]["size"], "A4")
+        self.assertEqual(result["order"]["size"], '210×297 mm')
         self.assertEqual(result["order"]["quantity"], "")
         self.assertEqual(result["stage"], "collect")
 
     def test_punctuation_without_quantity_does_not_crash_perception(self):
         result = self.agent.chat("我想做一份面向客户的品牌宣传册，请先帮我判断需要哪些参数。")
         self.assertEqual(result["order"]["productType"], "宣传册")
-        self.assertEqual(result["order"]["quantity"], "")
+        self.assertEqual(result["order"]["quantity"], "1 份")
         self.assertEqual(result["stage"], "collect")
 
     def test_a_and_custom_dimensions_are_normalized(self):
         result = self.agent.chat("做 B4 宣传册")
-        self.assertEqual(result["order"]["size"], "B4")
+        self.assertEqual(result["order"]["size"], '250×353 mm')
         result = self.agent.chat("尺寸 210\\*267mm")
-        self.assertEqual(result["order"]["size"], "210×267MM")
+        self.assertEqual(result["order"]["size"], '210×267 mm')
         result = self.agent.chat("做 210*267mm 的折页")
-        self.assertEqual(result["order"]["size"], "210×267MM")
+        self.assertEqual(result["order"]["size"], '210×267 mm')
         self.assertNotEqual(result["order"]["quantity"], "210 份")
 
     def test_size_variants_are_normalized_without_becoming_quantity(self):
         cases = {
-            "B 4": "B4",
-            "B-4": "B4",
-            "Ｂ４": "B4",
+            "B 4": "250×353 mm",
+            "B-4": "250×353 mm",
+            "Ｂ４": "250×353 mm",
             "210＊267": "210×267",
-            "210 x 267 毫米": "210×267MM",
-            "210mm × 267mm": "210×267MM",
-            "210毫米*267毫米": "210×267MM",
+            "210 x 267 毫米": "210×267 mm",
+            "210mm × 267mm": "210×267 mm",
+            "210毫米*267毫米": "210×267 mm",
         }
         for raw_size, expected in cases.items():
             parsed = Agent._perceive(f"做 {raw_size} 宣传册")
@@ -444,21 +451,21 @@ class AgentTest(unittest.TestCase):
 
         parsed = Agent._perceive("做 500 份 B4 宣传册，210\\*267mm")
         self.assertEqual(parsed["quantity"], "500 份")
-        self.assertEqual(parsed["size"], "B4 / 210×267MM")
+        self.assertEqual(parsed["size"], '250×353 mm / 210×267 mm')
 
     def test_labeled_dimensions_keep_finished_expanded_and_die_cut_separate(self):
         parsed = Agent._perceive("做 500 张折页，成品尺寸 210*267mm，展开尺寸 426*267mm，刀模尺寸 432*273mm")
-        self.assertEqual(parsed["size"], "210×267MM")
-        self.assertEqual(parsed["dimensions"]["finishedSize"], "210×267MM")
-        self.assertEqual(parsed["dimensions"]["expandedSize"], "426×267MM")
-        self.assertEqual(parsed["dimensions"]["dieCutSize"], "432×273MM")
-        self.assertEqual(parsed["dimensions"]["packageSize"], "")
+        self.assertEqual(parsed["size"], '210×267 mm')
+        self.assertEqual(parsed["dimensions"]["finishedSize"], '210×267 mm')
+        self.assertEqual(parsed["dimensions"]["expandedSize"], '426×267 mm')
+        self.assertEqual(parsed["dimensions"]["dieCutSize"], '432×273 mm')
+        self.assertNotIn("packageSize", parsed["dimensions"])
 
     def test_structural_size_is_migrated_to_package_dimension(self):
         parsed = Agent._perceive("做 500 个天地盖包装盒，60*40*20cm")
-        self.assertEqual(parsed["size"], "60×40×20CM")
-        self.assertEqual(parsed["dimensions"]["packageSize"], "60×40×20CM")
-        self.assertEqual(parsed["dimensions"]["finishedSize"], "")
+        self.assertEqual(parsed["size"], '600×400×200 mm')
+        self.assertEqual(parsed["dimensions"]["packageSize"], '600×400×200 mm')
+        self.assertNotIn("finishedSize", parsed["dimensions"])
 
     def test_legacy_session_migrates_size_to_dimension_meaning(self):
         legacy_id = "legacy-dimension-session"
@@ -467,7 +474,7 @@ class AgentTest(unittest.TestCase):
         legacy["order"].update({"productType": "包装盒", "size": "60×40×20CM"})
         self.memory.save(legacy_id, legacy)
         restored = Agent(self.memory, legacy_id).state["order"]
-        self.assertEqual(restored["dimensions"]["packageSize"], "60×40×20CM")
+        self.assertEqual(restored["dimensions"]["packageSize"], '600×400×200 mm')
         self.assertEqual(restored["dimensions"]["finishedSize"], "")
 
     def test_legacy_dimension_field_meta_is_migrated_with_the_order(self):
@@ -485,17 +492,17 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("items.item-1.productSpecs.dieCutSize", restored)
 
     def test_multi_product_dimensions_are_copied_only_for_an_unambiguous_shared_size(self):
-        parsed = Agent._perceive("做 500 张名片和 1000 张折页，成品尺寸 A4，157g哑粉纸，双面四色，下周内")
+        parsed = Agent._perceive("做 500 张名片和 1000 张折页，统一成品尺寸 A4，157g哑粉纸，双面四色，下周内")
         self.assertEqual(len(parsed["items"]), 2)
-        self.assertEqual(parsed["items"][0]["dimensions"]["finishedSize"], "A4")
-        self.assertEqual(parsed["items"][1]["dimensions"]["finishedSize"], "A4")
+        self.assertEqual(parsed["items"][0]["dimensions"]["finishedSize"], '210×297 mm')
+        self.assertEqual(parsed["items"][1]["dimensions"]["finishedSize"], '210×297 mm')
 
     def test_dimension_alias_from_model_patch_is_canonicalized(self):
         result = self.agent.chat("做 500 张折页，210*267mm", {
             "productSpecs": {"expandedSize": "426×267MM", "dieCutSize": "432×273MM"}
         })
-        self.assertEqual(result["order"]["dimensions"]["expandedSize"], "426×267MM")
-        self.assertEqual(result["order"]["dimensions"]["dieCutSize"], "432×273MM")
+        self.assertEqual(result["order"]["dimensions"]["expandedSize"], '426×267 mm')
+        self.assertEqual(result["order"]["dimensions"]["dieCutSize"], '432×273 mm')
         self.assertNotIn("expandedSize", result["order"]["productSpecs"])
         self.assertNotIn("dieCutSize", result["order"]["productSpecs"])
 
@@ -521,16 +528,16 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(agent.state["order"]["quantityUnit"], "个")
 
     def test_multi_product_request_is_split_and_blocked_from_combined_quote(self):
-        parsed = Agent._perceive("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        parsed = Agent._perceive("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.assertEqual(parsed["productTypes"], ["名片", "折页"])
         self.assertEqual(len(parsed["items"]), 2)
         self.assertEqual(parsed["items"][0]["quantity"], "500 张")
         self.assertEqual(parsed["items"][1]["quantity"], "1000 张")
-        self.assertEqual(parsed["items"][0]["size"], "A4")
-        self.assertEqual(parsed["items"][0]["paper"], "157g 哑粉纸")
+        self.assertEqual(parsed["items"][0]["size"], '210×297 mm')
+        self.assertEqual(parsed["items"][0]["paper"], '157 g/m² 哑粉纸')
         self.assertEqual(parsed["items"][1]["printing"], "双面四色")
 
-        result = self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        result = self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.assertEqual(result["workflowStage"], "clarify")
         self.assertFalse(result["validation"]["ok"])
         self.assertTrue(result["validation"]["multiProduct"])
@@ -541,7 +548,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("第 2 项", focused["messages"][0])
 
     def test_multi_product_items_have_stable_ids_and_focused_updates_are_isolated(self):
-        first = self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        first = self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         items = first["order"]["items"]
         self.assertEqual([item["itemId"] for item in items], ["item-1", "item-2"])
         self.assertEqual([item["status"] for item in first["validation"]["itemValidations"]], ["ready", "needs_input"])
@@ -550,9 +557,9 @@ class AgentTest(unittest.TestCase):
         updated = self.agent.chat("数量改为 1200 张，尺寸改为 210*267mm，三折")
         updated_items = updated["order"]["items"]
         self.assertEqual(updated_items[0]["quantity"], "500 张")
-        self.assertEqual(updated_items[0]["size"], "A4")
+        self.assertEqual(updated_items[0]["size"], '210×297 mm')
         self.assertEqual(updated_items[1]["quantity"], "1200 张")
-        self.assertEqual(updated_items[1]["size"], "210×267MM")
+        self.assertEqual(updated_items[1]["size"], '210×267 mm')
         self.assertEqual(updated_items[1]["productSpecs"]["folding"], "三折")
         self.assertEqual(updated["fieldMeta"]["items.item-2.size"]["source"], "rule")
         item = updated["validation"]["itemValidations"][1]
@@ -564,15 +571,16 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(restored["order"]["items"][1]["quantity"], "1200 张")
 
     def test_chat_item_index_routes_api_style_update(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         result = self.agent.chat("更新当前项", {"paper": "250g 铜版纸"}, item_index=1)
-        self.assertEqual(result["order"]["items"][1]["paper"], "250g 铜版纸")
-        self.assertEqual(result["order"]["items"][0]["paper"], "157g 哑粉纸")
+        self.assertEqual(result["order"]["items"][1]["paper"], '250 g/m² 铜版纸')
+        self.assertEqual(result["order"]["items"][0]["paper"], '157 g/m² 哑粉纸')
         self.assertEqual(result["activeItemIndex"], 1)
 
     def test_ordinal_price_action_targets_item_without_overwriting_another_item(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
 
+        self.agent.chat("第 2 项三折，展开尺寸420×297mm")
         result = self.agent.chat("第 2 项折页多少钱")
 
         self.assertEqual(result["activeItemIndex"], 1)
@@ -583,7 +591,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("调用工具：estimate_price", result["toolTrace"])
 
     def test_explicit_item_index_with_action_does_not_stop_after_focusing(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
 
         result = self.agent.chat("多少钱", item_index=1)
 
@@ -600,7 +608,7 @@ class AgentTest(unittest.TestCase):
             def plan(self, *_args, **_kwargs):
                 return {"reply": "我先文字回复。", "patch": {}, "tool": None}
 
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.planner = ReplyOnlyPlanner()
 
         result = self.agent.chat("第 2 项多少钱")
@@ -610,7 +618,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("调用工具：estimate_price", result["toolTrace"])
 
     def test_ordinal_field_update_without_focus_verb_is_item_local(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
 
         result = self.agent.chat("第 2 项三折")
 
@@ -619,7 +627,7 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("folding", result["order"]["items"][0].get("productSpecs", {}))
 
     def test_ordinal_quote_action_calls_selected_item_quote_tool(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.chat("第 2 项三折")
         self.agent.choose("balanced", item_index=1)
 
@@ -631,7 +639,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("调用工具：request_supplier_quote", result["toolTrace"])
 
     def test_explicit_tool_and_choose_item_indexes_update_focus(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.chat("第 2 项三折")
 
         estimated = self.agent.call_tool("estimate_price", {"itemIndex": 1})
@@ -643,7 +651,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(chosen["toolResult"]["itemIndex"], 0)
 
     def test_ordinal_generate_action_keeps_aggregate_multi_product_boundary(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.chat("第 2 项三折")
         self.agent.choose("balanced", item_index=1)
         self.agent.choose("balanced", item_index=0)
@@ -656,7 +664,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(len(result["handoff"]["items"]), 2)
 
     def test_multi_product_items_can_recommend_choose_and_generate_separately(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.chat("处理第 2 项：折页")
         recommended = self.agent.chat("三折")
         self.assertEqual(recommended["workflowStage"], "recommend")
@@ -683,7 +691,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(changed["order"]["items"][1]["quantity"], "1200 张")
 
     def test_multi_product_tool_can_estimate_current_item_without_combining(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         self.agent.chat("处理第 1 项：名片")
         estimate = self.agent.call_tool("estimate_price")
         self.assertEqual(estimate["toolResult"]["itemIndex"], 0)
@@ -691,7 +699,7 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("不能合并", estimate["messages"][0])
 
     def test_multi_product_file_is_bound_to_the_selected_item(self):
-        self.agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         blocked = self.agent.upload("artwork.pdf", 1024, page_count=1)
         self.assertEqual(blocked["toolResult"]["reason"], "item_required")
         self.assertEqual(self.agent.state["uploadedFiles"], [])
@@ -735,7 +743,7 @@ class AgentTest(unittest.TestCase):
 
         box = Agent._perceive("做 500 个天地盖包装盒，60*40*20cm，350g白卡纸，双面四色，下周内")
         self.assertEqual(box["productType"], "包装盒")
-        self.assertEqual(box["productSpecs"]["boxSize"], "60×40×20CM")
+        self.assertEqual(box["productSpecs"]["boxSize"], '600×400×200 mm')
         self.assertEqual(box["productSpecs"]["boxStructure"], "天地盖")
 
     def test_product_validation_reports_specialized_parameters(self):

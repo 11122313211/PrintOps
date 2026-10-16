@@ -24,10 +24,24 @@
   const RULE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
   const LANGUAGE = /^[A-Za-z0-9+#._-]{1,24}$/;
   const DIVIDER_CELL = /^:?-{2,}:?$/;
+  const TASK = /^\[([ xX])\][ \t]+(.*)$/;
 
   function escapeHtml(value) {
     return String(value === null || value === undefined ? "" : value)
       .replace(/[&<>"']/g, (character) => ESCAPE_MAP[character]);
+  }
+
+  /* link destinations are captured after the source has been escaped. Keep
+     existing entities intact so `&` in a normal query string is not encoded
+     twice, while still protecting a destination that contains quotes or
+     angle brackets before it enters an HTML attribute. */
+  function escapeAttribute(value) {
+    return String(value === null || value === undefined ? "" : value)
+      .replace(/&(?!amp;|lt;|gt;|quot;|#39;)/gi, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   /* 已转义文本里的引号是 &quot;，不会截断 href 属性；这里只做协议白名单。 */
@@ -46,7 +60,7 @@
     text = text.replace(/`([^`\n]+)`/g, (match, code) => stash("<code>" + code + "</code>"));
     text = text.replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (match, label, href) => {
       const url = safeUrl(href);
-      return url ? stash('<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + "</a>") : match;
+      return url ? stash('<a href="' + escapeAttribute(url) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>") : match;
     });
     text = text.replace(/\*\*([^\s*](?:[^*]*[^\s*])?)\*\*/g, "<strong>$1</strong>");
     text = text.replace(/(^|[\s(（])\*([^\s*](?:[^*]*[^\s*])?)\*(?=$|[\s)）,.、。;；:：!！?？])/g, "$1<em>$2</em>");
@@ -199,8 +213,19 @@
         const attribute = isOrdered && start !== 1 ? ' start="' + start + '"' : "";
         const body = items.map((item) => {
           const [first, ...rest] = item;
-          return "<li>" + renderInline(first)
-            + rest.map((extra) => "<br />" + renderInline(extra)).join("") + "</li>";
+          const task = first.match(TASK);
+          if (!task) {
+            return "<li>" + renderInline(first)
+              + rest.map((extra) => "<br />" + renderInline(extra)).join("") + "</li>";
+          }
+          const content = task[2];
+          const marker = task
+            ? '<span class="md-task-marker' + (task[1].toLowerCase() === "x" ? " is-done" : "") + '" aria-hidden="true">'
+              + (task[1].toLowerCase() === "x" ? "✓" : "○") + "</span>"
+            : "";
+          const taskClass = task ? ' class="md-task-item' + (task[1].toLowerCase() === "x" ? " is-done" : "") + '"' : "";
+          return "<li" + taskClass + ">" + marker + "<span class=\"md-list-item-content\">" + renderInline(content)
+            + rest.map((extra) => "<br />" + renderInline(extra)).join("") + "</span></li>";
         }).join("");
         blocks.push("<" + tag + attribute + ">" + body + "</" + tag + ">");
         continue;

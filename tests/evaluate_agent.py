@@ -1,6 +1,6 @@
 """Deterministic regression suite for the PrintOps order Agent.
 
-v0.9.1: 100+ desensitized order cases covering the ROADMAP v0.9.0 checklist —
+v0.9.1: 100+ synthetic order cases covering the ROADMAP v0.9.0 checklist —
 negation, modification, ambiguity, multi-product orders and size formats —
 with per-tag accuracy tracking.  The suite intentionally uses the same public
 chat flow as the UI; it is a baseline for rule/LLM changes, not a substitute
@@ -29,20 +29,20 @@ def _hand_cases() -> list[dict[str, Any]]:
         # ---------------------------------------------------------- 基础
         {"name": "标准画册", "tag": "基础",
          "turns": [{"text": "做 500 份 A4 宣传册，32页骑马钉，157g哑粉纸，双面四色，下周内"}],
-         "expected": {"productType": "宣传册", "quantity": "500 份", "size": "A4", "pages": "32 页",
-                      "paper": "157g 哑粉纸", "printing": "双面四色", "deadline": "下周"}},
+         "expected": {"productType": "宣传册", "quantity": "500 份", "size": '210×297 mm', "pages": "32 页",
+                      "paper": '157 g/m² 哑粉纸', "printing": "双面四色", "deadline": "下周"}},
         {"name": "尺寸识别", "tag": "基础",
          "turns": [{"text": "做 2000 张 B4 折页，210*267mm，157克哑粉纸，双面四色，下周内"}],
-         "expected": {"productType": "折页", "quantity": "2000 张", "size": "B4 / 210×267MM",
-                      "paper": "157g 哑粉纸"}},
+         "expected": {"productType": "折页", "quantity": "2000 张", "size": '250×353 mm / 210×267 mm',
+                      "paper": '157 g/m² 哑粉纸'}},
         {"name": "标签专属参数", "tag": "基础",
          "turns": [{"text": "做 2000 张圆形透明不干胶标签，50*50mm，四色印刷，下周内"}],
-         "expected": {"productType": "标签", "quantity": "2000 张", "size": "50×50MM", "printing": "四色印刷",
+         "expected": {"productType": "标签", "quantity": "2000 张", "size": '50×50 mm', "printing": "四色印刷",
                       "productSpecs.labelMaterial": "透明不干胶", "productSpecs.labelShape": "圆形"}},
         {"name": "结构品类澄清", "tag": "基础",
          "turns": [{"text": "做 500 个天地盖包装盒，60*40*20cm，350g白卡纸，双面四色，下周内"}],
-         "expected": {"productType": "包装盒", "quantity": "500 个", "size": "60×40×20CM",
-                      "productSpecs.boxStructure": "天地盖", "productSpecs.boxSize": "60×40×20CM"}},
+         "expected": {"productType": "包装盒", "quantity": "500 个", "size": '600×400×200 mm',
+                      "productSpecs.boxStructure": "天地盖", "productSpecs.boxSize": '600×400×200 mm'}},
         {"name": "纸杯容量与材质", "tag": "基础",
          "turns": [{"text": "做 2000 个纸杯，350ml，双PE"}],
          "expected": {"productType": "纸杯", "quantity": "2000 个",
@@ -50,15 +50,15 @@ def _hand_cases() -> list[dict[str, Any]]:
         {"name": "手提袋材料提手", "tag": "基础",
          "turns": [{"text": "做 500 个无纺布手提袋，38*30*10cm，棉绳提手"}],
          "expected": {"productType": "手提袋", "quantity": "500 个", "productSpecs.bagMaterial": "无纺布",
-                      "productSpecs.handle": "棉绳", "productSpecs.bagSize": "38×30×10CM"}},
+                      "productSpecs.handle": "棉绳", "productSpecs.bagSize": '380×300×100 mm'}},
         {"name": "PVC卡厚度卡型", "tag": "基础",
          "turns": [{"text": "做 300 张0.76mm PVC人像证卡"}],
          "expected": {"productType": "PVC卡", "quantity": "300 张",
-                      "productSpecs.cardType": "人像证卡", "productSpecs.cardThickness": "0.76mm"}},
+                      "productSpecs.cardType": "人像证卡", "productSpecs.cardThickness": '0.76 mm'}},
         {"name": "PVC卡芯片", "tag": "基础",
          "turns": [{"text": "做 600 张智能卡PVC卡，厚度0.76mm"}],
          "expected": {"productType": "PVC卡", "productSpecs.cardType": "智能卡",
-                      "productSpecs.cardThickness": "0.76mm", "productSpecs.chip": "需要芯片/磁条"}},
+                      "productSpecs.cardThickness": '0.76 mm', "productSpecs.chip": "需要芯片/磁条"}},
         {"name": "吊牌挂孔穿绳", "tag": "基础",
          "turns": [{"text": "做 500 张吊牌，圆孔，配棉绳"}],
          "expected": {"productType": "吊牌", "quantity": "500 张",
@@ -73,18 +73,18 @@ def _hand_cases() -> list[dict[str, Any]]:
                       "productSpecs.install": "户外", "productSpecs.viewingDistance": "10米"}},
         {"name": "PVC板厚度", "tag": "基础",
          "turns": [{"text": "做 100 张 PVC 展板，厚度 3mm"}],
-         "expected": {"productType": "PVC", "quantity": "100 张", "productSpecs.boardThickness": "3mm"}},
+         "expected": {"productType": "PVC", "quantity": "100 张", "productSpecs.boardThickness": '3 mm'}},
         {"name": "信封规格开口", "tag": "基础",
          "turns": [{"text": "做 500 个信封，成品尺寸 220*110mm，上开口"}],
-         "expected": {"productType": "信封封套", "quantity": "500 个", "size": "220×110MM",
+         "expected": {"productType": "信封封套", "quantity": "500 个", "size": '220×110 mm',
                       "productSpecs.opening": "上开口"}},
         {"name": "名片圆角专色", "tag": "基础",
          "turns": [{"text": "做 1000 张名片，250g铜版纸，圆角，专色"}],
-         "expected": {"productType": "名片", "quantity": "1000 张", "paper": "250g 铜版纸",
+         "expected": {"productType": "名片", "quantity": "1000 张", "paper": '250 g/m² 铜版纸',
                       "productSpecs.cardCorners": "圆角", "productSpecs.cardColor": "专色"}},
         {"name": "联单联数流水号", "tag": "基础",
          "turns": [{"text": "做 300 本三联无碳联单，A4，需要流水号"}],
-         "expected": {"productType": "联单", "quantity": "300 本", "size": "A4",
+         "expected": {"productType": "联单", "quantity": "300 本", "size": '210×297 mm',
                       "productSpecs.paperParts": "三联", "productSpecs.numbering": "需要连续编号"}},
         {"name": "版式方向", "tag": "基础",
          "turns": [{"text": "做 500 张单页，横版"}],
@@ -97,31 +97,31 @@ def _hand_cases() -> list[dict[str, Any]]:
          "expected": {"productType": "画册", "pages": "48 页", "binding": "胶装"}},
         {"name": "出血参数", "tag": "基础",
          "turns": [{"text": "做 500 张单页，尺寸 210×285mm，出血 3mm"}],
-         "expected": {"productType": "单页", "size": "210×285MM", "productSpecs.bleed": "3mm"}},
+         "expected": {"productType": "单页", "size": '210×285 mm', "productSpecs.bleed": '3 mm'}},
         {"name": "名片默认单位", "tag": "基础",
          "turns": [{"text": "做 1000 张 250g 白卡纸名片"}],
-         "expected": {"productType": "名片", "quantity": "1000 张", "paper": "250g 白卡纸"}},
+         "expected": {"productType": "名片", "quantity": "1000 张", "paper": '250 g/m² 白卡纸'}},
         {"name": "内尺寸包装盒", "tag": "歧义",
          "turns": [{"text": "做 500 个包装盒，内尺寸 60*40*20cm"}],
-         "expected": {"productType": "包装盒", "productSpecs.boxSize": "60×40×20CM",
-                      "productSpecs.boxSizeInner": "60×40×20CM", "dimensions.packageSize": "60×40×20CM"}},
+         "expected": {"productType": "包装盒", "productSpecs.boxSize": '600×400×200 mm',
+                      "productSpecs.boxSizeInner": '600×400×200 mm', "dimensions.packageSize": '600×400×200 mm'}},
         {"name": "外尺寸包装盒", "tag": "歧义",
          "turns": [{"text": "做 500 个包装盒，外尺寸 65*45*25cm"}],
-         "expected": {"productType": "包装盒", "productSpecs.boxSize": "65×45×25CM",
-                      "productSpecs.boxSizeOuter": "65×45×25CM"}},
+         "expected": {"productType": "包装盒", "productSpecs.boxSize": '650×450×250 mm',
+                      "productSpecs.boxSizeOuter": '650×450×250 mm'}},
         {"name": "成品与展开并存", "tag": "歧义",
          "turns": [{"text": "做 500 张 A4 折页，成品尺寸 210*267mm，展开尺寸 420*534mm"}],
-         "expected": {"size": "210×267MM", "dimensions.finishedSize": "210×267MM",
-                      "dimensions.expandedSize": "420×534MM"}},
+         "expected": {"size": '210×267 mm', "dimensions.finishedSize": '210×267 mm',
+                      "dimensions.expandedSize": '420×534 mm'}},
         {"name": "成品优先于刀模", "tag": "歧义",
          "turns": [{"text": "做 500 张折页，成品尺寸 210*285mm，刀模尺寸 426*291mm"}],
-         "expected": {"size": "210×285MM", "dimensions.dieCutSize": "426×291MM"}},
+         "expected": {"size": '210×285 mm', "dimensions.dieCutSize": '426×291 mm'}},
         {"name": "B4数字不被当数量", "tag": "歧义",
          "turns": [{"text": "做 B4 折页 500 张"}],
-         "expected": {"productType": "折页", "quantity": "500 张", "size": "B4"}},
+         "expected": {"productType": "折页", "quantity": "500 张", "size": '250×353 mm'}},
         {"name": "小尺寸标签", "tag": "歧义",
          "turns": [{"text": "做 2000 张 5*5cm 圆形不干胶标签"}],
-         "expected": {"productType": "标签", "quantity": "2000 张", "size": "5×5CM",
+         "expected": {"productType": "标签", "quantity": "2000 张", "size": '50×50 mm',
                       "productSpecs.labelShape": "圆形", "productSpecs.labelMaterial": "不干胶"}},
         {"name": "骑马钉页数风险", "tag": "歧义",
          "turns": [{"text": "做 100 张 A4 宣传册，骑马钉，48页"}],
@@ -166,7 +166,7 @@ def _hand_cases() -> list[dict[str, Any]]:
          "expected": {"productType": "单页", "quantity": "1200 张", "quantityValue": 1200}},
         {"name": "修改尺寸", "tag": "修改",
          "turns": [{"text": "做 500 张 A4 单页，双面四色"}, {"text": "尺寸改成 B4"}],
-         "expected": {"productType": "单页", "size": "B4"}},
+         "expected": {"productType": "单页", "size": '250×353 mm'}},
         {"name": "修改页数", "tag": "修改",
          "turns": [{"text": "做 300 本画册，32页，胶装"}, {"text": "页数改成 48 页"}],
          "expected": {"productType": "画册", "pages": "48 页", "binding": "胶装"}},
@@ -181,7 +181,7 @@ def _hand_cases() -> list[dict[str, Any]]:
          "expected": {"productType": "包装盒", "productSpecs.boxStructure": "抽屉盒"}},
         {"name": "修改纸张克重", "tag": "修改",
          "turns": [{"text": "做 1000 张单页，157克哑粉纸"}, {"text": "纸换成 250g 铜版纸"}],
-         "expected": {"productType": "单页", "paper": "250g 铜版纸"}},
+         "expected": {"productType": "单页", "paper": '250 g/m² 铜版纸'}},
         {"name": "修改胶水", "tag": "修改",
          "turns": [{"text": "做 2000 张不干胶标签，普通胶"}, {"text": "改成可移胶"}],
          "expected": {"productType": "标签", "productSpecs.adhesive": "可移胶"}},
@@ -194,7 +194,7 @@ def _hand_cases() -> list[dict[str, Any]]:
 
         # ---------------------------------------------------------- 多产品
         {"name": "两产品数量归属", "tag": "多产品",
-         "turns": [{"text": "做 500 张名片和 1000 张折页，下周内"}],
+         "turns": [{"text": "做 500 张名片和 1000 张折页，都下周内"}],
          "expected": {"items.0.productType": "名片", "items.0.quantity": "500 张",
                       "items.1.productType": "折页", "items.1.quantity": "1000 张",
                       "items.0.deadline": "下周", "items.1.deadline": "下周"}},
@@ -203,15 +203,15 @@ def _hand_cases() -> list[dict[str, Any]]:
          "expected": {"items.0.quantity": "500 张", "items.1.quantity": "1000 张",
                       "items.2.quantity": "2000 张"}},
         {"name": "两产品共享纸张", "tag": "多产品",
-         "turns": [{"text": "500 张名片和 1000 张折页，157g哑粉纸"}],
-         "expected": {"items.0.paper": "157g 哑粉纸", "items.1.paper": "157g 哑粉纸"}},
+         "turns": [{"text": "500 张名片和 1000 张折页，都使用157g哑粉纸"}],
+         "expected": {"items.0.paper": '157 g/m² 哑粉纸', "items.1.paper": '157 g/m² 哑粉纸'}},
         {"name": "两产品共享颜色", "tag": "多产品",
-         "turns": [{"text": "做 300 本画册和 500 张单页，双面四色，下周内"}],
+         "turns": [{"text": "做 300 本画册和 500 张单页，都双面四色，下周内"}],
          "expected": {"items.0.quantity": "300 本", "items.1.quantity": "500 张",
                       "items.0.printing": "双面四色", "items.1.printing": "双面四色"}},
         {"name": "两产品共享尺寸", "tag": "多产品",
-         "turns": [{"text": "做 1000 张单页和 2000 张不干胶标签，50*50mm"}],
-         "expected": {"items.0.size": "50×50MM", "items.1.size": "50×50MM",
+         "turns": [{"text": "做 1000 张单页和 2000 张不干胶标签，统一尺寸50*50mm"}],
+         "expected": {"items.0.size": '50×50 mm', "items.1.size": '50×50 mm',
                       "items.1.productSpecs.labelMaterial": "不干胶"}},
         {"name": "盒与单页参数隔离", "tag": "多产品",
          "turns": [{"text": "做 500 个天地盖包装盒和 800 张单页"}],
@@ -232,8 +232,8 @@ def _matrix_cases() -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
 
     size_formats = [
-        ("A4", "A4"), ("B5", "B5"), ("210*267mm", "210×267MM"), ("210 X 285", "210×285"),
-        ("60*40*20cm", "60×40×20CM"), ("5*5cm", "5×5CM"), ("889×1194mm", "889×1194MM"),
+        ("A4", "210×297 mm"), ("B5", "176×250 mm"), ("210*267mm", "210×267 mm"), ("210 X 285", "210×285"),
+        ("60*40*20cm", "600×400×200 mm"), ("5*5cm", "50×50 mm"), ("889×1194mm", "889×1194 mm"),
         ("210＊285", "210×285"),
     ]
     for product in ("折页", "单页", "标签", "吊牌"):
@@ -392,7 +392,8 @@ def run_suite(cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
 # 合成语料由实现同一套规则的人编写，不能证明真实用户话术下的表现。把脱敏后的
 # 真实订单放进 tests/eval_cases_real.json（格式见该文件内说明），本脚本会单独
 # 运行并单独报告。语料达到 REAL_CORPUS_MIN_CASES 例后启用硬门槛：字段准确率
-# 低于 REAL_CORPUS_ACCURACY_GATE 时以非零码退出（CI 失败）。
+# 低于 REAL_CORPUS_ACCURACY_GATE 时以非零码退出（CI 失败）。发布检查必须
+# 添加 --release-gate；此时空/缺失/不足 20 例的语料也阻断发布。
 # ---------------------------------------------------------------------------
 
 REAL_CORPUS_PATH = Path(__file__).resolve().parent / "eval_cases_real.json"
@@ -420,9 +421,10 @@ def real_corpus_verdict(real_cases: list[dict[str, Any]], real_report: dict[str,
                         real_status: str) -> str:
     """Decide the real-corpus gate: fail | pending | record | pass.
 
-    ``fail`` blocks the release exit code; ``pending`` means no usable corpus
+    ``fail`` blocks every evaluation exit code; ``pending`` means no usable corpus
     yet; ``record`` means fewer than REAL_CORPUS_MIN_CASES cases (report only,
-    no gate); ``pass`` means the corpus is large enough and met the gate.
+    no default gate); ``pass`` means the corpus is large enough and met the gate.
+    --release-gate requires ``pass``; pending/record never count as release-ready.
     """
     if real_status == "invalid":
         return "fail"
@@ -430,7 +432,7 @@ def real_corpus_verdict(real_cases: list[dict[str, Any]], real_report: dict[str,
         return "pending"
     if len(real_cases) < REAL_CORPUS_MIN_CASES:
         return "record"
-    if real_report is not None and real_report["fieldAccuracy"] < REAL_CORPUS_ACCURACY_GATE:
+    if real_report is None or real_report["fieldAccuracy"] < REAL_CORPUS_ACCURACY_GATE:
         return "fail"
     return "pass"
 
@@ -439,17 +441,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the deterministic PrintOps Agent evaluation suite")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON 报告")
     parser.add_argument("--only-failed", action="store_true", help="只打印未通过的用例")
+    parser.add_argument("--release-gate", action="store_true",
+                        help="严格发布验收：真实语料须至少20例且字段准确率≥95%，空语料或不足20例也失败")
     args = parser.parse_args()
     report = run_suite()
     real_cases, real_status = load_real_cases()
     real_report = run_suite(real_cases) if real_cases else None
     verdict = real_corpus_verdict(real_cases, real_report, real_status)
+    synthetic_passed = report["fieldAccuracy"] >= 90 and report["completionRate"] >= 80
+    release_passed = synthetic_passed and verdict == "pass"
 
     def failed_cases(suite: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in suite["results"] if item["fieldAccuracy"] < 100]
 
     if args.json:
-        print(json.dumps({**report, "realCorpus": real_report, "realCorpusVerdict": verdict},
+        print(json.dumps({**report, "realCorpus": real_report, "realCorpusVerdict": verdict,
+                          "releaseGateEnabled": args.release_gate, "releaseGatePassed": release_passed},
                          ensure_ascii=False, indent=2))
     else:
         print(f"PrintOps evaluation: {report['cases']} cases")
@@ -472,7 +479,8 @@ def main() -> int:
         if verdict == "record":
             print(f"真实脱敏语料：{real_report['cases']} 例，字段准确率 {real_report['fieldAccuracy']}%，"
                   f"基础订单完整率 {real_report['completionRate']}%"
-                  f"（不足 {REAL_CORPUS_MIN_CASES} 例，本轮仅记录，不设门槛）")
+                  + (f"（不足 {REAL_CORPUS_MIN_CASES} 例，阻断发布）" if args.release_gate else
+                     f"（不足 {REAL_CORPUS_MIN_CASES} 例，本轮仅记录，不设门槛）"))
         elif verdict == "pass":
             print(f"真实脱敏语料：{real_report['cases']} 例，字段准确率 {real_report['fieldAccuracy']}%，"
                   f"达到 ≥{REAL_CORPUS_ACCURACY_GATE}% 门槛。")
@@ -483,10 +491,13 @@ def main() -> int:
         else:
             print(f"真实脱敏语料：待补充（放入 tests/eval_cases_real.json，≥{REAL_CORPUS_MIN_CASES} 例"
                   f"后启用字段准确率 ≥{REAL_CORPUS_ACCURACY_GATE}% 门槛）。")
+        if args.release_gate:
+            print("严格发布门槛：通过。" if release_passed else
+                  "严格发布门槛：未通过；合成评测须达标，且真实语料须至少20例、字段准确率≥95%。")
 
-    if report["fieldAccuracy"] < 90 or report["completionRate"] < 80:
+    if not synthetic_passed:
         return 1
-    if verdict == "fail":
+    if verdict == "fail" or (args.release_gate and not release_passed):
         return 1
     return 0
 

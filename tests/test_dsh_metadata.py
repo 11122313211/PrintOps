@@ -33,7 +33,7 @@ class DshMetadataTest(unittest.TestCase):
         self.assertEqual(order["size"], "")
         self.assertEqual(order["dimensions"]["packageSize"], "")
         self.assertEqual(order["productSpecs"], {
-            "boxSizeOuter": "65×45×25CM", "safe": "7",
+            "boxSizeOuter": '650×450×250 mm', "safe": "7",
         })
 
     def test_quantity_parser_rejects_containers_and_nonfinite_values(self) -> None:
@@ -121,10 +121,11 @@ class DshMetadataTest(unittest.TestCase):
         self.assertEqual(normalized["quoteRequests"], [])
         self.assertIsNone(normalized["activeQuoteRequestId"])
         self.assertEqual(normalized["planMeta"], {"questions": [], "risks": [], "knowledgeVersion": ""})
-        self.assertEqual(normalized["schemaVersion"], 2)
+        self.assertEqual(normalized["schemaVersion"], 3)
 
     def test_state_migration_preserves_valid_top_level_records(self) -> None:
         normalized = normalize_state({
+            "schemaVersion": 3,  # Current unit schema; this case tests metadata/ID repair.
             "order": {"productType": "名片", "quantity": "500 张", "size": "A4"},
             "messages": [{"role": "user", "text": "做名片", "ignored": {"nested": True}}],
             "stage": "recommend",
@@ -293,7 +294,7 @@ class DshMetadataTest(unittest.TestCase):
         meta = result["fieldMeta"]["productSpecs.cardStock"]
         self.assertEqual(meta["confidence"], 0.94)
         self.assertEqual(meta["evidence"]["quote"], "300g 白卡")
-        self.assertEqual(result["order"]["productSpecs"], {"cardStock": "300g 白卡"})
+        self.assertEqual(result["order"]["productSpecs"], {"cardStock": '300 g/m² 白卡'})
 
     def test_skill_annotations_are_persisted_as_advisory_plan_meta(self) -> None:
         class Planner:
@@ -329,7 +330,7 @@ class DshMetadataTest(unittest.TestCase):
                 "boxStructure": "天地盖", "boxSize": "60×40×20CM", "cardStock": "旧字段",
             }}, source="user", confidence=1.0)
         self.assertEqual(agent.state["order"]["productSpecs"], {
-            "boxStructure": "天地盖", "boxSize": "60×40×20CM",
+            "boxStructure": "天地盖", "boxSize": '600×400×200 mm',
         })
         self.assertIn("productSpecs.cardStock", agent.state["rejectedFields"])
 
@@ -366,6 +367,7 @@ class DshMetadataTest(unittest.TestCase):
 
     def test_item_references_migrate_with_explicit_index_and_quote_stales(self) -> None:
         state = normalize_state({
+            "schemaVersion": 3,  # Current unit schema; this case tests metadata/ID repair.
             "order": {"items": [
                 {"itemId": "dup", "productType": "名片"},
                 {"itemId": "dup", "productType": "折页"},
@@ -416,6 +418,7 @@ class DshMetadataTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             agent = Agent(Memory(Path(tmp) / "agent.sqlite3"))
             agent.state = normalize_state({
+                "schemaVersion": 3,  # Current unit schema; this case tests metadata/ID repair.
                 "order": {"items": [
                     {"itemId": "old-a", "productType": "名片"},
                     {"itemId": "old-b", "productType": "折页"},

@@ -24,7 +24,7 @@ TAG_NAME = re.compile(r"^</?\s*([a-zA-Z0-9]+)")
 ALLOWED_TAGS = {
     "p", "br", "strong", "em", "del", "code", "pre", "blockquote", "hr", "a",
     "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
-    "div", "table", "thead", "tbody", "tr", "th", "td",
+    "div", "span", "table", "thead", "tbody", "tr", "th", "td",
 }
 
 
@@ -67,6 +67,16 @@ CASES = [
         "excludes": [],
     },
     {
+        "name": "任务列表展示印刷待确认项",
+        "input": "- [x] 已确认数量\n- [ ] 待确认交期",
+        "contains": [
+            '<li class="md-task-item is-done"><span class="md-task-marker is-done" aria-hidden="true">✓</span>',
+            '<li class="md-task-item"><span class="md-task-marker" aria-hidden="true">○</span>',
+            "待确认交期",
+        ],
+        "excludes": ["[x]", "[ ]"],
+    },
+    {
         "name": "有序列表保留起始序号",
         "input": "3. 第三步\n4. 第四步",
         "contains": ['<ol start="3">', "<li>第三步</li>"],
@@ -101,6 +111,12 @@ CASES = [
         "input": "[参考](https://example.com/a?b=1&c=2)",
         "contains": ['href="https://example.com/a?b=1&amp;c=2"', 'rel="noopener noreferrer"'],
         "excludes": ["javascript:"],
+    },
+    {
+        "name": "链接属性中的引号保持转义",
+        "input": "[带引号](https://example.com/a\"b?x=1)",
+        "contains": ['href="https://example.com/a&quot;b?x=1"'],
+        "excludes": ['href="https://example.com/a"b'],
     },
     {
         "name": "危险协议不生成链接",

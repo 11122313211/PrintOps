@@ -161,8 +161,8 @@ class PlannerLoopTest(unittest.TestCase):
 
         self.assertEqual(result["order"]["productType"], "名片")
         self.assertEqual(result["order"]["quantity"], "500 张")
-        self.assertEqual(result["order"]["size"], "A4")
-        self.assertEqual(result["order"]["paper"], "250g 铜版纸")
+        self.assertEqual(result["order"]["size"], '210×297 mm')
+        self.assertEqual(result["order"]["paper"], '250 g/m² 铜版纸')
         self.assertEqual([item["name"] for item in result["toolReceipts"]],
                          ["validate_order", "recommend_processes"])
         self.assertIn("已完成校验并生成方案", result["messages"][0])
@@ -246,11 +246,11 @@ class PlannerLoopTest(unittest.TestCase):
         finally:
             temporary.cleanup()
 
-        self.assertEqual(result["order"]["size"], "A3")
+        self.assertEqual(result["order"]["size"], '297×420 mm')
         self.assertTrue(result["options"], "更新订单后仍应返回与新状态对应的方案")
         self.assertGreaterEqual(result["toolTrace"].count("调用工具：recommend_processes"), 2)
         descriptions = " ".join(str(item.get("description", "")) for item in result["options"])
-        self.assertIn("A3", descriptions)
+        self.assertIn("297×420 mm", descriptions)
         self.assertNotIn("A4", descriptions)
 
     def test_native_batch_calls_execute_once_each_and_return_each_call_id(self) -> None:

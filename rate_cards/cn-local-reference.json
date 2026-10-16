@@ -1,0 +1,490 @@
+{
+  "schemaVersion": "2.0",
+  "rateCardId": "cn-local-reference",
+  "version": "2026.10.15",
+  "region": "CN-reference-only",
+  "currency": "CNY",
+  "unitSystem": "mm",
+  "sourceType": "local_reference",
+  "sourceDescription": "开发用示例成本表，未采集供应商实价，不能作为市场价格依据",
+  "effectiveFrom": "2026-10-01",
+  "expiresAt": "2027-03-31",
+  "confidence": "illustrative",
+  "enteredBy": "PrintOps example maintainer",
+  "taxBasis": "exclusive",
+  "deliveryBasis": "ex_works",
+  "isSupplierPrice": false,
+  "sources": {
+    "illustrative-cost-design-2026-10": {
+      "description": "人工构造的成本参数，仅验证计算方法",
+      "enteredBy": "PrintOps example maintainer",
+      "effectiveFrom": "2026-10-01",
+      "region": "CN-reference-only",
+      "confidence": "illustrative",
+      "isSupplierPrice": false
+    }
+  },
+  "band": {
+    "low": "0.85",
+    "high": "1.25"
+  },
+  "leadHints": {
+    "合版": "2-4 工作日（示例，不含运输）",
+    "专版": "5-8 工作日（示例，不含运输）"
+  },
+  "categories": {
+    "名片": {
+      "supported": true,
+      "family": "flat",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing"
+      ],
+      "minimumTotal": "100",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张"
+      ],
+      "supportedStructures": []
+    },
+    "单页": {
+      "supported": true,
+      "family": "flat",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing"
+      ],
+      "minimumTotal": "100",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "数码印刷": {
+      "supported": true,
+      "family": "flat",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing"
+      ],
+      "minimumTotal": "80",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "折页": {
+      "supported": true,
+      "family": "folded",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "folding"
+      ],
+      "minimumTotal": "160",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "宣传册": {
+      "supported": true,
+      "family": "booklet",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "pages",
+        "binding"
+      ],
+      "minimumTotal": "300",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "本",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "画册": {
+      "supported": true,
+      "family": "booklet",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "pages",
+        "binding"
+      ],
+      "minimumTotal": "380",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "本",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "包装盒": {
+      "supported": true,
+      "family": "box",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "boxStructure"
+      ],
+      "minimumTotal": "480",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "个"
+      ],
+      "supportedStructures": [
+        "折叠盒",
+        "飞机盒"
+      ]
+    },
+    "标签": {
+      "supported": true,
+      "family": "label",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "labelShape",
+        "adhesive",
+        "labelFormat"
+      ],
+      "minimumTotal": "200",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "个"
+      ],
+      "supportedStructures": []
+    },
+    "海报": {
+      "supported": true,
+      "family": "display",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "install"
+      ],
+      "minimumTotal": "100",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "块"
+      ],
+      "supportedStructures": []
+    },
+    "喷画": {
+      "supported": true,
+      "family": "display",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing",
+        "install"
+      ],
+      "minimumTotal": "130",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "块"
+      ],
+      "supportedStructures": []
+    },
+    "邀请函": {
+      "supported": true,
+      "family": "flat",
+      "requiredDrivers": [
+        "quantity",
+        "dimensions",
+        "material",
+        "printing"
+      ],
+      "minimumTotal": "150",
+      "packingPerUnit": "0.02",
+      "wasteFactor": "1.12",
+      "sourceId": "illustrative-cost-design-2026-10",
+      "units": [
+        "张",
+        "份"
+      ],
+      "supportedStructures": []
+    },
+    "PVC": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "PVC卡": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "吊牌": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "联单": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "信封封套": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "手提袋": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    },
+    "纸杯": {
+      "supported": false,
+      "family": "uncalibrated",
+      "requiredDrivers": [
+        "categoryRates"
+      ],
+      "reason": "尚未标定此品类的材料、结构和生产工艺成本",
+      "sourceId": "illustrative-cost-design-2026-10"
+    }
+  },
+  "materials": {
+    "铜版纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perKg": "8"
+    },
+    "哑粉纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perKg": "9"
+    },
+    "白卡纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perKg": "9.5"
+    },
+    "牛皮纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perKg": "10"
+    },
+    "胶版纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perKg": "7.5"
+    },
+    "铜版不干胶": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "3.2"
+    },
+    "透明不干胶": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "5.5"
+    },
+    "PET": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "6.5"
+    },
+    "相纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "4"
+    },
+    "背胶": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "5"
+    },
+    "灯布": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "6"
+    },
+    "户外灯布": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "6.5"
+    },
+    "海报纸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "perM2": "3.5"
+    }
+  },
+  "printing": {
+    "合版": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "60",
+      "perM2": "0.55"
+    },
+    "专版": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "220",
+      "perM2": "0.45"
+    },
+    "数码": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "35",
+      "perM2": "1.2"
+    }
+  },
+  "finishing": {
+    "覆膜": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "25",
+      "perM2": "1.2"
+    },
+    "哑膜": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "25",
+      "perM2": "1.3"
+    },
+    "亮膜": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "25",
+      "perM2": "1.1"
+    },
+    "烫金": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "80",
+      "perM2": "3.5"
+    },
+    "烫银": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "80",
+      "perM2": "3.5"
+    },
+    "局部UV": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "60",
+      "perM2": "2.8"
+    },
+    "击凸": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "65",
+      "perM2": "2.6"
+    },
+    "压凹": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "65",
+      "perM2": "2.6"
+    },
+    "上光": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "20",
+      "perM2": "0.8"
+    }
+  },
+  "binding": {
+    "骑马钉": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "35",
+      "perUnit": "0.12"
+    },
+    "胶装": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "60",
+      "perUnit": "0.45"
+    },
+    "锁线胶装": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "100",
+      "perUnit": "0.85"
+    },
+    "糊盒": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "40",
+      "perUnit": "0.25"
+    },
+    "二折": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "25",
+      "perUnit": "0.06"
+    },
+    "三折": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "30",
+      "perUnit": "0.09"
+    },
+    "风琴折": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "45",
+      "perUnit": "0.12"
+    },
+    "模切": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "100",
+      "perUnit": "0.08"
+    },
+    "圆角": {
+      "sourceId": "illustrative-cost-design-2026-10",
+      "setup": "30",
+      "perUnit": "0.04"
+    }
+  },
+  "colorFactors": {
+    "四色": "1",
+    "单色": "0.65"
+  }
+}

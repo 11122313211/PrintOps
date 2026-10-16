@@ -11,6 +11,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from decimal import Decimal
 from unittest.mock import patch as mock_patch
 
 from agent import Agent, Memory
@@ -37,7 +38,7 @@ class FieldMapTest(unittest.TestCase):
         self.assertEqual(card["material"], "300g 白卡")
         box = adapter.map_order({"productType": "包装盒",
                                  "productSpecs": {"boxSize": "60×40×20CM", "boxStructure": "天地盖"}})
-        self.assertEqual(box["boxDimension"], "60×40×20CM")
+        self.assertEqual(box["boxDimension"], "600×400×200 mm")
         self.assertEqual(box["boxStyle"], "天地盖")
         self.assertEqual(box["productType"], "包装盒")
 
@@ -117,21 +118,25 @@ class ConfidenceGradingTest(unittest.TestCase):
 
 class PriceModelTest(unittest.TestCase):
     ORDER = {"productType": "名片", "quantity": "800 张", "quantityValue": 800,
-             "quantityUnit": "张", "size": "90×54MM", "printing": "四色印刷"}
+             "quantityUnit": "张", "size": "90×54 mm", "paper": "250 g/m² 铜版纸",
+             "printing": "双面四色"}
 
     def test_estimate_carries_pricing_model_version(self) -> None:
         result = estimate_price(self.ORDER)
         self.assertIsNotNone(result["range"])
         self.assertEqual(result["pricingModelVersion"], PRICE_MODEL_VERSION)
-        self.assertIn("示例价格参数表", result["assumptions"])
+        self.assertIn("示例价格参数表", result["disclaimer"])
+        self.assertEqual(result["basis"]["confidence"], "illustrative")
+        self.assertEqual(result["displayRange"], f"¥{result['range']['low']} - ¥{result['range']['high']}")
 
-    def test_quantity_tier_is_stepped_not_linear(self) -> None:
+    def test_larger_quantity_never_reduces_the_total(self) -> None:
         small = estimate_price({**self.ORDER, "quantity": "800 张", "quantityValue": 800})
         large = estimate_price({**self.ORDER, "quantity": "1500 张", "quantityValue": 1500})
-        small_low = int(small["range"].split(" - ")[0].lstrip("¥"))
-        large_low = int(large["range"].split(" - ")[0].lstrip("¥"))
-        self.assertLess(large_low, small_low * 1500 / 800 * 0.95,
-                        "larger quantity should drop into a cheaper tier")
+        small_total = Decimal(small["range"]["mid"])
+        large_total = Decimal(large["range"]["mid"])
+        self.assertGreaterEqual(large_total, small_total)
+        self.assertLess(large_total / 1500, small_total / 800,
+                        "固定准备费可以摊薄，但总价不得倒挂")
 
     def test_finishing_factor_raises_the_band(self) -> None:
         order = {**self.ORDER, "productType": "单页"}
@@ -141,14 +146,14 @@ class PriceModelTest(unittest.TestCase):
 
     def test_tiny_order_respects_make_ready_floor(self) -> None:
         result = estimate_price({**self.ORDER, "quantity": "10 张", "quantityValue": 10})
-        low = int(result["range"].split(" - ")[0].lstrip("¥"))
-        self.assertGreaterEqual(low, 80)
+        low = Decimal(result["range"]["low"])
+        self.assertGreaterEqual(low, 100)
 
 
 class IndustryDepthTest(unittest.TestCase):
     CARD_ORDER = {"productType": "名片", "quantity": "800 张", "quantityValue": 800,
                   "quantityUnit": "张", "size": "90×54MM", "paper": "250g 铜版纸",
-                  "printing": "四色印刷", "deadline": "一周内"}
+                  "printing": "双面四色", "deadline": "一周内"}
 
     def test_imposition_hint_counts_pieces_on_sheet(self) -> None:
         hint = imposition_hint("210×285MM")
@@ -170,18 +175,18 @@ class IndustryDepthTest(unittest.TestCase):
         self.assertIn("颜色可控", options[2]["reason"])
 
     def test_options_carry_reference_prices_with_premium_ladder(self) -> None:
-        # 名片等低价品类会被版费地板兜平；用基数更高的单页验证阶梯
+        # 用明确的成本驱动比较三个方案；没有纸张或面数不能给出价格。
         order = {**ORDER_DEFAULTS, "productType": "单页", "quantity": "800 张",
                  "quantityValue": 800, "quantityUnit": "张", "size": "A4",
-                 "paper": "157g 哑粉纸", "printing": "四色印刷", "deadline": "一周内"}
+                 "paper": "157 g/m² 哑粉纸", "printing": "双面四色", "deadline": "一周内"}
         options = recommend_processes(order)
-        prices = [int(o["refPrice"].split(" - ")[0].lstrip("¥")) for o in options]
+        prices = [Decimal(o["estimate"]["range"]["mid"]) for o in options]
         self.assertTrue(all(o["refPrice"].startswith("¥") for o in options))
         self.assertLessEqual(prices[0], prices[1])
-        self.assertGreater(prices[2], prices[0] * 12 // 10, "专版系数应使质感方案明显更贵")
+        self.assertGreater(prices[2], prices[0], "专版准备费和累计后道应进入质感方案成本")
         self.assertIn("示例", options[0]["refPriceBasis"])
-        self.assertIn("2-4 天", options[0]["leadDetail"])
-        self.assertIn("5-8 天", options[2]["leadDetail"])
+        self.assertIn("2-4 工作日", options[0]["leadDetail"])
+        self.assertIn("5-8 工作日", options[2]["leadDetail"])
 
     def test_min_quantity_warning_fires_and_clears(self) -> None:
         low = validate_order({**self.CARD_ORDER, "quantity": "20 张", "quantityValue": 20})

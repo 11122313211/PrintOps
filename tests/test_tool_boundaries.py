@@ -33,12 +33,14 @@ class ToolBoundaryTest(unittest.TestCase):
 
         # An explicit canonical field wins; legacy aliases fill only blanks.
         self.assertEqual(order["dimensions"], {
-            "finishedSize": "210×300MM",
-            "expandedSize": "420×594MM",
-            "dieCutSize": "426×600MM",
-            "packageSize": "60×40×20CM",
+            "finishedSize": '210×300 mm',
+            "expandedSize": '420×594 mm',
+            "dieCutSize": '426×600 mm',
+            "packageSize": '600×400×200 mm',
+            "packageInnerSize": "", "packageOuterSize": "",
         })
-        self.assertEqual(order["productSpecs"], {"boxSize": "70×50×30CM"})
+        # Canonical dimensions take precedence over inconsistent legacy aliases.
+        self.assertEqual(order["productSpecs"], {"boxSize": "600×400×200 mm"})
 
         oversized = {"productSpecs": {"finishedSize": "x" * 5000}}
         normalize_order_dimensions(oversized)
@@ -144,7 +146,7 @@ class ToolBoundaryTest(unittest.TestCase):
         self.assertIn("paper", quote["toolResult"]["uncertain"])
         self.assertEqual(self.agent.state["quoteRequests"], [])
 
-    def test_public_handoff_blocks_unsupported_supplier_and_has_no_handoff_payload(self):
+    def test_unconfigured_supplier_handoff_is_an_unverified_local_draft(self):
         self.agent.state["order"].update({
             "productType": "名片", "quantity": "500 张", "quantityValue": 500,
             "quantityUnit": "张", "size": "A4", "paper": "PVC板",
@@ -154,9 +156,10 @@ class ToolBoundaryTest(unittest.TestCase):
         self.agent.memory.save(self.agent.id, self.agent.state)
 
         result = self.agent.call_tool("prepare_handoff", {}, remember=False)
-        self.assertEqual(result["toolResult"]["status"], "blocked")
-        self.assertEqual(result["toolResult"]["reason"], "supplier_unsupported")
-        self.assertIsNone(result["handoff"])
+        self.assertEqual(result["toolResult"]["status"], "ready")
+        self.assertFalse(result["toolResult"]["supplierReadiness"]["verified"])
+        self.assertEqual(result["toolResult"]["supplierReadiness"]["unsupported"], [])
+        self.assertTrue(result["toolResult"]["requiresHumanConfirmation"])
 
     def test_handoff_platform_override_is_validated_and_not_persisted(self):
         self.agent.state["order"].update({

@@ -126,6 +126,12 @@ class SecretScanTest(unittest.TestCase):
                                  '{"url": "", "model": "' + secret + '", "key": "' + secret + '"}'})
         self.assertTrue(leaked_note)
 
+    def test_google_shape_inside_encoded_payload_is_not_a_credential_token(self):
+        candidate = "AIza" + "Z" * 35
+        self.assertFalse(secret_scan.scan_text("AAAA" + candidate + "BBBB"))
+        for text in (candidate, '"' + candidate + '"', "?key=" + candidate, "\n" + candidate):
+            self.assertTrue(secret_scan.scan_text(text), "literal and URL credential tokens remain detected")
+
     def test_binary_and_ignored_dirs_are_skipped(self):
         self.assertEqual(self.scan({".git/config": _fixture("openai"),
                                     "blob.sqlite3": _fixture("openai")}), [])

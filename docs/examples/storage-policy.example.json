@@ -1,0 +1,8 @@
+{
+  "backup_directory": "data/backups",
+  "backup_interval_hours": 24,
+  "backup_keep_count": null,
+  "backup_max_age_days": null,
+  "archive_after_days": null,
+  "preserve_audit": true
+}

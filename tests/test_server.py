@@ -69,6 +69,7 @@ class ServerContractTest(unittest.TestCase):
         }
 
         class FakePlanner:
+            tested_instances = []
             timeout = 10
             allow_private_hosts = True
             base_url = "https://example.test/v1"
@@ -80,6 +81,7 @@ class ServerContractTest(unittest.TestCase):
 
             def test_capabilities(self):
                 self.capability_calls += 1
+                self.tested_instances.append(self)
                 return expected
 
             def test_connection(self):
@@ -99,7 +101,10 @@ class ServerContractTest(unittest.TestCase):
         self.assertEqual(result["test"], expected)
         self.assertTrue(result["test"]["agentReady"])
         self.assertEqual(result["test"]["chosenProtocol"], "json_fallback")
-        self.assertEqual(planner.capability_calls, 1)
+        self.assertEqual(planner.capability_calls, 0)
+        self.assertEqual(len(planner.tested_instances), 1)
+        self.assertIsNot(planner.tested_instances[0], planner)
+        self.assertEqual(planner.tested_instances[0].capability_calls, 1)
 
     def test_model_test_unsaved_override_reuses_saved_key_without_exposing_it(self):
         class ProbePlanner:
@@ -164,6 +169,7 @@ class ServerContractTest(unittest.TestCase):
 
         result = self.request("POST", "/api/chat", {
             "sessionId": session_id,
+            "expectedRevision": result["revision"],
             "itemIndex": 1,
             "text": "补充第二项",
             "patch": {"quantity": "1200 张", "productSpecs": {"folding": "三折"}},
@@ -176,6 +182,7 @@ class ServerContractTest(unittest.TestCase):
 
         result = self.request("POST", "/api/choose", {
             "sessionId": session_id,
+            "expectedRevision": result["revision"],
             "itemIndex": 1,
             "optionId": "balanced",
         })
@@ -249,6 +256,7 @@ class ServerContractTest(unittest.TestCase):
 
         checked = self.request("POST", "/api/preflight", {
             "sessionId": session_id, "itemIndex": 1, "fileName": "fold.pdf",
+            "expectedRevision": blocked["revision"],
             "sizeBytes": 1024, "pageCount": 1,
             "encrypted": False, "readable": True,
         })

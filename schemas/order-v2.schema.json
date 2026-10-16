@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:printops:canonical-order:2.0",
+  "title": "PrintOps canonical order 2.0",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "unitSystem",
+    "fields",
+    "measurements",
+    "productSpecs",
+    "items"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "2.0"
+    },
+    "unitSystem": {
+      "const": "mm"
+    },
+    "itemId": {
+      "type": "string"
+    },
+    "fields": {
+      "type": "object",
+      "required": [
+        "productType",
+        "purpose",
+        "quantity",
+        "quantityValue",
+        "quantityUnit",
+        "pages",
+        "orientation",
+        "paper",
+        "printing",
+        "finishing",
+        "binding",
+        "deadline",
+        "budget"
+      ],
+      "properties": {
+        "productType": {
+          "$ref": "#/$defs/field"
+        },
+        "purpose": {
+          "$ref": "#/$defs/field"
+        },
+        "quantity": {
+          "$ref": "#/$defs/field"
+        },
+        "quantityValue": {
+          "$ref": "#/$defs/field"
+        },
+        "quantityUnit": {
+          "$ref": "#/$defs/field"
+        },
+        "pages": {
+          "$ref": "#/$defs/field"
+        },
+        "orientation": {
+          "$ref": "#/$defs/field"
+        },
+        "paper": {
+          "$ref": "#/$defs/field"
+        },
+        "printing": {
+          "$ref": "#/$defs/field"
+        },
+        "finishing": {
+          "$ref": "#/$defs/field"
+        },
+        "binding": {
+          "$ref": "#/$defs/field"
+        },
+        "deadline": {
+          "$ref": "#/$defs/field"
+        },
+        "budget": {
+          "$ref": "#/$defs/field"
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurements": {
+      "type": "object",
+      "required": [
+        "finishedSize",
+        "expandedSize",
+        "dieCutSize",
+        "packageSize",
+        "packageInnerSize",
+        "packageOuterSize"
+      ],
+      "properties": {
+        "finishedSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "expandedSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "dieCutSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "packageSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "packageInnerSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "packageOuterSize": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/field"
+            },
+            {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/measurement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "productSpecs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/field"
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "field": {
+      "type": "object",
+      "required": [
+        "value",
+        "status"
+      ],
+      "properties": {
+        "value": {},
+        "candidateValue": {},
+        "status": {
+          "enum": [
+            "missing",
+            "pending_confirmation",
+            "inferred",
+            "confirmed"
+          ]
+        },
+        "provenance": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "missing",
+                  "pending_confirmation"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pending_confirmation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "candidateValue"
+            ]
+          }
+        }
+      ]
+    },
+    "measurement": {
+      "type": "object",
+      "required": [
+        "width",
+        "height",
+        "unit",
+        "semantic"
+      ],
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "depth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "const": "mm"
+        },
+        "semantic": {
+          "enum": [
+            "finished",
+            "expanded",
+            "die_cut",
+            "package_unspecified",
+            "package_inner",
+            "package_outer"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

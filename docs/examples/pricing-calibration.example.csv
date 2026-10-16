@@ -1,0 +1,6 @@
+quote_id,source_id,source_description,quote_date,valid_until,product,width_mm,height_mm,dimension_semantic,quantity,quantity_unit,material,gsm,pages,printing,sides,print_mode,finishing,binding,product_specs,region,lead_workdays,currency,total_amount,tax_basis,tax_rate,delivery_basis,shipping_net_amount
+illustrative-1,illustrative-csv-demo,人工构造演示数据，不是供应商报价,2026-10-01,2026-12-31,名片,90,54,finished,1000,张,铜版纸,250,0,四色,2,合版,none,none,{},CN-example,5,CNY,100,exclusive,0,ex_works,0
+illustrative-2,illustrative-csv-demo,人工构造演示数据，不是供应商报价,2026-10-01,2026-12-31,名片,90,54,finished,1000,张,铜版纸,250,0,四色,2,合版,none,none,{},CN-example,5,CNY,105,exclusive,0,ex_works,0
+illustrative-3,illustrative-csv-demo,人工构造演示数据，不是供应商报价,2026-10-01,2026-12-31,名片,90,54,finished,1000,张,铜版纸,250,0,四色,2,合版,none,none,{},CN-example,5,CNY,110,exclusive,0,ex_works,0
+illustrative-4,illustrative-csv-demo,人工构造演示数据，不是供应商报价,2026-10-01,2026-12-31,名片,90,54,finished,1000,张,铜版纸,250,0,四色,2,合版,none,none,{},CN-example,5,CNY,115,exclusive,0,ex_works,0
+illustrative-5,illustrative-csv-demo,人工构造演示数据，不是供应商报价,2026-10-01,2026-12-31,名片,90,54,finished,1000,张,铜版纸,250,0,四色,2,合版,none,none,{},CN-example,5,CNY,120,exclusive,0,ex_works,0

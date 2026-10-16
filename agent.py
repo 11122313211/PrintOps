@@ -6,13 +6,10 @@ The contracts are intentionally compatible with a future LangGraph/FastAPI layer
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
 import hashlib
 import math
 import re
-import sqlite3
-import sys
 import time
 import unicodedata
 import uuid
@@ -22,7 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from nlu import perceive
-from order_model import (DIMENSION_DEFAULTS, ITEM_DEFAULTS, LABELS,
+from perception_candidates import field_candidates, candidate_evidence
+from order_contract import canonical_order, review_contract, handoff_document, production_fingerprint
+from unit_normalizer import normalize_dimension
+from storage_contract import OrderStore, StoreConflictError
+from storage_factory import create_store
+from request_runtime import check_deadline
+from order_model import (DIMENSION_DEFAULTS, DIMENSION_SPEC_ALIASES, size_dimension_key, ITEM_DEFAULTS, LABELS,
                          MATERIAL_SPEC_PRODUCTS, ORDER_DEFAULTS,
                          QUANTITY_UNIT_ALIASES,
                          DEFAULT_QUANTITY_UNITS, RECOMMENDATION_FIELDS, REQUIRED,
@@ -37,6 +40,8 @@ from product_knowledge import (KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION,
                                known_product_spec_keys, parameter_state)
 from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
                                get_adapter)
+from supplier_connectors import REGISTRY
+from supplier_contract import UnknownProviderError
 from tools import (TOOLS, TOOL_META, TOOL_SCHEMAS, estimate_price, explain_print_term,
                    match_supplier_capability, preflight_file, prepare_handoff,
                    recommend_processes, request_supplier_quote, validate_order)
@@ -83,94 +88,59 @@ ORDER_PATCH_KEYS = {key for key in ORDER_DEFAULTS if key not in {"productTypes",
 
 
 class Memory:
-    """SQLite-backed session memory; survives server restarts."""
+    """Compatibility facade over an injected or configured OrderStore.
 
+    session_id == order_id in contract v1. Callers may keep load/save while new
+    integrations use ``memory.store`` for paginated history and export.
+    """
     BUSY_TIMEOUT_MS = 5000
 
-    def __init__(self, path: str | Path = "data/agent.sqlite3") -> None:
+    def __init__(self, path: str | Path = "data/agent.sqlite3", *, store: OrderStore | None = None,
+                 mode: str | None = None) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._db() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
+        self.store = store if store is not None else create_store(mode, self.path)
 
     def load(self, session_id: str) -> dict[str, Any]:
-        with self._db() as db:
-            row = db.execute("SELECT state FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if not row:
-            return self.fresh_state()
-        try:
-            state = json.loads(row[0])
-            if not isinstance(state, dict):
-                raise ValueError("会话状态不是 JSON 对象")
-            return normalize_state(state)
-        except (TypeError, ValueError, AttributeError, KeyError, json.JSONDecodeError) as error:
-            return self._quarantine(session_id, row[0], error)
-
-    def _quarantine(self, session_id: str, raw: str, error: Exception) -> dict[str, Any]:
-        """Self-heal a corrupted session: back it up, drop the row, start fresh."""
-        try:
-            backup_dir = self.path.parent / "corrupted"
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64] or "session"
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            (backup_dir / f"{safe_id}-{stamp}.json").write_text(
-                json.dumps({"sessionId": session_id, "error": str(error), "raw": raw},
-                           ensure_ascii=False),
-                encoding="utf-8")
-        except OSError:
-            pass
-        with self._db() as db:
-            db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        print(f"PrintOps: 会话 {session_id} 的持久化状态损坏，已备份到 data/corrupted/ 并重置该会话"
-              f"（{error}）", file=sys.stderr)
-        return self.fresh_state()
+        record = self.store.load_order(session_id)
+        return normalize_state(deepcopy(record["state"])) if record else self.fresh_state()
 
     def save(self, session_id: str, state: dict[str, Any]) -> None:
-        data = json.dumps(state, ensure_ascii=False)
-        with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?)", (session_id, data))
+        """Legacy fixture/import API. Agent mutations use save_if_revision."""
+        existing = self.store.load_order(session_id)
+        normalized = normalize_state(deepcopy(state))
+        record = {"orderId": session_id, "sessionId": session_id, "state": normalized}
+        if state != normalized:
+            record["events"] = [{"eventType": "legacy_state_normalized", "actor": "migration",
+                                 "payload": {"original": deepcopy(state)}}]
+        saved = self.store.save_order(record, existing["revision"] if existing else 0)
+        state["revision"] = saved["revision"]
 
-    def save_if_revision(self, session_id: str, state: dict[str, Any],
-                         expected_revision: int) -> tuple[bool, int | None]:
-        """Atomically persist a state only when its stored revision matches.
+    def save_if_revision(self, session_id: str, state: dict[str, Any], expected_revision: int,
+                         *, new_messages: list[dict[str, Any]] | None = None,
+                         events: list[dict[str, Any]] | None = None) -> tuple[bool, int | None]:
+        if (isinstance(expected_revision, bool) or not isinstance(expected_revision, int)
+                or not 0 <= expected_revision <= MAX_STATE_REVISION):
+            return False, None
+        normalized = normalize_state(deepcopy(state))
+        record = {"orderId": session_id, "sessionId": session_id, "state": normalized}
+        if new_messages is not None:
+            record["newMessages"] = new_messages
+        if events:
+            record["events"] = events
+        try:
+            saved = self.store.save_order(record, expected_revision)
+        except StoreConflictError as error:
+            return False, error.current
+        state.clear()
+        state.update(normalized)
+        state["revision"] = saved["revision"]
+        return True, saved["revision"]
 
-        MCP instances can live in separate processes, so the in-process
-        session locks are insufficient for optimistic concurrency. SQLite's
-        IMMEDIATE transaction serializes the read/compare/write sequence while
-        keeping the existing sessions table/API unchanged.
-        """
-        try:
-            expected = int(expected_revision)
-        except (TypeError, ValueError, OverflowError):
-            return False, None
-        if expected < 0 or expected > MAX_STATE_REVISION:
-            return False, None
-        try:
-            data = json.dumps(state, ensure_ascii=False, allow_nan=False)
-        except (TypeError, ValueError, OverflowError, RecursionError):
-            raise
-        with self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT state FROM sessions WHERE id = ?", (session_id,)).fetchone()
-            if row is None:
-                if expected != 0:
-                    return False, 0
-                db.execute("INSERT INTO sessions VALUES (?, ?)", (session_id, data))
-                saved = state.get("revision") if isinstance(state, dict) else None
-                return True, saved if isinstance(saved, int) else 0
-            try:
-                raw = json.loads(row[0])
-                current = raw.get("revision", 0) if isinstance(raw, dict) else None
-                if (not isinstance(current, int) or isinstance(current, bool)
-                        or current < 0 or current > MAX_STATE_REVISION):
-                    return False, None
-            except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
-                return False, None
-            if current != expected:
-                return False, current
-            db.execute("UPDATE sessions SET state = ? WHERE id = ?", (data, session_id))
-            saved = state.get("revision") if isinstance(state, dict) else None
-            return True, saved if isinstance(saved, int) else current
+    def _db(self):
+        """Legacy SQLite inspection seam; not part of the backend contract."""
+        if not hasattr(self.store, "_db"):
+            raise TypeError("the selected store is not SQLite")
+        return self.store._db()
 
     @staticmethod
     def fresh_state() -> dict[str, Any]:
@@ -189,19 +159,6 @@ class Memory:
                 "processOptions": [], "preflightResults": {},
                 "quoteRequests": [], "activeQuoteRequestId": None,
                 "schemaVersion": STATE_SCHEMA_VERSION, "revision": 0}
-
-    @contextmanager
-    def _db(self):
-        db = sqlite3.connect(self.path, timeout=self.BUSY_TIMEOUT_MS / 1000)
-        try:
-            # WAL lets concurrent reads proceed during writes; busy_timeout keeps
-            # concurrent writers from failing with "database is locked".
-            db.execute("PRAGMA busy_timeout = 5000")
-            db.execute("PRAGMA journal_mode = WAL")
-            with db:
-                yield db
-        finally:
-            db.close()
 
 
 class RevisionConflictError(RuntimeError):
@@ -252,6 +209,8 @@ class Agent:
                                    and not isinstance(raw_revision, bool)
                                    and 0 <= raw_revision <= MAX_STATE_REVISION else 0)
         self._saved_state_digest = self._state_digest(self.state)
+        self._saved_revision = self.state["revision"]
+        self._pending_messages: list[dict[str, Any]] = []
         self.trace: list[str] = []
         self.run_id = ""
         self.run_operation = ""
@@ -292,9 +251,11 @@ class Agent:
     def _invalidate_delivery_state(self) -> None:
         """Invalidate generated handoff data after an order-affecting change."""
         self._mark_quote_requests_stale("订单字段、文件或目标平台发生变化")
+        had_delivery = self.state.get("orderGenerated") or (self.state.get("confirmation") or {}).get("status") in {"confirmed", "pending", "stale"}
         self.state["orderGenerated"] = False
         self.state["handoff"] = None
-        self.state["confirmation"] = {"status": "not_ready"}
+        self.state["confirmation"] = ({"status": "stale", "staleReason": "订单字段、文件或目标平台发生变化"}
+                                      if had_delivery else {"status": "not_ready"})
 
     def _store_process_options(self, options: Any, item_index: int | None = None) -> None:
         """Persist recommendation results in a shape that survives a restart."""
@@ -646,16 +607,8 @@ class Agent:
         item["items"] = []
         item["productTypes"] = []
         item["platform"] = self.state["order"].get("platform") or "generic"
-        for key in ("purpose", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget"):
-            if not item.get(key) and self.state["order"].get(key):
-                item[key] = deepcopy(self.state["order"][key])
-        top_dimensions = self.state["order"].get("dimensions") if isinstance(self.state["order"].get("dimensions"), dict) else {}
-        item_dimensions = item.get("dimensions") if isinstance(item.get("dimensions"), dict) else {}
-        if "/" not in str(self.state["order"].get("size") or ""):
-            item["dimensions"] = {
-                key: item_dimensions.get(key) or top_dimensions.get(key) or ""
-                for key in DIMENSION_DEFAULTS
-            }
+        # Explicitly shared values are copied to each item during perception.
+        # The top-level compatibility fields describe item 1, not all items.
         return item
 
     def _item_validation(self, index: int) -> dict[str, Any] | None:
@@ -834,6 +787,10 @@ class Agent:
         entry = {"quote": quote[:2048]}
         if source:
             entry["source"] = source[:128]
+        if isinstance(value, dict):
+            for key in ("start", "end"):
+                if isinstance(value.get(key), int) and not isinstance(value[key], bool) and value[key] >= 0:
+                    entry[key] = value[key]
         return entry
 
     @classmethod
@@ -927,6 +884,7 @@ class Agent:
             "sourceLabel": FIELD_SOURCE_LABELS.get(source, source),
             "confidence": round(max(0.0, min(1.0, float(graded))), 2),
             "runId": self.run_id or None, "updatedAt": self._timestamp(),
+            "status": "confirmed" if source == "user" else "inferred" if graded >= .75 else "pending_confirmation",
         }
         evidence = self._resolve_evidence(key, field_evidence)
         if evidence is None:
@@ -940,6 +898,14 @@ class Agent:
         if evidence is not None:
             entry["evidence"] = evidence
         self.state.setdefault("fieldMeta", {})[key] = entry
+        for conflict in self.state.get("conflicts", []):
+            if (isinstance(conflict, dict) and conflict.get("field") == key
+                    and self._equivalent_value(conflict.get("current"), value)):
+                conflict["resolved"] = entry["status"] != "pending_confirmation" and entry["confidence"] >= .75
+        if source == "user":
+            for candidate in self.state.get("fieldCandidates", []):
+                if candidate.get("field") == key and candidate.get("status") == "pending_confirmation":
+                    candidate["status"] = "confirmed" if self._equivalent_value(candidate.get("value"), value) else "rejected"
 
     def _record_rejected_fields(self, fields: list[str] | set[str] | tuple[str, ...] | None) -> None:
         """Keep a bounded, de-duplicated audit list of rejected patch paths."""
@@ -1046,7 +1012,7 @@ class Agent:
             confidence = self._finite_confidence(meta.get("confidence", 1))
             # A malformed confidence attached to a present field is treated as
             # uncertain instead of raising during generation.
-            if confidence is None or confidence < 0.75:
+            if confidence is None or confidence < 0.75 or meta.get("status") == "pending_confirmation":
                 fields.append(str(key))
         if production_only:
             fields = [key for key in fields if self._is_production_field(key)]
@@ -1061,7 +1027,7 @@ class Agent:
             confidence = float(meta.get("confidence", 1))
         except (TypeError, ValueError, OverflowError):
             return True
-        return not math.isfinite(confidence) or confidence < 0.75
+        return not math.isfinite(confidence) or confidence < 0.75 or meta.get("status") == "pending_confirmation"
 
     def _uncertain_fields_for_item(self, item_order: dict[str, Any] | None,
                                    item_index: int | None) -> list[str]:
@@ -1488,10 +1454,7 @@ class Agent:
         self._begin_run("chat")
         self.trace = ["感知需求"]
         self._event("perceive", "ok", "已完成规则感知")
-        perceived, perceived_confidence = self._perceive_full(
-            text, self.state["order"].get("productType") or "")
         focus_match = re.search(r"第\s*(\d+)\s*项", text or "")
-        explicit_action = self._has_explicit_action_intent(text)
         target_supplied = item_index is not None or focus_match is not None
         requested_index: Any = item_index
         if requested_index is None and focus_match:
@@ -1499,6 +1462,19 @@ class Agent:
                 requested_index = int(focus_match.group(1)) - 1
             except ValueError:
                 requested_index = -1
+        # Product-specific follow-ups belong to the item this turn targets.
+        # Resolve the hint before perception, including a newly selected item.
+        hint_index = requested_index if target_supplied else self.state.get("activeItemIndex")
+        hint_items = self.state["order"].get("items")
+        product_hint = self.state["order"].get("productType") or ""
+        if (isinstance(hint_items, list) and len(hint_items) > 1
+                and isinstance(hint_index, int) and not isinstance(hint_index, bool)
+                and 0 <= hint_index < len(hint_items) and isinstance(hint_items[hint_index], dict)):
+            product_hint = hint_items[hint_index].get("productType") or ""
+        perceived, perceived_confidence = self._perceive_full(text, product_hint)
+        candidates = field_candidates(text, perceived, perceived_confidence)
+        evidence = candidate_evidence(candidates)
+        explicit_action = self._has_explicit_action_intent(text)
         if target_supplied:
             items = self.state["order"].get("items")
             if (isinstance(requested_index, bool)
@@ -1528,17 +1504,58 @@ class Agent:
         target_item = (isinstance(items, list) and isinstance(active_item, int)
                        and 0 <= active_item < len(items) and len(items) > 1)
         if target_item:
+            for candidate in candidates:
+                candidate["field"] = f"items.{items[active_item]['itemId']}." + candidate["field"]
+                candidate["scope"] = items[active_item]["itemId"]
+        self.state["fieldCandidates"] = (self.state.get("fieldCandidates", []) + candidates)[-128:]
+        if target_item:
             changed_item = self._update_item(active_item, perceived, source="rule", confidence=0.84,
-                                             field_confidence=perceived_confidence)
+                                             field_confidence=perceived_confidence, field_evidence=evidence)
             if patch:
                 changed_item |= self._update_item(active_item, patch, source="user", confidence=1.0)
             changed_fields = [f"items.{items[active_item].get('itemId', f'item-{active_item + 1}')}.{key}" for key in changed_item]
         else:
             changed = self._update_order(perceived, source="rule", confidence=0.84,
-                                         field_confidence=perceived_confidence)
+                                         field_confidence=perceived_confidence, field_evidence=evidence)
             if patch:
                 changed |= self._update_order(patch, source="user", confidence=1.0)
             changed_fields = list(changed)
+        # Negation can remove a previously accepted value, but must not delete
+        # the replacement supplied in this same turn ("不要A4，改B5").
+        target = items[active_item] if target_item else self.state["order"]
+        prefix = f"items.{target.get('itemId')}." if target_item else ""
+        for candidate in candidates:
+            candidate_key = candidate["field"].removeprefix(prefix) if prefix else candidate["field"]
+            if not candidate["negated"] or candidate_key in perceived:
+                continue
+            key, value = candidate_key, str(candidate["value"])
+            current = target.get(key) or ""
+            # Evidence keeps the original spelling; compare canonical material
+            # terminology so "不要300g铜版纸" also removes "300 g/m² 铜版纸".
+            from domain_vocab import normalize_print_term
+            denied = normalize_dimension(value) if key == "size" else normalize_print_term(key, value)
+            normalized_current = normalize_dimension(current) if key == "size" else normalize_print_term(key, current)
+            equivalent_denial = re.sub(r"\s+", "", str(denied)) in re.sub(r"\s+", "", str(normalized_current))
+            if current and equivalent_denial:
+                target[key] = ""
+                self.state.get("fieldMeta", {}).pop(prefix + key, None)
+                if key == "size":
+                    for dimension, prior in list(target.get("dimensions", {}).items()):
+                        if prior == current:
+                            target["dimensions"][dimension] = ""
+                            self.state.get("fieldMeta", {}).pop(prefix + "dimensions." + dimension, None)
+                    normalize_order_dimensions(target)
+                self._clear_process_options()
+                self.state["selectedOption"] = None
+                self._invalidate_delivery_state()
+        if "items" in perceived:
+            for index, item in enumerate(self.state["order"].get("items", [])):
+                for candidate in candidates:
+                    source_prefix = f"items.item-{index + 1}."
+                    if candidate["field"].startswith(source_prefix) and not candidate["negated"]:
+                        key = candidate["field"][len(source_prefix):]
+                        self._set_field_meta(f"items.{item['itemId']}.{key}", candidate["value"], "rule",
+                                             candidate["confidence"], field_evidence={key: evidence.get(candidate["field"], {})})
         self.state["workflowStage"] = self._base_workflow_stage()
         self._event("memory", "ok", "已更新订单记忆", changedFields=changed_fields)
         self._remember("user", text)
@@ -1888,13 +1905,13 @@ class Agent:
         if self._planner_intent(text, "price"):
             active_index = self._item_index()
             item_order = self._item_order(active_index) if active_index is not None else None
-            result = self._call("estimate_price", item_order or self.state["order"])
+            result = self._estimate_reference(item_order, active_index)
             if item_order is not None:
                 result = {**result, "itemId": item_order.get("itemId"), "itemIndex": active_index}
             if result.get("status") == "blocked":
-                message = result["assumptions"]
+                message = self._estimate_message(result)
             else:
-                message = (f"按当前已填写信息，费用只能做区间估算：{result['range']}。\n{result['assumptions']}"
+                message = (self._estimate_message(result)
                            if result["range"] else f"我调用了费用估算工具，但信息还不足。\n还需要：{'、'.join(result['missing'])}。")
             self._remember("assistant", message)
             self._save()
@@ -2068,12 +2085,12 @@ class Agent:
         if name == "estimate_price":
             item_index = self._item_index(payload.get("itemIndex"))
             item_order = self._item_order(item_index) if item_index is not None else None
-            result = self._call(name, item_order or self.state["order"])
+            result = self._estimate_reference(item_order, item_index)
             if item_order is not None:
                 result = {**result, "itemId": item_order.get("itemId"), "itemIndex": item_index}
             self.state["workflowStage"] = "clarify" if result.get("status") == "blocked" else "quote"
-            message = (result.get("assumptions") if result.get("status") == "blocked"
-                       else f"已调用费用估算工具：{result['range']}。" if result["range"]
+            message = (self._estimate_message(result) if result.get("status") == "blocked"
+                       else self._estimate_message(result) if result["range"]
                        else f"费用估算工具需要更多信息：{'、'.join(result['missing'])}。")
             return self._tool_reply(message, tool_result=result, remember=remember)
         if name == "prepare_handoff":
@@ -2215,7 +2232,8 @@ class Agent:
                 self._remember("assistant", message)
                 self._save()
                 return self._result([message], tool_result=validation)
-            uncertain = [field for field in self._low_confidence_fields(production_only=True) if field.startswith("items.")]
+            uncertain = list(dict.fromkeys(field for index in range(len(self.state["order"].get("items", [])))
+                                           for field in self._uncertain_fields_for_item(self._item_order(index), index)))
             if uncertain:
                 self._event("approval", "blocked", "产品项存在低置信度字段", fields=uncertain)
                 labels = [LABELS.get(field.rsplit(".", 1)[-1], field) for field in uncertain]
@@ -2262,7 +2280,8 @@ class Agent:
                 sections.append(f"【第 {index + 1} 项：{product}】\n{handoff.get('text', '')}")
                 self.state["order"]["items"][index]["orderGenerated"] = True
             aggregate = {"status": "ready", "items": handoffs, "supplierReadiness": capabilities,
-                         "text": "\n\n".join(sections), "requiresHumanConfirmation": True}
+                         "text": "\n\n".join(sections), "requiresHumanConfirmation": True,
+                         "orderFingerprint": production_fingerprint(self.state), "generatedAt": self._timestamp()}
             self.state.update({"stage": "confirm", "workflowStage": "confirm", "orderGenerated": True,
                                "handoff": deepcopy(aggregate), "confirmation": {"status": "pending"}})
             message = "所有产品项已完成并生成整体交接单。正式提交前仍需要人工确认价格、文件和交期。"
@@ -2303,6 +2322,9 @@ class Agent:
             self._save()
             return self._result([message], [], options, tool_result=options)
         handoff = self._call("prepare_handoff", self.state["order"])
+        if handoff.get("status") != "ready":
+            return self._result(["当前参数未能生成有效交接草稿。"], tool_result=handoff)
+        handoff.update({"orderFingerprint": production_fingerprint(self.state), "generatedAt": self._timestamp()})
         self.state.update({"stage": "confirm", "workflowStage": "confirm", "orderGenerated": True,
                            "handoff": deepcopy(handoff), "confirmation": {"status": "pending"}})
         message = "订单草稿已生成。正式提交前仍需要人工确认价格、文件和交期。"
@@ -2321,12 +2343,18 @@ class Agent:
             self._save()
             return self._result([message], tool_result={"status": "blocked", "reason": "handoff_not_ready"})
         confirmation = self.state.get("confirmation") or {}
+        review = self.review()
+        if not review["canExport"] or ((self.state.get("handoff") or {}).get("orderFingerprint")
+                and self.state["handoff"]["orderFingerprint"] != production_fingerprint(self.state)):
+            return self._result(["订单规格仍需核对或交接单已失效，请处理待办后重新生成。"],
+                                tool_result={"status": "blocked", "reason": "review_required"})
         if confirmation.get("status") == "confirmed":
             return self._result(["该订单交接单已经确认，无需重复确认。"], handoff=self.state.get("handoff"),
                                 tool_result={"status": "confirmed", **confirmation})
         confirmed_at = self._timestamp()
         self.state["confirmation"] = {"status": "confirmed", "confirmedAt": confirmed_at,
-                                       "note": str(note or "").strip()[:240]}
+                                       "note": str(note or "").strip()[:240],
+                                       "orderFingerprint": production_fingerprint(self.state)}
         self.state["workflowStage"] = "export"
         self.state["stage"] = "confirm"
         self._event("approval", "ok", "人工确认已记录", confirmedAt=confirmed_at)
@@ -2338,6 +2366,7 @@ class Agent:
             quote_request["confirmationNote"] = str(note or "").strip()[:240]
         self._remember("assistant", "已记录人工确认。当前不会自动向供应商提交，下一步可导出交接包或由受控适配器继续处理。")
         self._save()
+        self.state["confirmation"]["confirmedRevision"] = self.state["revision"] + 1
         return self._result(["已记录人工确认。当前不会自动向供应商提交，下一步可导出交接包或由受控适配器继续处理。"],
                             handoff=self.state.get("handoff"),
                             tool_result={"status": "confirmed", **self.state["confirmation"]})
@@ -2426,11 +2455,15 @@ class Agent:
 
     def set_platform(self, platform_id: str) -> dict[str, Any]:
         self._begin_run("set_platform")
-        platform_id = platform_id if platform_id in PLATFORMS else "generic"
+        try:
+            provider = REGISTRY.get(platform_id).metadata()
+        except UnknownProviderError:
+            return self._result(["未找到供应商接口，请选择已注册的供应商。"],
+                                tool_result={"status": "invalid_arguments", "reason": "unknown_provider"})
         self._update_order({"platform": platform_id}, source="user", confidence=1.0)
         self.state["workflowStage"] = self._base_workflow_stage()
         self._save()
-        return self._result([f"目标平台已切换为{PLATFORMS[platform_id]['name']}。订单核心字段保持不变。"])
+        return self._result([f"目标平台已切换为{provider['name']}。"])
 
     def snapshot(self) -> dict[str, Any]:
         self._begin_run("snapshot")
@@ -2446,6 +2479,136 @@ class Agent:
                 self._store_process_options(options)
         self.trace = ["恢复会话记忆"] if self.state["messages"] else []
         return self._result([], [], options)
+
+    def review(self) -> dict[str, Any]:
+        uncertain = self._low_confidence_fields(production_only=True)
+        items = self.state["order"].get("items") or []
+        if len(items) > 1:
+            for index, item in enumerate(items):
+                prefix = f"items.{item['itemId']}."
+                uncertain.extend(key if key.startswith("items.") else prefix + key
+                                 for key in self._uncertain_fields_for_item(self._item_order(index), index))
+        return review_contract(self.state, uncertain_fields=uncertain)
+
+    def edit_fields(self, action: str, values: dict[str, Any] | None = None,
+                    fields: list[str] | None = None, item_index: int | None = None) -> dict[str, Any]:
+        """Explicit user edits/confirmation, without manufacturing a chat utterance."""
+        if self.state.get("orderStatus") == "archived":
+            raise ValueError("已归档订单只读")
+        if action not in {"set", "clear", "confirm", "reject"}:
+            raise ValueError("未知字段操作")
+        if action == "set":
+            if not isinstance(values, dict) or not values or len(values) > 64:
+                raise ValueError("values 需要非空字段映射，最多64项")
+            paths = list(values)
+        else:
+            if not isinstance(fields, list) or not fields or len(fields) > 64:
+                raise ValueError("fields 需要非空字段列表，最多64项")
+            paths = fields
+        items = self.state["order"].get("items") or []
+        if len(items) > 1 and item_index is None:
+            raise ValueError("多产品字段操作必须明确 itemId")
+        target = items[item_index] if item_index is not None else self.state["order"]
+        item_id = target.get("itemId") if item_index is not None else None
+        prefix = f"items.{item_id}." if item_id else ""
+        allowed = (ITEM_PATCH_KEYS if item_id else ORDER_PATCH_KEYS) - {"uploadedFile", "items", "productTypes", "measurements", "unitSystem", "dimensions", "productSpecs"}
+        requested_product = ((values.get("productType") or values.get(prefix + "productType"))
+                             if action == "set" else None)
+        specs = known_product_spec_keys(requested_product if isinstance(requested_product, str) else target.get("productType") or None)
+        def read(path):
+            parts = path.split(".")
+            return (target.get(parts[0]) or {}).get(parts[1]) if len(parts) == 2 else target.get(path)
+        normalized_paths = []
+        for path in paths:
+            if not isinstance(path, str):
+                raise ValueError("字段标识必须是字符串")
+            relative = path[len(prefix):] if prefix and path.startswith(prefix) else path
+            if relative.startswith("items."):
+                raise ValueError("字段路径与产品作用对象不一致")
+            parts = relative.split(".")
+            valid = (len(parts) == 1 and relative in allowed or len(parts) == 2 and
+                     (parts[0] == "dimensions" and parts[1] in DIMENSION_DEFAULTS or parts[0] == "productSpecs" and parts[1] in specs))
+            if not valid:
+                raise ValueError(f"未知或只读字段：{relative}")
+            if any(existing == relative for existing, _ in normalized_paths):
+                raise ValueError("同一字段不能在一次操作中重复指定")
+            value = values[path] if action == "set" else read(relative)
+            if action == "set" and (not self._is_patch_scalar(value) or value is None or str(value).strip() == "" or len(str(value)) > MAX_PATCH_VALUE):
+                raise ValueError("填写值必须为非空标量；清空请使用 clear")
+            if action == "confirm" and value in (None, ""):
+                raise ValueError("缺失字段不能确认")
+            normalized_paths.append((relative, deepcopy(value)))
+        quantity_patch = {}
+        if action in {"set", "confirm"} and any(path in {"quantity", "quantityValue", "quantityUnit"} for path, _ in normalized_paths):
+            requested = dict(normalized_paths)
+            raw = requested.get("quantity", requested.get("quantityValue", target.get("quantityValue")))
+            unit = requested.get("quantityUnit", target.get("quantityUnit") or "")
+            parsed = parse_quantity(raw, requested_product or target.get("productType"), str(unit))
+            if not parsed or parsed[1] <= 0 or re.search(r"[-−]\s*\d", str(raw)):
+                raise ValueError("数量必须是大于零的有效数量")
+            quantity_patch = {"quantity": parsed[0], "quantityValue": parsed[1], "quantityUnit": parsed[2]}
+        # Validate the entire request before touching any field, making mixed requests atomic.
+        before = {path: deepcopy(read(path)) for path, _ in normalized_paths}
+        self._begin_run(f"fields:{action}")
+        if item_index is not None:
+            self.state["activeItemIndex"] = item_index
+        if action in {"set", "confirm"}:
+            patch = {}
+            for path, value in normalized_paths:
+                parts = path.split(".")
+                if len(parts) == 2:
+                    patch.setdefault(parts[0], {})[parts[1]] = value
+                else:
+                    patch[path] = value
+            patch.update(quantity_patch)
+            if item_index is None:
+                self._update_order(patch, source="user", confidence=1)
+            else:
+                self._update_item(item_index, patch, source="user", confidence=1)
+        else:
+            for path, _ in normalized_paths:
+                aliases = {path}
+                dimension = (path.split(".", 1)[1] if path.startswith("dimensions.") else
+                             DIMENSION_SPEC_ALIASES.get(path.split(".", 1)[1]) if path.startswith("productSpecs.") else
+                             size_dimension_key(target.get("size"), target.get("productType", "")) if path == "size" else None)
+                if dimension:
+                    aliases.add("dimensions." + dimension)
+                    aliases.update("productSpecs." + alias for alias, meaning in DIMENSION_SPEC_ALIASES.items() if meaning == dimension)
+                    if dimension == size_dimension_key(target.get("size"), target.get("productType", "")):
+                        aliases.add("size")
+                if path in {"quantity", "quantityValue", "quantityUnit"}:
+                    aliases.update({"quantity", "quantityValue", "quantityUnit"})
+                for alias in aliases:
+                    parts = alias.split(".")
+                    if len(parts) == 2:
+                        target.setdefault(parts[0], {}).pop(parts[1], None)
+                    else:
+                        target[alias] = None if alias == "quantityValue" else ""
+                    self.state.get("fieldMeta", {}).pop(prefix + alias, None)
+                    for candidate in self.state.get("fieldCandidates", []):
+                        if candidate.get("field") == prefix + alias and candidate.get("status") != "rejected":
+                            candidate["status"] = "rejected"
+                normalize_order_dimensions(target)
+            if not item_id:
+                self.state["selectedOption"] = None
+            else:
+                target["selectedOption"] = None
+                target["orderGenerated"] = False
+            self._clear_process_options(item_index)
+            self._mark_preflight_stale(item_index, "用户清空或拒绝了生产字段")
+            self._invalidate_delivery_state()
+        self.state["workflowStage"] = self._base_workflow_stage()
+        self._event("memory", "ok", f"用户字段操作：{action}", changedFields=[prefix + path for path, _ in normalized_paths])
+        result = self._result([])
+        live = self.state["order"]["items"][item_index] if item_index is not None else self.state["order"]
+        def after(path):
+            parts = path.split(".")
+            return (live.get(parts[0]) or {}).get(parts[1]) if len(parts) == 2 else live.get(path)
+        result["fieldChanges"] = [{"fieldPath": path, "fieldId": prefix + path, "itemId": item_id,
+                                    "before": before[path], "after": deepcopy(after(path))} for path, _ in normalized_paths]
+        result["changeImpact"] = {"handoffInvalidated": self.state.get("confirmation", {}).get("status") == "stale",
+                                  "requiresReestimate": action != "confirm", "action": action}
+        return result
 
     @staticmethod
     def _context_order_projection(order: dict[str, Any] | None,
@@ -2712,6 +2875,19 @@ class Agent:
             ]
         return snapshot
 
+    def _estimate_reference(self, item_order=None, item_index=None):
+        uncertain = self._uncertain_fields_for_item(item_order, item_index)
+        if uncertain:
+            # Preserve the public estimate shape without calculating with an
+            # unaccepted candidate. Explicit user confirmation unlocks it.
+            result = self._call("estimate_price", {})
+            result.update({"status": "blocked", "reason": "low_confidence", "range": None,
+                           "displayRange": "请先确认计价参数", "uncertain": uncertain,
+                           "missing": [f"确认{LABELS.get(key.split('.')[-1], key)}" for key in uncertain],
+                           "requiresHumanConfirmation": True})
+            return result
+        return self._call("estimate_price", item_order or self.state["order"])
+
     def _call(self, name: str, *args: Any) -> Any:
         self.trace.append(f"调用工具：{name}")
         started = time.monotonic()
@@ -2742,6 +2918,8 @@ class Agent:
             run = self.state.get("lastRun")
         # Some callers save before building the response; saving here as well
         # ensures the completed run and field provenance survive a restart.
+        if finish_run and not self._nested_tool_execution and getattr(self, "_operation_context", None):
+            self._operation_complete = True
         self._save()
         workflow_stage = self._workflow_stage(validation)
         supplier_capability = match_supplier_capability(self.state["order"])
@@ -2750,8 +2928,13 @@ class Agent:
         handoff_value = handoff if handoff is not None else self.state.get("handoff")
         quote_request = self._quote_request()
         receipts = self._planner_tool_receipts or self.state.get("toolReceipts") or []
+        review = self.review()
         return {"sessionId": self.id, "messages": messages, "quickReplies": quick or [], "options": options or [],
+                "review": review, "handoffDocument": handoff_document(self.state, self.id, review),
+                "activeItemId": active_item.get("itemId") if isinstance(active_item, dict) else None,
                 "order": deepcopy(self.state["order"]), "stage": self.state["stage"],
+                "canonicalOrder": canonical_order(self.state["order"], self.state.get("fieldMeta")),
+                "fieldCandidates": deepcopy(self.state.get("fieldCandidates") or []),
                 "selectedOption": self.state["selectedOption"], "orderGenerated": self.state["orderGenerated"],
                 "uploadedFile": self.state["uploadedFile"], "uploadedFiles": deepcopy(self.state.get("uploadedFiles") or []), "toolTrace": self.trace,
                 "availableTools": self.available_tools(), "toolResult": tool_result,
@@ -3077,12 +3260,48 @@ class Agent:
                 valid[key] = normalized
         if list_fields:
             valid.update(list_fields)
+        # Resolve all legacy dimension inputs before mutating the order. An
+        # explicit canonical dimension wins over either a spec alias or size,
+        # independent of JSON key order. Accepted same-value inputs also carry
+        # confirmation intent, without confirming any sibling dimensions.
+        dimension_inputs: dict[str, tuple[Any, str]] = {}
+        requested_specs = changes.get("productSpecs") if isinstance(changes.get("productSpecs"), dict) else {}
+        spec_allowlist = known_product_spec_keys(str(changes.get("productType") or target.get("productType") or "") or None)
+        for raw_name, value in requested_specs.items():
+            if not isinstance(raw_name, str) or not self._is_patch_scalar(value):
+                continue
+            name = raw_name.strip()
+            if name in DIMENSION_DEFAULTS:
+                dimension_inputs[name] = (value, f"productSpecs.{name}")
+            elif name in DIMENSION_SPEC_ALIASES and name in spec_allowlist:
+                dimension_inputs[DIMENSION_SPEC_ALIASES[name]] = (value, f"productSpecs.{name}")
+        requested_dimensions = changes.get("dimensions") if isinstance(changes.get("dimensions"), dict) else {}
+        for raw_name, value in requested_dimensions.items():
+            if (isinstance(raw_name, str) and raw_name.strip() in DIMENSION_DEFAULTS
+                    and (value is None or self._is_patch_scalar(value))):
+                dimension_inputs[raw_name.strip()] = (value, f"dimensions.{raw_name.strip()}")
+        if ("size" in changes and "size" in allowed_keys and self._is_patch_scalar(changes["size"])
+                and str(changes["size"]).strip()):
+            primary = size_dimension_key(changes["size"], str(changes.get("productType") or target.get("productType") or ""))
+            dimension_inputs.setdefault(primary, (changes["size"], "size"))
+        if dimension_inputs:
+            valid["dimensions"] = merge_dimension_patch(target.get("dimensions"),
+                                                        {name: value for name, (value, _) in dimension_inputs.items()})
         changed = {key for key, value in valid.items() if target.get(key) != value}
         target.update(valid)
+        # A legacy size edit and its structured meaning are one atomic write.
+        # Explicit dimensions win when both are supplied in this patch.
+        primary_key = size_dimension_key(target.get("size"), str(target.get("productType") or ""))
+        if primary_key in dimension_inputs:
+            target["size"] = normalize_dimension(dimension_inputs[primary_key][0])
         previous_dimensions = previous.get("dimensions") or {}
         normalize_order_dimensions(target)
         if previous_dimensions != target.get("dimensions"):
             changed.add("dimensions")
+        if previous.get("size") != target.get("size"):
+            changed.add("size")
+        if previous.get("productSpecs") != target.get("productSpecs"):
+            changed.add("productSpecs")
         if "productType" in changed and previous.get("productType") != target.get("productType"):
             # Product-specific fields belong to the old item and must not leak into a new draft.
             # Preserve explicitly supplied fields for the *new* product when
@@ -3120,7 +3339,7 @@ class Agent:
                         and value not in (None, "") and self._is_patch_scalar(value):
                     if incoming_dimensions is None:
                         incoming_dimensions = {}
-                    incoming_dimensions[raw_name] = value
+                    incoming_dimensions.setdefault(raw_name, value)
             target["productSpecs"] = {}
             target["dimensions"] = deepcopy(DIMENSION_DEFAULTS)
             if incoming_specs:
@@ -3145,6 +3364,8 @@ class Agent:
                 for name in set(before) | set(after):
                     field = f"{meta_prefix}productSpecs.{name}"
                     old_value, new_value = before.get(name, ""), after.get(name, "")
+                    if old_value == new_value and name not in (changes.get("productSpecs") or {}):
+                        continue
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
                     self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
@@ -3154,6 +3375,8 @@ class Agent:
                 for name in DIMENSION_DEFAULTS:
                     field = f"{meta_prefix}dimensions.{name}"
                     old_value, new_value = before.get(name, ""), after.get(name, "")
+                    if old_value == new_value and name not in (changes.get("dimensions") or {}) and name not in (changes.get("productSpecs") or {}):
+                        continue
                     if old_value and new_value and old_value != new_value:
                         self._record_conflict(field, old_value, new_value, source)
                     self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
@@ -3163,6 +3386,24 @@ class Agent:
                 if old_value and new_value and old_value != new_value:
                     self._record_conflict(field, old_value, new_value, source)
                 self._set_field_meta(field, new_value, source, confidence, field_confidence, field_evidence)
+        # Explicit re-confirmation of an unchanged dictionary still resolves
+        # that physical field. Propagate its evidence/grade only to aliases of
+        # that field, preserving every unrelated measurement's provenance.
+        for name, (_, origin) in dimension_inputs.items():
+            key = f"{meta_prefix}dimensions.{name}"
+            if source != "user" and not self._has_field_signal(f"{meta_prefix}{origin}", field_confidence, field_evidence):
+                continue
+            value = (target.get("dimensions") or {}).get(name)
+            grade = self._resolve_confidence(f"{meta_prefix}{origin}", confidence, field_confidence)
+            evidence = self._resolve_evidence(f"{meta_prefix}{origin}", field_evidence)
+            aliases = [key]
+            if name == size_dimension_key(target.get("size"), str(target.get("productType") or "")):
+                aliases.append(f"{meta_prefix}size")
+            aliases.extend(f"{meta_prefix}productSpecs.{alias}" for alias, dimension in DIMENSION_SPEC_ALIASES.items()
+                           if dimension == name and alias in (target.get("productSpecs") or {}))
+            for alias in aliases:
+                self._set_field_meta(alias, value, source, grade,
+                                     field_evidence={alias: evidence} if evidence else None)
         self._record_rejected_fields(rejected_fields)
         return changed
 
@@ -3593,8 +3834,8 @@ class Agent:
             return f"{result.get('topic', '印刷基础')}：{result.get('answer', '')}\n\n{result.get('next', '')}".strip()
         if name == "estimate_price" and isinstance(result, dict):
             if result.get("status") == "blocked":
-                return str(result.get("assumptions") or "当前订单暂不能合并估算。")
-            return (f"按当前信息，费用区间为：{result['range']}。\n{result['assumptions']}"
+                return Agent._estimate_message(result)
+            return (Agent._estimate_message(result)
                     if result.get("range") else f"费用估算还需要：{'、'.join(result.get('missing', []))}。")
         if name == "prepare_handoff":
             return ("订单交接信息已准备好，正式提交前请人工确认价格、文件和交期。"
@@ -3640,27 +3881,57 @@ class Agent:
             return "recommend_processes", ({"itemIndex": active_index} if active_index is not None else {})
         return None
 
+    @staticmethod
+    def _estimate_message(result):
+        assumptions = result.get("assumptions") or []
+        details = "；".join(str(x) for x in assumptions) if isinstance(assumptions, list) else str(assumptions)
+        if not result.get("range"):
+            return "参考估算尚需补充：" + "、".join(result.get("missing") or []) + "。" + details
+        return f"本地参考估算：{result.get('displayRange') or result.get('range')}。\n{details}\n{result.get('disclaimer', '')}"
+
     def _remember(self, role: str, text: str) -> None:
-        self.state["messages"] = (self.state["messages"] + [{"role": role, "text": text}])[-HISTORY_LIMIT:]
+        message = {"role": role, "text": text}
+        self.state["messages"] = (self.state["messages"] + [message])[-HISTORY_LIMIT:]
+        self._pending_messages.append(deepcopy(message))
 
     def _save(self) -> None:
+        check_deadline()
         current_revision = self.state.get("revision")
         if (not isinstance(current_revision, int) or isinstance(current_revision, bool)
                 or current_revision < 0 or current_revision > MAX_STATE_REVISION):
             current_revision = 0
             self.state["revision"] = current_revision
+        operation = getattr(self, "_operation_context", None)
+        operation_events = []
+        if operation:
+            receipts = self.state.setdefault("operationReceipts", [])
+            receipt = next((value for value in receipts if value.get("operationId") == operation["operationId"]), None)
+            if receipt is None:
+                receipt = deepcopy(operation)
+                receipts.append(receipt)
+            receipt.update({"status": "completed" if self._operation_complete else "running",
+                            "revision": min(current_revision + 1, MAX_STATE_REVISION)})
+            if self._operation_complete:
+                receipt.setdefault("completedAt", self._timestamp())
+            # The snapshot is a cache, not the idempotency ledger. Keep every
+            # unresolved operation and the latest 100 completed operations;
+            # every commit also appends its receipt in the same transaction.
+            self.state["operationReceipts"] = ([value for value in receipts if value.get("status") != "completed"]
+                                               + [value for value in receipts if value.get("status") == "completed"][-100:])
+            operation_events = [{"eventType": "operation_receipt", "actor": "api", "payload": deepcopy(receipt)}]
         digest = self._state_digest(self.state)
         if digest != self._saved_state_digest:
             self.state["revision"] = min(current_revision + 1, MAX_STATE_REVISION)
-        expected_revision = self._cas_expected_revision
-        if expected_revision is not None:
-            ok, stored_revision = self.memory.save_if_revision(
-                self.id, self.state, expected_revision)
-            self._cas_expected_revision = None
-            if not ok:
-                raise RevisionConflictError(expected_revision, stored_revision)
-        else:
-            self.memory.save(self.id, self.state)
+        expected_revision = (self._cas_expected_revision if self._cas_expected_revision is not None
+                             else self._saved_revision)
+        ok, stored_revision = self.memory.save_if_revision(
+            self.id, self.state, expected_revision, new_messages=self._pending_messages or None,
+            events=operation_events or None)
+        self._cas_expected_revision = None
+        if not ok:
+            raise RevisionConflictError(expected_revision, stored_revision)
+        self._pending_messages = []
+        self._saved_revision = self.state["revision"]
         self._saved_state_digest = self._state_digest(self.state)
 
     @staticmethod

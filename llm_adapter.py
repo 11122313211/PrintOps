@@ -15,13 +15,15 @@ import socket
 import time
 import urllib.request
 from urllib.error import HTTPError, URLError
-from copy import deepcopy
+from copy import copy, deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from order_model import DIMENSION_DEFAULTS
 from product_knowledge import known_product_spec_keys
+from request_runtime import (DeadlineExceeded, bounded_io, deadline_sleep,
+                             operation_deadline, remaining)
 
 
 def _reject_private_host(hostname: str | None) -> None:
@@ -138,6 +140,7 @@ class OpenAICompatiblePlanner:
     CAPABILITY_PROBE_TOTAL_SECONDS = 20.0
     CAPABILITY_PROBE_REQUEST_SECONDS = 6.0
     MAX_CAPABILITY_RESPONSE_BYTES = 256 * 1024
+    MAX_PLAN_RESPONSE_BYTES = 2 * 1024 * 1024
     CAPABILITY_TOOL_NAME = "printops_capability_probe"
     CAPABILITY_TOKEN = "printops-probe-v1"
 
@@ -160,6 +163,48 @@ class OpenAICompatiblePlanner:
         self.base_url, self.api_key, self.model, self.timeout = safe_url, (api_key or "").strip(), (model or "").strip(), timeout
         self.last_error = config_error
         self.last_protocol = ""
+
+    def for_request(self) -> "OpenAICompatiblePlanner":
+        """Freeze config without repeating DNS; diagnostics belong to this run."""
+        planner = copy(self)
+        planner.last_error = ""
+        planner.last_protocol = ""
+        return planner
+
+    def _request_json(self, request, deadline: float, maximum: int) -> Any:
+        # Capture the opener before dispatch (also keeps injected test/local
+        # transports stable if a timed-out worker exits after its caller).
+        opener = urllib.request.urlopen
+
+        def read_response():
+            with opener(request, timeout=remaining(deadline)) as response:
+                if hasattr(response, "read1"):
+                    chunks, length = [], 0
+                    while True:
+                        budget = remaining(deadline)
+                        raw_socket = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                        if raw_socket is not None:
+                            raw_socket.settimeout(budget)
+                        chunk = response.read1(min(65536, maximum + 1 - length))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        length += len(chunk)
+                        if length > maximum:
+                            raise ValueError("model response is too large")
+                    raw = b"".join(chunks)
+                else:
+                    # Small injected response wrappers may expose read only.
+                    try:
+                        raw = response.read(maximum + 1)
+                    except TypeError:
+                        raw = response.read()
+                remaining(deadline)
+                if not isinstance(raw, (bytes, bytearray)) or len(raw) > maximum:
+                    raise ValueError("model response is too large")
+                return json.loads(bytes(raw).decode("utf-8"))
+
+        return bounded_io(read_response, deadline)
 
     @classmethod
     def from_env(cls) -> "OpenAICompatiblePlanner":
@@ -946,6 +991,11 @@ class OpenAICompatiblePlanner:
         """
         if not self.enabled:
             return None
+        try:
+            request_deadline = operation_deadline(self.timeout)
+        except DeadlineExceeded:
+            self.last_error, self.last_protocol = "请求总时限已到，模型结果未应用", "timeout"
+            return None
         allow_tools = _kwargs.get("allow_tools", True) is not False
         if context_budget is None:
             candidate_budget = _kwargs.get("max_context_bytes", _kwargs.get("context_bytes"))
@@ -1074,8 +1124,7 @@ class OpenAICompatiblePlanner:
             for attempt in range(self.MAX_ATTEMPTS):
                 retryable = False
                 try:
-                    with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                        result = json.loads(response.read().decode("utf-8"))
+                    result = self._request_json(request, request_deadline, self.MAX_PLAN_RESPONSE_BYTES)
                     native_plan = self._native_tool_plan(result) if variant_index == 0 and provider_tools else None
                     if native_plan is not None:
                         plan = self.validate_plan(native_plan, valid_tool_names)
@@ -1117,6 +1166,9 @@ class OpenAICompatiblePlanner:
                         self.last_error = "模型返回内容无法识别"
                         if variant_index == 0 and len(payload_variants) > 1:
                             break
+                except DeadlineExceeded:
+                    self.last_error, self.last_protocol = "请求总时限已到，模型结果未应用", "timeout"
+                    return None
                 except HTTPError as error:
                     self.last_error = f"模型接口返回 HTTP {error.code}"
                     self.last_protocol = "error"
@@ -1133,7 +1185,11 @@ class OpenAICompatiblePlanner:
                     if variant_index == 0 and len(payload_variants) > 1:
                         break
                 if retryable and attempt + 1 < self.MAX_ATTEMPTS:
-                    time.sleep(self.RETRY_BACKOFF_SECONDS * (attempt + 1))
+                    try:
+                        deadline_sleep(self.RETRY_BACKOFF_SECONDS * (attempt + 1), request_deadline)
+                    except DeadlineExceeded:
+                        self.last_error, self.last_protocol = "请求总时限已到，模型结果未应用", "timeout"
+                        return None
         return None
 
     @staticmethod
@@ -1165,8 +1221,7 @@ class OpenAICompatiblePlanner:
             configured_timeout = self.CAPABILITY_PROBE_REQUEST_SECONDS
         if not math.isfinite(configured_timeout) or configured_timeout <= 0:
             configured_timeout = self.CAPABILITY_PROBE_REQUEST_SECONDS
-        request_timeout = max(0.1, min(remaining, configured_timeout,
-                                       self.CAPABILITY_PROBE_REQUEST_SECONDS))
+        request_timeout = min(remaining, configured_timeout, self.CAPABILITY_PROBE_REQUEST_SECONDS)
         request = urllib.request.Request(
             f"{target_url}/chat/completions",
             data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -1175,16 +1230,8 @@ class OpenAICompatiblePlanner:
                      **({"Authorization": f"Bearer {target_key}"} if target_key else {})},
         )
         try:
-            with urllib.request.urlopen(request, timeout=request_timeout) as response:
-                try:
-                    raw = response.read(self.MAX_CAPABILITY_RESPONSE_BYTES + 1)
-                except TypeError:
-                    # Tiny test/local gateway response wrappers may implement
-                    # ``read()`` without the optional size argument.
-                    raw = response.read()
-            if not isinstance(raw, (bytes, bytearray)) or len(raw) > self.MAX_CAPABILITY_RESPONSE_BYTES:
-                return None, "模型接口响应过大"
-            decoded = json.loads(bytes(raw).decode("utf-8"))
+            request_deadline = operation_deadline(request_timeout, deadline)
+            decoded = self._request_json(request, request_deadline, self.MAX_CAPABILITY_RESPONSE_BYTES)
             if not isinstance(decoded, dict):
                 return None, "模型接口响应不是 JSON 对象"
             return decoded, ""
@@ -1406,8 +1453,8 @@ class OpenAICompatiblePlanner:
         )
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            request_deadline = operation_deadline(self.timeout)
+            result = self._request_json(request, request_deadline, self.MAX_PLAN_RESPONSE_BYTES)
             if not self._response_text(result).strip():
                 self.last_error = "模型接口返回空内容"
                 return {"ok": False, "message": self.last_error, "latencyMs": self._latency(started)}

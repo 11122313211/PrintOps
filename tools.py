@@ -13,9 +13,15 @@ from typing import Any, Callable
 
 from order_model import (DIMENSION_LABELS, LABELS, _multi_product_info, _number,
                          _parse_max_size, _parse_size_mm, imposition_hint, required_order_keys)
-from product_knowledge import (KNOWLEDGE_VERSION, PRICE_MODEL, PRICE_MODEL_VERSION,
+from product_knowledge import (KNOWLEDGE_VERSION, PRICE_MODEL,
                                parameter_state, profile_for)
-from supplier_adapters import PLATFORMS, SUPPLIER_PROFILE_VERSION, get_adapter
+from domain_vocab import normalize_print_term
+from unit_normalizer import normalize_dimension
+from pricing_engine import estimate_order
+from pricing_schema import ESTIMATE_OUTPUT_SCHEMA
+from supplier_adapters import PLATFORMS, SUPPLIER_PROFILE_VERSION, get_adapter, canonical_export_order
+from supplier_connectors import REGISTRY
+from supplier_contract import UnknownProviderError
 
 
 Tool = Callable[..., Any]
@@ -87,7 +93,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "estimate_price": {
         "input": _public_input({"itemIndex": _ITEM_INDEX_SCHEMA}),
-        "output": {"type": "object", "properties": {"range": {"type": "string"}, "missing": {"type": "array"}}},
+        "output": ESTIMATE_OUTPUT_SCHEMA,
     },
     "prepare_handoff": {
         "input": _public_input({"platformId": _PLATFORM_ID_SCHEMA, "itemIndex": _ITEM_INDEX_SCHEMA}),
@@ -111,7 +117,7 @@ def tool(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @tool
-def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
+def recommend_processes(order: dict[str, Any]) -> list[dict[str, Any]]:
     """根据用途、预算、交期和工艺约束生成可比较的候选方案。"""
     if _multi_product_info(order):
         # Keep the low-level tool contract as an array for existing callers;
@@ -121,9 +127,10 @@ def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
     profile = profile_for(product)
     premium = order.get("budget") == "优先视觉质感" or product in {"包装盒", "邀请函"}
     fast = order.get("budget") == "优先交期" or order.get("deadline") in {"今天", "明天", "后天", "一周内"}
-    known_paper = order.get("paper") or ""
+    known_paper = normalize_print_term("paper", order.get("paper") or "")
     printing = order.get("printing") or "四色印刷"
-    format_note = f"{order.get('size')}，{order.get('pages')}" if order.get("size") and order.get("pages") else order.get("size") or "按成品尺寸确认"
+    size = normalize_dimension(order.get("size"))
+    format_note = f"{size}，{order.get('pages')}" if size and order.get("pages") else size or "按成品尺寸确认"
     binding = order.get("binding") or profile.get("defaultBinding", "无需装订")
     profile_note = profile.get("recommendation", "先确认用途、尺寸、材料、颜色、数量和交期。")
     specs = order.get("productSpecs") or {}
@@ -145,20 +152,23 @@ def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
         finishes = ("无特殊表面工艺", "哑膜", "烫金 / 击凸")
     else:
         material = known_paper if known_paper not in {"", "待推荐"} else "157g 哑粉纸"
-        materials = (material, "200g 铜版纸", "特种纸" if premium else "高克重纸张")
+        materials = (material, "200g 铜版纸", "300g 铜版纸")
         finishes = ("无特殊工艺", "哑膜", "烫金 / 击凸")
-    quantity = _number(order.get("quantity", "")) or 500
+    materials = tuple(normalize_print_term("paper", material) for material in materials)
+    finishes = tuple(normalize_print_term("finishing", finish) for finish in finishes)
     lead_hint = PRICE_MODEL["leadHints"]
     plan_note = "示例参数估算，不构成报价；以供应商回复为准"
-    price_low, price_high = _reference_price(product, quantity, finishes[0], "合版")
-    balanced_low, balanced_high = _reference_price(product, quantity, finishes[1], "合版")
-    premium_low, premium_high = _reference_price(product, quantity, finishes[2], "专版")
+    estimates = []
+    for material, finish, mode in zip(materials, finishes, ("合版", "合版", "专版")):
+        candidate = deepcopy(order)
+        candidate.update({"paper": material, "finishing": finish, "binding": binding, "printMode": mode})
+        estimates.append(estimate_order(candidate))
 
     return [
         {"id": "economy", "title": "经济方案", "printMode": "合版",
          "description": f"合版拼单：{materials[0]} + {printing}，{format_note}，{finishes[0]}，{binding}。",
          "cost": "成本较低", "lead": "交期较快" if fast else "交期稳定", "score": "适合控预算",
-         "refPrice": f"¥{price_low} - ¥{price_high}", "refPriceBasis": plan_note,
+         "refPrice": estimates[0]["displayRange"], "estimate": estimates[0], "refPriceBasis": plan_note,
          "leadDetail": lead_hint["合版"],
          "reason": f"{profile_note}合版多单拼版，起印量低、单价低，适合预算敏感的项目。",
          "risk": "合版颜色与其他订单共用版面，存在轻微批次色差，且不能指定专色。",
@@ -166,7 +176,7 @@ def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
         {"id": "balanced", "title": "平衡方案", "printMode": "合版",
          "description": f"合版拼单：{materials[1]} + {printing}，{finishes[1]}，{binding}，兼顾效果与生产稳定性。",
          "cost": "成本中等", "lead": "交期稳定", "score": "综合推荐",
-         "refPrice": f"¥{balanced_low} - ¥{balanced_high}", "refPriceBasis": plan_note,
+         "refPrice": estimates[1]["displayRange"], "estimate": estimates[1], "refPriceBasis": plan_note,
          "leadDetail": lead_hint["合版"],
          "reason": f"{profile_note}在颜色表现、手感和成本之间取平衡，仍是合版产线的稳定配置。",
          "risk": "覆膜或复杂后道会增加少量加工时间和费用；颜色一致性要求高时考虑专版。",
@@ -174,7 +184,7 @@ def recommend_processes(order: dict[str, Any]) -> list[dict[str, str]]:
         {"id": "premium", "title": "质感方案", "printMode": "专版",
          "description": f"专版开机：{materials[2]} + {printing}，{finishes[2]}，{binding}，强化品牌表现。",
          "cost": "成本较高", "lead": "需要确认加急" if fast else "交期较长", "score": "视觉优先",
-         "refPrice": f"¥{premium_low} - ¥{premium_high}", "refPriceBasis": plan_note,
+         "refPrice": estimates[2]["displayRange"], "estimate": estimates[2], "refPriceBasis": plan_note,
          "leadDetail": lead_hint["专版"],
          "reason": f"{profile_note}专版单独制版，颜色可控、可上专色，适合品牌发布和需要触感记忆点的物料。",
          "risk": "专版版费与开机费较高、起印量更高；需要专色、打样、结构或后道工艺确认。",
@@ -392,8 +402,33 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
 def match_supplier_capability(order: dict[str, Any], platform_id: str | None = None) -> dict[str, Any]:
     """将标准订单与供应商能力档案逐字段匹配，返回支持、待确认和不支持项。"""
     selected_id = platform_id or order.get("platform") or "generic"
-    platform = PLATFORMS.get(selected_id, PLATFORMS["generic"])
+    try:
+        platform = REGISTRY.get(selected_id).metadata()
+    except UnknownProviderError:
+        return {"status": "invalid_arguments", "reason": "unknown_provider", "platformId": selected_id,
+                "supported": [], "needsReview": [], "unsupported": [], "requiresHumanConfirmation": True}
     profile = platform.get("supplierProfile", {})
+    provenance = {key: deepcopy(platform.get(key)) for key in
+                  ("mode", "connectionStatus", "verified", "source", "updatedAt", "expiresAt", "networkEnabled")}
+    verified = platform.get("verified") is True
+    if platform.get("expiresAt"):
+        from datetime import datetime, timezone
+        try:
+            verified = verified and datetime.fromisoformat(platform["expiresAt"]) > datetime.now(timezone.utc)
+        except (ValueError, TypeError):
+            verified = False
+    if not verified:
+        pending = [{"field": label, "message": f"{label}需供应商确认；当前只有本地字段模板"}
+                   for field, label in (("productType", "品类"), ("paper", "纸张/材料"),
+                                        ("finishing", "表面工艺"), ("size", "成品尺寸"), ("deadline", "交期"))
+                   if order.get(field)]
+        if not pending:
+            pending = [{"field": "生产能力", "message": "未接入经过验证的供应商生产数据"}]
+        return {"platformId": selected_id, "platform": platform["name"], "status": "review",
+                "confidence": 0, "supported": [], "needsReview": pending, "unsupported": [],
+                "profile": profile, **provenance, "verified": False,
+                "knowledgeVersion": KNOWLEDGE_VERSION, "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
+                "multiProduct": _multi_product_info(order), "requiresHumanConfirmation": True}
     supported: list[dict[str, Any]] = []
     needs_review: list[dict[str, Any]] = []
     unsupported: list[dict[str, Any]] = []
@@ -481,7 +516,7 @@ def match_supplier_capability(order: dict[str, Any], platform_id: str | None = N
     confidence = round(len(supported) / denominator * 100) if denominator else 0
     return {"platformId": selected_id, "platform": platform["name"], "status": status,
             "confidence": confidence, "supported": supported, "needsReview": needs_review,
-            "unsupported": unsupported, "profile": profile,
+            "unsupported": unsupported, "profile": profile, **provenance,
             "knowledgeVersion": KNOWLEDGE_VERSION,
             "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
             "multiProduct": multi_product,
@@ -492,7 +527,12 @@ def match_supplier_capability(order: dict[str, Any], platform_id: str | None = N
 def request_supplier_quote(order: dict[str, Any], platform_id: str | None = None) -> dict[str, Any]:
     """Prepare a supplier quote request without sending anything externally."""
     selected_id = platform_id or order.get("platform") or "generic"
-    platform = PLATFORMS.get(selected_id, PLATFORMS["generic"])
+    try:
+        connector = REGISTRY.get(selected_id)
+    except UnknownProviderError:
+        return {"status": "invalid_arguments", "reason": "unknown_provider", "platformId": selected_id,
+                "sent": False, "requiresHumanConfirmation": True}
+    platform = connector.metadata()
     capability = match_supplier_capability(order, selected_id)
     multi_product = capability.get("multiProduct") or _multi_product_info(order)
     if capability.get("unsupported") or multi_product:
@@ -510,9 +550,9 @@ def request_supplier_quote(order: dict[str, Any], platform_id: str | None = None
             "requiresHumanConfirmation": True,
             "message": message,
         }
-    adapter = get_adapter(selected_id)
     return {
-        **adapter.prepare_quote_request(order, capability),
+        **connector.create_quote_draft(order),
+        "capabilityStatus": capability.get("status", "review"),
         "knowledgeVersion": KNOWLEDGE_VERSION,
         "supplierProfileVersion": SUPPLIER_PROFILE_VERSION,
     }
@@ -522,8 +562,15 @@ def request_supplier_quote(order: dict[str, Any], platform_id: str | None = None
 def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
     """按目标平台生成标准化订单交接文本。"""
     platform_id = order.get("platform") or "generic"
-    platform = PLATFORMS.get(platform_id, PLATFORMS["generic"])
-    adapter = get_adapter(platform_id)
+    try:
+        connector = REGISTRY.get(platform_id)
+    except UnknownProviderError:
+        return {"status": "invalid_arguments", "reason": "unknown_provider", "platformId": platform_id,
+                "sent": False, "requiresHumanConfirmation": True}
+    platform = connector.metadata()
+    adapter_metadata = {"platformId": platform_id, "mode": platform["mode"],
+                        "connectionStatus": platform["connectionStatus"], "verified": platform["verified"]}
+    order = canonical_export_order(order)
     readiness = match_supplier_capability(order)
     multi_product = _multi_product_info(order)
     if readiness.get("unsupported"):
@@ -532,7 +579,7 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
             "status": "blocked",
             "reason": "supplier_unsupported",
             "platform": platform,
-            "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
+            "adapter": adapter_metadata,
             "mappedOrder": {},
             "text": ("目标平台存在明确不支持项，未生成交接单：" + "、".join(str(field) for field in fields)
                      + "。请切换平台或先人工确认生产能力。"),
@@ -548,7 +595,7 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
             "status": "blocked",
             "reason": "multi_product",
             "platform": platform,
-            "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
+            "adapter": adapter_metadata,
             "mappedOrder": {},
             "text": "订单包含多个产品项，需分别完成各项确认后再生成整体交接单。",
             "productProfile": parameter_state(order),
@@ -560,7 +607,7 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
     dimensions = order.get("dimensions") if isinstance(order.get("dimensions"), dict) else {}
     fields = [(key, LABELS[key]) for key in LABELS if key != "platform"
               and not (key == "size" and dimensions.get("packageSize") and not dimensions.get("finishedSize"))]
-    lines = [f"目标平台：{platform['name']}"] + [f"{label}：{order[key] or '未填写'}" for key, label in fields]
+    lines = [f"目标平台：{platform['name']}", "供应商状态：仅本地草稿，生产能力、价格和交期需确认"] + [f"{label}：{order.get(key) or '未填写'}" for key, label in fields]
     dimension_lines = [f"{DIMENSION_LABELS[key]}：{dimensions.get(key)}"
                        for key in DIMENSION_LABELS if dimensions.get(key)]
     if dimension_lines:
@@ -575,52 +622,37 @@ def prepare_handoff(order: dict[str, Any]) -> dict[str, Any]:
         lines.append("品类参数：")
         lines.extend(f"- {item['label']}：{item['value'] or '未填写'}" for item in profile["parameters"])
     text = "\n".join(lines)
-    return {"status": "ready", "platform": platform, "adapter": {"platformId": adapter.platform_id, "mode": adapter.mode},
-            "mappedOrder": adapter.map_order(order), "text": text, "productProfile": profile,
+    draft = connector.create_order_draft(order)
+    if draft.get("status") in {"unsupported", "blocked", "failed", "invalid_arguments"}:
+        return {**draft, "platform": platform, "adapter": adapter_metadata,
+                "mappedOrder": {}, "supplierReadiness": readiness,
+                "text": "当前连接器不能生成订单交接草稿。", "requiresHumanConfirmation": True}
+    return {"status": "ready", "platform": platform, "adapter": adapter_metadata,
+            "mappedOrder": draft.get("mappedOrder", {}), "text": text, "productProfile": profile,
             "supplierReadiness": readiness,
             "knowledgeVersion": KNOWLEDGE_VERSION,
             "requiresHumanConfirmation": True}
 
 
-def _reference_price(product: str | None, quantity: int, finishing: str,
-                     mode: str | None = None) -> tuple[int, int]:
-    """示例价格参数表的统一计算入口：品类基数 × 数量阶跃 × 工艺系数 × 印刷方式系数。
-
-    estimate_price 与 recommend_processes 共用，保证卡片参考价与估算工具同源。
-    """
-    base = PRICE_MODEL["categories"].get(product, PRICE_MODEL["defaultBase"])
-    tier = next((entry["factor"] for entry in PRICE_MODEL["quantityTiers"]
-                 if entry["upTo"] is None or quantity <= entry["upTo"]), 1.0)
-    finishing_factor = max(
-        (factor for term, factor in PRICE_MODEL["finishingFactors"].items() if term in (finishing or "")),
-        default=1.0,
-    )
-    mode_factor = PRICE_MODEL.get("modeFactors", {}).get(mode or "", 1.0)
-    total = max(base * tier * finishing_factor * mode_factor, PRICE_MODEL["minimumTotal"])
-    band = PRICE_MODEL["band"]
-    return round(total * band["low"]), round(total * band["high"])
+def _reference_price(order: dict[str, Any], mode: str | None = None) -> dict[str, Any]:
+    """Use the full order; quantity-only legacy estimates cannot infer missing cost drivers."""
+    candidate = deepcopy(order)
+    if mode:
+        candidate["printMode"] = mode
+    return estimate_order(candidate)
 
 
 @tool
 def estimate_price(order: dict[str, Any]) -> dict[str, Any]:
-    """按知识库示例价格参数表估算费用量级，不替代印刷厂正式报价。"""
+    """按有来源和有效期的成本参数逐项核算本地参考估算，不构成供应商报价。"""
     multi_product = _multi_product_info(order)
+    result = estimate_order(order)
+    result["knowledgeVersion"] = KNOWLEDGE_VERSION
     if multi_product:
-        return {"type": "estimate", "status": "blocked", "range": None, "missing": [],
-                "multiProduct": multi_product, "assumptions": "多个产品项不能合并估算；请拆分后分别估算。",
-                "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
-    missing = [LABELS[key] for key in ("productType", "quantity", "size", "printing") if not order.get(key)]
-    if missing:
-        return {"type": "estimate", "range": None, "missing": missing,
-                "assumptions": "至少需要印刷品、数量、尺寸和印刷颜色后才能估算。",
-                "knowledgeVersion": KNOWLEDGE_VERSION, "requiresHumanConfirmation": True}
-    quantity = _number(order.get("quantity", "")) or 500
-    low, high = _reference_price(order.get("productType"), quantity, str(order.get("finishing") or ""))
-    assumptions = (f"依据内置示例价格参数表（版本 {PRICE_MODEL_VERSION}）按品类基数、数量阶跃和工艺系数估算，"
-                   "不构成报价；实际以供应商回复为准，未含运输和打样。")
-    return {"type": "estimate", "range": f"¥{low} - ¥{high}",
-            "assumptions": assumptions, "knowledgeVersion": KNOWLEDGE_VERSION,
-            "pricingModelVersion": PRICE_MODEL_VERSION, "requiresHumanConfirmation": True}
+        result.update({"status": "blocked", "range": None, "displayRange": "请按产品项分别估算",
+                       "multiProduct": multi_product, "lineItems": [], "reason": "multi_product"})
+        result["assumptions"].append("多个产品项不能合并估算；请拆分后分别估算。")
+    return result
 
 
 @tool
@@ -628,6 +660,14 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     """校验订单字段完整性，输出阻塞项、风险和下一步建议。"""
     required_keys = required_order_keys(order)
     missing = [LABELS[key] for key in required_keys if not order.get(key)]
+    # A numeric dimension without a unit, or conflicting alternatives, is not
+    # production-ready even if its legacy display string is nonempty.
+    dimensional_values = {"size": order.get("size"), **(order.get("dimensions") or {})}
+    for key, value in dimensional_values.items():
+        if value and _parse_size_mm(str(value)) is None:
+            label = DIMENSION_LABELS.get(key, "成品尺寸") + "（需明确 mm 数值）"
+            if label not in missing:
+                missing.append(label)
     warnings = []
     suggestions = []
     risks = []
@@ -700,7 +740,6 @@ def _validate_order_items(order: dict[str, Any]) -> list[dict[str, Any]]:
     quote, or handoff actions are enabled.
     """
     items = order.get("items") if isinstance(order.get("items"), list) else []
-    shared_fields = ("purpose", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget")
     results: list[dict[str, Any]] = []
     for index, raw_item in enumerate(items):
         if not isinstance(raw_item, dict):
@@ -708,9 +747,6 @@ def _validate_order_items(order: dict[str, Any]) -> list[dict[str, Any]]:
         item = deepcopy(raw_item)
         item["items"] = []
         item["productTypes"] = []
-        for key in shared_fields:
-            if not item.get(key) and order.get(key):
-                item[key] = deepcopy(order[key])
         item_result = validate_order(item)
         ready = bool(item_result.get("ok")) and not item_result.get("productMissing")
         results.append({

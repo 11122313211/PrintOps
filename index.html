@@ -5,36 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20260905-7" />
+    <link rel="stylesheet" href="styles.css?v=20261016-compact-settings-1" />
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-lockup">
-          <div class="brand-mark" aria-hidden="true">PO</div>
-          <div>
-            <p class="eyebrow">PRINT OPERATIONS AGENT</p>
-            <h1>印刷订单智能体</h1>
-          </div>
-        </div>
-        <div class="topbar-actions">
-          <label class="platform-control">目标平台
-            <select id="platform-select" aria-label="选择目标印刷平台">
-              <option value="generic">通用印刷平台</option>
-            </select>
-          </label>
-          <span class="connection-status" id="agent-status"><span class="status-dot"></span>正在连接</span>
-          <button class="icon-button" id="theme-toggle" type="button" title="切换高对比模式">高对比</button>
-          <button class="icon-button" id="settings-button" type="button" title="配置模型接口">接口设置</button>
-          <button class="icon-button" id="reset-order" type="button" title="重置当前订单">重置</button>
-        </div>
-      </header>
-
       <main class="workspace" id="workspace">
-        <aside class="sidebar" aria-label="订单进度">
-          <div class="sidebar-heading">
-            <span>当前订单</span>
-            <span class="order-number" id="order-number">SESSION ----</span>
+        <aside class="sidebar" id="sidebar-panel" aria-label="订单进度">
+          <header class="sidebar-brand">
+            <div class="brand-lockup">
+              <div class="brand-mark" aria-hidden="true">PO</div>
+              <h1>印刷订单智能体</h1>
+            </div>
+          </header>
+          <div class="sidebar-content">
+          <div class="sidebar-heading current-order-heading">
+            <div class="current-order-heading-copy">
+              <span>当前订单</span>
+              <span class="order-number" id="order-number">SESSION ----</span>
+            </div>
+            <div class="current-order-heading-actions">
+              <button class="settings-launcher settings-launcher-compact" id="settings-button" type="button" aria-haspopup="dialog" aria-label="设置与能力" title="打开设置与能力">
+                <span class="settings-launcher-mark" aria-hidden="true">⚙</span>
+                <span class="sr-only">设置与能力</span>
+              </button>
+              <button class="secondary-action sidebar-new-order" id="reset-order" type="button" aria-label="新建订单" title="新建订单，当前订单保留在历史中">
+                <span aria-hidden="true">＋</span><span aria-hidden="true">新建订单</span>
+              </button>
+            </div>
           </div>
 
           <section class="progress-panel">
@@ -54,13 +51,13 @@
               </div>
               <div class="step" data-step="confirm">
                 <span class="step-index">03</span>
-                <div><strong>确认订单</strong><small>生成可执行草稿</small></div>
+                <div><strong>核对与交接</strong><small>确认规格与未决事项</small></div>
               </div>
             </div>
           </section>
 
           <section class="history-panel" aria-label="订单历史">
-            <div class="tool-panel-heading"><span>订单历史</span><span id="history-count">0 单</span></div>
+            <div class="tool-panel-heading history-heading"><span>订单历史</span><span id="history-count">0 单</span></div>
             <div class="history-list" id="history-list"></div>
           </section>
 
@@ -78,19 +75,7 @@
             <small id="memory-status">正在恢复会话记忆与工具状态。</small>
           </section>
 
-          <details class="catalog-panel side-fold" aria-label="产品索引">
-            <summary class="tool-panel-heading"><span>产品索引</span><span>官网分类</span></summary>
-            <div class="catalog-list" id="catalog-list"></div>
-          </details>
-
-          <details class="tool-panel side-fold" aria-label="Agent 工具箱">
-            <summary class="tool-panel-heading"><span>工具箱</span><span id="tool-count">0 项</span></summary>
-            <div class="tool-list" id="tool-list"></div>
-            <details class="run-panel" id="run-panel">
-              <summary><span>本次运行记录</span><small id="run-id">等待运行</small></summary>
-              <div class="run-trace-list" id="run-trace-list"></div>
-            </details>
-          </details>
+          </div>
         </aside>
 
         <div class="pane-splitter" data-pane="sidebar" role="separator" tabindex="0" aria-orientation="vertical"
@@ -98,23 +83,43 @@
 
         <section class="chat-section" aria-label="智能订单对话">
           <div class="section-title">
-            <div>
-              <h2>把想法说出来</h2>
-            </div>
-            <div class="section-title-actions">
-              <span class="section-note" id="agent-trace">等待输入</span>
-              <button class="panel-toggle" id="sidebar-toggle" type="button" aria-label="收起导航栏" title="收起导航栏">
+            <div class="section-title-main">
+              <button class="panel-toggle" id="sidebar-toggle" type="button" aria-controls="sidebar-panel" aria-label="收起导航栏" title="收起导航栏">
                 <span class="panel-toggle-glyph" aria-hidden="true"></span>
                 <span class="panel-toggle-label">导航</span>
               </button>
-              <button class="panel-toggle" id="order-toggle" type="button" aria-label="收起订单栏" title="收起订单栏">
+              <h2 id="workspace-title">把想法说出来</h2>
+            </div>
+            <div class="section-title-actions">
+              <span class="section-note" id="agent-trace">等待输入</span>
+              <button class="panel-toggle" id="order-toggle" type="button" aria-controls="order-panel" aria-label="收起订单栏" title="收起订单栏">
                 <span class="panel-toggle-glyph glyph-right" aria-hidden="true"></span>
                 <span class="panel-toggle-label">订单</span>
               </button>
             </div>
           </div>
 
-          <div class="chat-feed" id="chat-feed" aria-live="polite"></div>
+          <div class="journey-meta"><strong id="active-item-context">当前订单</strong><span id="save-status" role="status">正在读取保存状态</span></div>
+          <section id="operation-error" class="operation-error" role="alert" hidden>
+            <strong id="operation-error-title"></strong><p id="operation-error-message"></p>
+            <div id="operation-error-diff"></div><div class="recovery-actions" id="operation-error-actions"></div>
+            <details><summary>技术详情</summary><code id="operation-error-detail"></code></details>
+          </section>
+          <div id="change-notice" class="change-notice" role="status" hidden></div>
+          <div id="phase-intake" class="journey-pane intake-pane">
+          <details class="starter-panel" id="starter-panel" aria-label="开始整理印刷需求">
+            <summary>查看输入示例</summary>
+            <div class="starter-content">
+            <p class="eyebrow">从用途开始</p><h3>先说你要用它做什么</h3>
+            <p>数量、用途、希望什么时候拿到，都可以先说。纸张和工艺可以一起选。</p>
+            <div class="starter-options">
+              <button type="button" data-example="门店开业要发给路人，想做500张宣传单，下周内要用。">门店宣传单 <small>把活动信息发出去</small></button>
+              <button type="button" data-example="参加展会想做500张名片，希望简单正式，下周要用。">展会名片 <small>让客户记住你</small></button>
+              <button type="button" data-example="给客户介绍产品，想做200本宣传册，希望方便翻阅，下个月用。">产品宣传册 <small>介绍内容与服务</small></button>
+            </div><small>点选后填入示例文字，你可以修改后发送；费用使用本地示例参数。</small>
+            </div>
+          </details>
+          <div class="chat-feed" id="chat-feed" aria-label="订单对话记录"></div>
 
           <div class="quick-replies" id="quick-replies" aria-label="快捷回答"></div>
 
@@ -124,7 +129,7 @@
               <div class="bubble markdown-body" id="composer-preview-body"></div>
             </div>
             <label class="sr-only" for="message-input">输入印刷需求</label>
-            <textarea id="message-input" rows="2" placeholder="例如：我要做 500 份 A4 宣传册，下周一要用……"></textarea>
+            <textarea id="message-input" rows="2" placeholder="例如：门店开业发给路人，想印 500 张，下周要用……"></textarea>
             <div class="composer-footer">
               <div class="composer-tools">
                 <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
@@ -138,11 +143,27 @@
               </button>
             </div>
           </form>
+          </div>
+          <section id="phase-compare" class="journey-pane" aria-label="比较工艺方案" hidden>
+            <button class="tool-button" type="button" data-view="intake">← 返回对话</button>
+            <div class="phase-intro"><h3>按用途选择合适的方案</h3><p>对比同一产品与数量。差异来自材料、工艺和印刷方式；费用均为示例估算。</p></div>
+            <p id="compare-empty">先补充必要参数，再生成方案。未标定的费用会明确列出。</p>
+            <button id="request-options" class="secondary-action" type="button">生成本项方案</button>
+          </section>
+          <section id="phase-review" class="journey-pane" aria-label="核对与交接" hidden>
+            <button class="tool-button" type="button" data-view="intake">← 返回对话</button>
+            <div class="phase-intro"><h3>核对每个产品，再生成交接单</h3><p>检查数量、尺寸、材料与文件归属。当前只准备本地交接资料，尚未发送供应商。</p></div>
+            <details id="review-checklist-section" open><summary>查看与修改生产参数</summary><div id="review-checklist"></div></details>
+            <article id="handoff-preview" class="handoff-document" aria-label="交接单预览"></article>
+          </section>
+          <div class="task-bar" aria-label="当前任务" hidden><div><strong id="next-task-title">说说你的印刷用途</strong><small id="next-task-description">从数量、用途或交期开始。</small></div><button id="next-task-action" type="button" class="primary-action">开始填写</button></div>
+          <div class="sr-only" id="journey-announcement" role="status" aria-live="polite"></div>
         </section>
 
         <div class="pane-splitter" data-pane="order" role="separator" tabindex="0" aria-orientation="vertical"
              aria-label="调整订单栏宽度" title="拖动调整宽度，双击重置"></div>
-        <aside class="order-section" aria-label="订单草稿">
+        <aside class="order-section" id="order-panel" aria-label="订单草稿">
+          <button id="mobile-back" class="secondary-action" type="button">← 返回当前任务</button>
           <div class="section-title order-title">
             <div>
               <p class="eyebrow">ORDER DRAFT</p>
@@ -154,6 +175,11 @@
                 <span class="expand-all-glyph" aria-hidden="true"></span>
               </button>
             </div>
+          </div>
+
+          <div class="order-document-links" aria-label="订单资料">
+            <button class="tool-button" type="button" data-view="compare">查看工艺方案</button>
+            <button class="tool-button" type="button" data-view="review">查看交接资料</button>
           </div>
 
           <button class="drop-zone" id="drop-zone" type="button" aria-label="拖拽或点击上传 PDF 文件">
@@ -218,11 +244,22 @@
 
           <div class="risk-panel" id="risk-panel" hidden>
             <div class="risk-heading">
-              <h3>风险与缺失</h3>
+              <h3>待处理清单</h3>
               <span class="risk-count" id="risk-count">0 项</span>
             </div>
             <div class="risk-list" id="risk-list"></div>
           </div>
+
+          <section class="provider-status" aria-label="供应商连接状态">
+            <h3>供应商接口</h3>
+            <label class="platform-control">目标平台
+              <select id="platform-select" aria-label="选择目标印刷平台">
+                <option value="generic">通用印刷平台</option>
+              </select>
+            </label>
+            <p id="provider-status">未配置 · 仅生成本地草稿</p>
+          </section>
+          <section class="estimate-panel" id="estimate-panel" aria-live="polite" hidden></section>
 
           <div class="recommendations" id="recommendations" hidden>
             <div class="recommendation-heading">
@@ -265,6 +302,7 @@
               <button class="export-option" type="button" data-format="json">JSON</button>
               <button class="export-option" type="button" data-format="csv">CSV</button>
               <button class="export-option" type="button" data-format="markdown">Markdown</button>
+              <button class="export-option" type="button" data-format="print">打印 / PDF</button>
             </div>
           </div>
         </aside>
@@ -272,11 +310,12 @@
     </div>
 
     <div class="workspace-backdrop" id="workspace-backdrop" hidden></div>
+    <div class="history-context-menu" id="history-context-menu" role="menu" aria-label="订单历史操作" hidden></div>
 
     <dialog class="confirm-dialog" id="confirm-reset-dialog" aria-labelledby="confirm-reset-title">
       <form class="confirm-card" method="dialog">
-        <h2 id="confirm-reset-title">确认重置当前订单？</h2>
-        <p>对话与草稿将清空，历史记录保留。</p>
+        <h2 id="confirm-reset-title">开始一份新订单？</h2>
+        <p>当前订单及对话保留在历史中，可以随时继续。</p>
         <div class="confirm-actions">
           <button class="secondary-action" id="confirm-reset-cancel" type="submit" value="cancel">取消</button>
           <button class="primary-action" id="confirm-reset-ok" type="submit" value="confirm">确认重置</button>
@@ -288,56 +327,87 @@
       <form class="settings-card" id="settings-form">
         <div class="settings-heading">
           <div>
-            <h2 id="settings-title">接口设置</h2>
+            <p class="eyebrow">WORKSPACE SETTINGS</p>
+            <h2 id="settings-title">设置与能力</h2>
+            <p>把低频配置集中到这里，保持订单工作区和对话区清爽。</p>
           </div>
-          <button class="settings-close" id="settings-cancel" type="button" aria-label="关闭接口设置" title="关闭">×</button>
+          <button class="settings-close" id="settings-cancel" type="button" aria-label="关闭设置与能力" title="关闭">×</button>
         </div>
-        <p class="settings-state" id="settings-state">当前使用规则模式</p>
-        <dl class="settings-capabilities" id="settings-capabilities" aria-label="模型能力检测结果" hidden>
-          <div>
-            <dt>Agent 工具链</dt>
-            <dd id="capability-agent">未检测</dd>
+        <div class="settings-layout">
+          <nav class="settings-nav" id="settings-nav" aria-label="设置分类" role="tablist" aria-orientation="vertical">
+            <button id="settings-view-overview" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-overview" data-settings-view="overview"><strong>总览</strong><small>在线状态与集成功能</small></button>
+            <button id="settings-view-appearance" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" data-settings-view="appearance"><strong>界面显示</strong><small>对比度与显示偏好</small></button>
+            <button id="settings-view-interface" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-interface" data-settings-view="interface"><strong>接口设置</strong><small>模型连接与能力检测</small></button>
+            <button id="settings-view-history" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-history" data-settings-view="history"><strong>历史归档</strong><small>查看已归档会话</small></button>
+            <button id="settings-view-products" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-products" data-settings-view="products"><strong>产品索引</strong><small>常用品类入口</small></button>
+            <button id="settings-view-tools" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-tools" data-settings-view="tools"><strong>工具箱</strong><small>工具与本次运行</small></button>
+          </nav>
+          <div class="settings-panels">
+            <section class="settings-panel" id="settings-panel-overview" data-settings-panel="overview" role="tabpanel" aria-labelledby="settings-view-overview" tabindex="0">
+              <div class="settings-panel-heading"><div><p class="eyebrow">SYSTEM STATUS</p><h3>当前工作台</h3></div><span class="settings-badge">本机模式</span></div>
+              <div class="settings-status-grid">
+                <div class="settings-status-card"><span>智能体状态</span><strong class="connection-status" id="agent-status" role="status"><span class="status-dot"></span>正在连接</strong></div>
+                <div class="settings-status-card"><span>订单存储</span><strong id="storage-status">正在读取</strong></div>
+                <div class="settings-status-card"><span>可用工具</span><strong id="settings-tool-summary">0 项</strong></div>
+                <div class="settings-status-card"><span>产品分类</span><strong id="settings-product-summary">正在读取</strong></div>
+              </div>
+              <div class="integration-heading"><h3>已集成功能</h3><span>当前工作区可用</span></div>
+              <div class="integration-grid" aria-label="已集成的工作区能力">
+                <article><strong>订单对话整理</strong><small>从自然语言识别品类、数量、尺寸、材料、工艺与交期。</small></article>
+                <article><strong>本机订单记忆</strong><small>保存草稿、历史、版本和审计信息，支持继续编辑。</small></article>
+                <article><strong>文件预检</strong><small>上传 PDF 后检查页数、尺寸、字体、色彩与出血信息。</small></article>
+                <article><strong>示例计价与接口</strong><small>提供可解释的本地估算，并保留通用供应商接入位置。</small></article>
+                <article><strong>交接资料导出</strong><small>支持 JSON、CSV、Markdown 和打印 / PDF 输出。</small></article>
+                <article><strong>历史备份与归档</strong><small>低频订单操作从卡片中收起，通过更多菜单调用。</small></article>
+              </div>
+            </section>
+            <section class="settings-panel" id="settings-panel-appearance" data-settings-panel="appearance" role="tabpanel" aria-labelledby="settings-view-appearance" tabindex="0" hidden>
+              <div class="settings-panel-heading"><div><p class="eyebrow">APPEARANCE</p><h3>界面显示</h3></div></div>
+              <div class="appearance-setting"><div><strong>高对比模式</strong><small>提高文字、边框和操作控件的辨识度。</small></div><button class="icon-button" id="theme-toggle" type="button" title="切换高对比模式" aria-pressed="false">高对比</button></div>
+            </section>
+            <section class="settings-panel" id="settings-panel-interface" data-settings-panel="interface" role="tabpanel" aria-labelledby="settings-view-interface" tabindex="0" hidden>
+              <div class="settings-panel-heading"><div><p class="eyebrow">MODEL CONNECTION</p><h3>接口设置</h3></div></div>
+              <p class="settings-state" id="settings-state">当前使用规则模式</p>
+              <dl class="settings-capabilities" id="settings-capabilities" aria-label="模型能力检测结果" hidden>
+                <div><dt>Agent 工具链</dt><dd id="capability-agent">未检测</dd></div>
+                <div><dt>JSON 规划</dt><dd id="capability-json">未检测</dd></div>
+                <div><dt>原生工具</dt><dd id="capability-native">未检测</dd></div>
+                <div><dt>基础聊天</dt><dd id="capability-chat">未检测</dd></div>
+              </dl>
+              <div class="settings-fields">
+                <label class="settings-field" for="settings-url"><span>API URL</span><input id="settings-url" type="url" inputmode="url" autocomplete="url" placeholder="https://your-endpoint.example/v1" /></label>
+                <label class="settings-field" for="settings-model"><span>模型名称</span><input id="settings-model" type="text" autocomplete="off" placeholder="例如：your-model-name" /></label>
+                <label class="settings-field" for="settings-key"><span>API Key <small>可选</small></span><input id="settings-key" type="password" autocomplete="new-password" placeholder="留空保持当前 Key" /></label>
+              </div>
+              <p class="settings-note" id="settings-note">Key 仅由本机服务保存，不会显示在页面或接口响应中。URL 与模型留空即可继续使用规则模式。</p>
+              <div class="settings-actions"><button class="secondary-action settings-clear" id="settings-clear" type="button">清空配置</button><span class="settings-action-spacer"></span><button class="secondary-action" id="settings-test" type="button">测试连接</button><button class="secondary-action" id="settings-cancel-secondary" type="button">取消</button><button class="secondary-action settings-save" id="settings-save" type="submit">保存设置</button></div>
+            </section>
+            <section class="settings-panel" id="settings-panel-history" data-settings-panel="history" role="tabpanel" aria-labelledby="settings-view-history" tabindex="0" hidden>
+              <div class="settings-panel-heading"><div><p class="eyebrow">HISTORY & ARCHIVE</p><h3>历史归档</h3></div></div>
+              <label class="settings-history-option" for="history-include-archived">
+                <input type="checkbox" id="history-include-archived">
+                <span><strong>显示已归档订单</strong><small>归档订单只读，可查看、导出或永久删除；取消后从当前历史列表隐藏。</small></span>
+              </label>
+            </section>
+            <section class="settings-panel" id="settings-panel-products" data-settings-panel="products" role="tabpanel" aria-labelledby="settings-view-products" tabindex="0" hidden>
+              <div class="settings-panel-heading"><div><p class="eyebrow">PRODUCT CATALOG</p><h3>产品索引</h3></div><span class="settings-count" id="product-count">官网分类</span></div>
+              <p class="settings-panel-note">从常用品类开始一条新需求，系统会把用途、规格和工艺继续补齐。</p>
+              <details class="catalog-panel side-fold" aria-label="产品索引"><summary class="tool-panel-heading"><span>官网分类</span><span id="catalog-count">--</span></summary><div class="catalog-list" id="catalog-list"></div></details>
+            </section>
+            <section class="settings-panel" id="settings-panel-tools" data-settings-panel="tools" role="tabpanel" aria-labelledby="settings-view-tools" tabindex="0" hidden>
+              <div class="settings-panel-heading"><div><p class="eyebrow">AGENT TOOLBOX</p><h3>工具箱</h3></div><span class="settings-count" id="tool-count">0 项</span></div>
+              <p class="settings-panel-note">这里展示当前智能体可以调用的能力；工具调用记录会按本次运行保留。</p>
+              <details class="tool-panel side-fold" aria-label="Agent 工具箱"><summary class="tool-panel-heading"><span>可调用工具</span><span id="tool-count-label">0 项</span></summary><div class="tool-list" id="tool-list"></div><details class="run-panel" id="run-panel"><summary><span>本次运行记录</span><small id="run-id">等待运行</small></summary><div class="run-trace-list" id="run-trace-list"></div></details></details>
+            </section>
           </div>
-          <div>
-            <dt>JSON 规划</dt>
-            <dd id="capability-json">未检测</dd>
-          </div>
-          <div>
-            <dt>原生工具</dt>
-            <dd id="capability-native">未检测</dd>
-          </div>
-          <div>
-            <dt>基础聊天</dt>
-            <dd id="capability-chat">未检测</dd>
-          </div>
-        </dl>
-        <div class="settings-fields">
-          <label class="settings-field" for="settings-url">
-            <span>API URL</span>
-            <input id="settings-url" type="url" inputmode="url" autocomplete="url" placeholder="https://your-endpoint.example/v1" />
-          </label>
-          <label class="settings-field" for="settings-model">
-            <span>模型名称</span>
-            <input id="settings-model" type="text" autocomplete="off" placeholder="例如：your-model-name" />
-          </label>
-          <label class="settings-field" for="settings-key">
-            <span>API Key <small>可选</small></span>
-            <input id="settings-key" type="password" autocomplete="new-password" placeholder="留空保持当前 Key" />
-          </label>
-        </div>
-        <p class="settings-note" id="settings-note">Key 仅由本机服务保存，不会显示在页面或接口响应中。URL 与模型留空即可继续使用规则模式。</p>
-        <div class="settings-actions">
-          <button class="secondary-action settings-clear" id="settings-clear" type="button">清空配置</button>
-          <span class="settings-action-spacer"></span>
-          <button class="secondary-action" id="settings-test" type="button">测试连接</button>
-          <button class="secondary-action" id="settings-cancel-secondary" type="button">取消</button>
-          <button class="secondary-action settings-save" id="settings-save" type="submit">保存设置</button>
         </div>
       </form>
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
     <script src="markdown.js?v=20260918-1"></script>
-    <script src="app.js?v=20260918-1"></script>
+    <script src="workbench.js?v=20261016-compact-evidence-1"></script>
+    <script src="journey.js?v=20261016-chat-only-1"></script>
+    <script src="app.js?v=20261016-compact-settings-2"></script>
   </body>
 </html>

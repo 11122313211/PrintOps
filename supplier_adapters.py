@@ -1,60 +1,135 @@
-"""Provider-neutral supplier adapter contracts.
+"""Compatibility field adapters for the provider-neutral connector registry.
 
-Adapters only map the standard order and prepare an explicit request payload.
-They do not perform network writes; a real provider integration can replace an
-adapter without changing the Agent workflow.
+Bundled provider names are export presets, not authorized supplier integrations.
+All dimensional fields use the shared unit normalizer before leaving the order
+boundary. No adapter performs a network operation.
 """
-
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Mapping
+from uuid import uuid4
+
+from supplier_contract import CONTRACT_VERSION, UnknownProviderError
+
+SUPPLIER_PROFILE_VERSION = "2026.10.15"
+
+
+def invalid_export_dimensions(order: Mapping[str, Any]) -> list[str]:
+    """Reject ambiguous physical units before a draft is called exportable."""
+    from unit_normalizer import dimension_values
+    values = {"size": order.get("size")}
+    for key, value in (order.get("dimensions") or {}).items():
+        values[f"dimensions.{key}"] = value
+    specs = order.get("productSpecs") or {}
+    for key in ("boxSize", "boxSizeInner", "boxSizeOuter", "bagSize", "finishedSize", "expandedSize",
+                "dieCutSize", "packageSize", "packageInnerSize", "packageOuterSize"):
+        values[f"productSpecs.{key}"] = specs.get(key)
+    for key, value in (order.get("measurements") or {}).items():
+        if isinstance(value, dict):
+            axes = [value[axis] for axis in ("width", "height", "depth") if value.get(axis) is not None]
+            values[f"measurements.{key}"] = "×".join(str(axis) for axis in axes) + " " + str(value.get("unit") or "")
+    invalid = [key for key, value in values.items() if value and dimension_values(value) is None]
+    for index, item in enumerate(order.get("items") or []):
+        if isinstance(item, dict):
+            invalid.extend(f"items.{item.get('itemId') or index}.{key}" for key in invalid_export_dimensions(item))
+    return invalid
+
+
+def canonical_export_order(order: Mapping[str, Any]) -> dict[str, Any]:
+    from unit_normalizer import normalize_dimension, normalize_length
+    from measurement_model import parse_measurement, SEMANTICS
+
+    result = deepcopy(dict(order))
+    if result.get("size"):
+        result["size"] = normalize_dimension(result["size"])
+    dimensions = result.get("dimensions")
+    if isinstance(dimensions, dict):
+        result["dimensions"] = {key: normalize_dimension(value) if value else value
+                                for key, value in dimensions.items()}
+    specs = result.get("productSpecs")
+    if isinstance(specs, dict):
+        dimension_keys = ("boxSize", "boxSizeInner", "boxSizeOuter", "bagSize", "finishedSize",
+                          "expandedSize", "dieCutSize", "packageSize", "packageInnerSize", "packageOuterSize")
+        for key, value in specs.items():
+            if isinstance(value, str) and key not in dimension_keys:
+                specs[key] = normalize_length(value)
+        for key in dimension_keys:
+            if specs.get(key):
+                specs[key] = normalize_dimension(specs[key])
+    # Regenerate structured measurements from the normalized fields, instead of
+    # trusting a client-supplied unit label over incompatible numeric values.
+    measurements: dict[str, Any] = {}
+    for key, value in (result.get("dimensions") or {}).items():
+        if value:
+            parsed = parse_measurement(value, SEMANTICS.get(key, key))
+            if parsed:
+                measurements[key] = parsed
+    if result.get("size") and not measurements.get("finishedSize"):
+        parsed = parse_measurement(result["size"], "finished")
+        if parsed:
+            measurements["finishedSize"] = parsed
+    # Structured-only orders are normalized by the same shared parser. Never
+    # silently relabel numeric cm values as mm or lose the supplied dimension.
+    for key, value in (result.get("measurements") or {}).items():
+        if key not in measurements and isinstance(value, dict):
+            axes = [value[axis] for axis in ("width", "height", "depth") if value.get(axis) is not None]
+            text = "×".join(str(axis) for axis in axes) + " " + str(value.get("unit") or "")
+            parsed = parse_measurement(text, SEMANTICS.get(key, key))
+            if parsed:
+                measurements[key] = parsed
+    if measurements:
+        result["measurements"] = measurements
+    else:
+        result.pop("measurements", None)
+    if isinstance(result.get("items"), list):
+        result["items"] = [canonical_export_order(item) for item in result["items"] if isinstance(item, dict)]
+    result["unitSystem"] = "mm"
+    return result
 
 
 @dataclass(frozen=True)
 class SupplierAdapter:
     platform_id: str
     name: str
-    mode: str = "export"
-    # Two levels: "*" holds the common mapping and an optional per-productType
-    # overlay renames category-specific fields for a real provider.
+    mode: str = "export_only"
     field_map: Mapping[str, Any] = field(default_factory=dict)
 
     def map_order(self, order: Mapping[str, Any]) -> dict[str, Any]:
-        """Map standard order fields to provider field names, omitting blanks.
-
-        A ``productSpecs.<key>`` source reads one category parameter out of
-        the nested spec object so a provider can give it a dedicated field.
-        """
-        product_type = str(order.get("productType") or "")
-        overlay = self.field_map.get(product_type) if product_type else None
+        canonical = canonical_export_order(order)
         merged = dict(self.field_map.get("*") or {})
+        overlay = self.field_map.get(str(canonical.get("productType") or ""))
         if isinstance(overlay, Mapping):
             merged.update(overlay)
-        specs = order.get("productSpecs") if isinstance(order.get("productSpecs"), Mapping) else {}
         mapped: dict[str, Any] = {}
         for source, target in merged.items():
-            if source.startswith("productSpecs."):
-                value = specs.get(source.split(".", 1)[1])
-            else:
-                value = order.get(source)
+            value: Any = canonical
+            for part in source.split("."):
+                value = value.get(part) if isinstance(value, Mapping) else None
             if value not in (None, "", {}, []):
-                mapped[target] = value
+                mapped[target] = deepcopy(value)
         return mapped
 
     def prepare_quote_request(self, order: Mapping[str, Any], capability: Mapping[str, Any]) -> dict[str, Any]:
-        """Prepare a manual-confirmation request; never call a provider."""
+        # Compatibility callers still get an unsent, reviewable local draft.
+        invalid = invalid_export_dimensions(order)
+        if invalid:
+            return {"status": "blocked", "reason": "invalid_measurement", "invalidFields": invalid,
+                    "providerId": self.platform_id, "sent": False, "requiresHumanConfirmation": True}
+        metadata = platform_metadata(self.platform_id)
         return {
-            "requestId": f"quote-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-            "status": "awaiting_human_confirmation",
-            "platformId": self.platform_id,
-            "platform": self.name,
-            "adapterMode": self.mode,
-            "mappedOrder": self.map_order(order),
+            "requestId": f"quote-{uuid4().hex}",
+            "status": "awaiting_human_confirmation", "providerId": self.platform_id,
+            "platformId": self.platform_id, "platform": self.name,
+            "adapterMode": self.mode, "mode": self.mode,
+            "mappedOrder": self.map_order(order), "unitSystem": "mm",
             "capabilityStatus": capability.get("status", "review"),
+            "connectionStatus": metadata["connectionStatus"],
+            "verified": False, "networkEnabled": False, "sent": False,
+            "source": metadata["source"], "updatedAt": None, "expiresAt": None,
             "requiresHumanConfirmation": True,
-            "message": "已准备询价请求，尚未向供应商发送；确认后再由对应平台适配器提交。",
+            "message": "已生成本地询价草稿，尚未发送。供应商生产能力、价格和交期需另行确认。",
         }
 
 
@@ -63,40 +138,59 @@ DEFAULT_FIELD_MAP = {
     "quantityUnit": "quantityUnit", "size": "size", "pages": "pages", "orientation": "orientation",
     "paper": "paper", "printing": "printing", "finishing": "finishing", "binding": "binding",
     "deadline": "deadline", "budget": "budget", "productSpecs": "productSpecs",
+    "dimensions": "dimensions", "measurements": "measurements", "unitSystem": "unitSystem",
+    "items": "items",
 }
 
-# Example per-category overlays.  They document the structure a real platform
-# integration is expected to fill in: category parameters live inside
-# productSpecs until a live adapter lifts them into dedicated provider fields.
+# Unverified local mapping examples, NOT Shengda's API field specification.
 SHENGDA_FIELD_MAP = {
     "*": DEFAULT_FIELD_MAP,
     "名片": {"productSpecs.cardStock": "material"},
     "包装盒": {"productSpecs.boxSize": "boxDimension", "productSpecs.boxStructure": "boxStyle"},
 }
-
 ADAPTERS: dict[str, SupplierAdapter] = {
-    "generic": SupplierAdapter("generic", "通用印刷平台", "export", {"*": DEFAULT_FIELD_MAP}),
-    "shengda": SupplierAdapter("shengda", "盛大印刷", "manual", SHENGDA_FIELD_MAP),
-    "platform_a": SupplierAdapter("platform_a", "平台 A", "adapter", {"*": DEFAULT_FIELD_MAP}),
-    "platform_b": SupplierAdapter("platform_b", "平台 B", "adapter", {"*": DEFAULT_FIELD_MAP}),
-    "supplier": SupplierAdapter("supplier", "自定义供应商", "adapter", {"*": DEFAULT_FIELD_MAP}),
+    "generic": SupplierAdapter("generic", "通用印刷平台", field_map={"*": DEFAULT_FIELD_MAP}),
+    "shengda": SupplierAdapter("shengda", "盛大印刷", field_map=SHENGDA_FIELD_MAP),
+    "platform_a": SupplierAdapter("platform_a", "平台 A", field_map={"*": DEFAULT_FIELD_MAP}),
+    "platform_b": SupplierAdapter("platform_b", "平台 B", field_map={"*": DEFAULT_FIELD_MAP}),
+    "supplier": SupplierAdapter("supplier", "自定义供应商", field_map={"*": DEFAULT_FIELD_MAP}),
 }
 
 
 def get_adapter(platform_id: str | None) -> SupplierAdapter:
-    return ADAPTERS.get(platform_id or "generic", ADAPTERS["generic"])
+    selected = platform_id or "generic"
+    if selected not in ADAPTERS:
+        raise UnknownProviderError(f"Unknown supplier provider: {selected}")
+    return ADAPTERS[selected]
 
 
-PLATFORMS = {
-    "generic": {"name": "通用印刷平台", "mode": "export", "capabilities": ["标准订单导出"],
-                "supplierProfile": {"categories": ["全品类"], "maxSize": "按供应商确认", "papers": ["按供应商确认"], "finishing": ["按供应商确认"], "leadTime": "按供应商确认"}},
-    "shengda": {"name": "盛大印刷", "mode": "manual", "capabilities": ["订单草稿", "人工询价"],
-                "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册", "标签", "包装盒"], "maxSize": "1200×900mm", "papers": ["铜版纸", "哑粉纸", "白卡纸", "牛皮纸"], "finishing": ["覆膜", "哑膜", "亮膜", "烫金", "局部UV"], "leadTime": "1-5 天"}},
-    "platform_a": {"name": "平台 A", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
-                   "supplierProfile": {"categories": ["名片", "单页", "折页", "宣传册", "画册"], "maxSize": "A3+", "papers": ["铜版纸", "哑粉纸"], "finishing": ["覆膜", "哑膜", "亮膜"], "leadTime": "2-6 天"}},
-    "platform_b": {"name": "平台 B", "mode": "adapter", "capabilities": ["字段映射", "订单草稿"],
-                   "supplierProfile": {"categories": ["名片", "标签", "手提袋", "包装盒"], "maxSize": "900×600mm", "papers": ["白卡纸", "牛皮纸", "不干胶"], "finishing": ["烫金", "击凸", "局部UV"], "leadTime": "3-7 天"}},
-    "supplier": {"name": "自定义供应商", "mode": "adapter", "capabilities": ["字段映射"],
-                 "supplierProfile": {"categories": ["待补充"], "maxSize": "待补充", "papers": ["待补充"], "finishing": ["待补充"], "leadTime": "待补充"}},
-}
-SUPPLIER_PROFILE_VERSION = "2026.09.04"
+def platform_metadata(platform_id: str) -> dict[str, Any]:
+    adapter = get_adapter(platform_id)
+    return {
+        "providerId": platform_id, "name": adapter.name, "displayName": adapter.name,
+        "mode": "export_only", "connectionStatus": "local" if platform_id == "generic" else "unconfigured",
+        "contractVersion": CONTRACT_VERSION, "unitSystem": "mm", "authType": "none",
+        "capabilities": ["quote_draft", "order_draft"], "verified": False,
+        "networkEnabled": False, "requiresHumanConfirmation": True,
+        "source": {"kind": "local_export_template", "description": "本地字段映射模板；未验证供应商生产能力或 API 字段"},
+        "updatedAt": None, "expiresAt": None,
+        "supplierProfile": {"categories": [], "maxSize": None, "papers": [], "finishing": [], "leadTime": None},
+    }
+
+
+# Kept for old imports. ConnectorRegistry also updates this view on registration.
+PLATFORMS = {provider_id: platform_metadata(provider_id) for provider_id in ADAPTERS}
+
+
+def list_platforms() -> list[dict[str, Any]]:
+    from supplier_connectors import REGISTRY
+    return [{"id": entry["providerId"], **entry, "supplierProfileVersion": SUPPLIER_PROFILE_VERSION}
+            for entry in REGISTRY.list_metadata()]
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy compatibility alias avoids a circular import during registry startup.
+    if name == "REGISTRY":
+        from supplier_connectors import REGISTRY
+        return REGISTRY
+    raise AttributeError(name)

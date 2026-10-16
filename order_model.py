@@ -13,12 +13,20 @@ import re
 import unicodedata
 from copy import deepcopy
 from typing import Any
+from unit_normalizer import normalize_dimension, normalize_length, dimension_values
+from measurement_model import parse_measurement, SEMANTICS
+from domain_vocab import normalize_print_term
 
 
 DIMENSION_DEFAULTS = {
     "finishedSize": "", "expandedSize": "", "dieCutSize": "", "packageSize": "",
+    "packageInnerSize": "", "packageOuterSize": "",
 }
 PACKAGE_DIMENSION_PRODUCTS = {"包装盒", "手提袋"}
+DIMENSION_SPEC_ALIASES = {
+    "boxSize": "packageSize", "bagSize": "packageSize",
+    "boxSizeInner": "packageInnerSize", "boxSizeOuter": "packageOuterSize",
+}
 ORDER_DEFAULTS = {
     "productType": "", "productTypes": [], "items": [], "purpose": "", "quantity": "", "quantityValue": None, "quantityUnit": "", "size": "",
     "dimensions": deepcopy(DIMENSION_DEFAULTS),
@@ -46,6 +54,7 @@ LABELS = {
 DIMENSION_LABELS = {
     "finishedSize": "成品尺寸", "expandedSize": "展开尺寸",
     "dieCutSize": "刀模尺寸", "packageSize": "包装三维尺寸",
+    "packageInnerSize": "包装内尺寸", "packageOuterSize": "包装外尺寸",
 }
 MATERIAL_SPEC_PRODUCTS = {"标签", "手提袋", "纸杯", "海报", "喷画", "PVC", "PVC卡"}
 
@@ -119,14 +128,14 @@ def quote_idempotency_key(order: dict[str, Any], platform_id: str, item_id: str 
     return f"quote:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
-QUANTITY_MULTIPLIERS = {"万": 10000, "千": 1000, "百": 100}
+QUANTITY_MULTIPLIERS = {"万": 10000, "千": 1000, "百": 100, "k": 1000, "K": 1000}
 QUANTITY_UNIT_ALIASES = {
     "份": "份", "本": "本", "册": "册", "张": "张", "个": "个", "件": "件", "盒": "盒",
     "套": "套", "包": "包", "箱": "箱", "杯": "杯", "块": "块", "枚": "枚",
     "平方米": "平方米", "平米": "平方米", "㎡": "平方米",
 }
 QUANTITY_CAPTURE = (
-    r"(\d[\d,]*(?:\.\d+)?)\s*(?:(万|千|百)\s*)?"
+    r"(\d[\d,]*(?:\.\d+)?)\s*(?:(万|千|百|k|K)\s*)?"
     r"(平方米|平米|㎡|份|本|册|张|个|件|盒|套|包|箱|杯|块|枚)?"
 )
 DEFAULT_QUANTITY_UNITS = {
@@ -150,7 +159,7 @@ def parse_quantity(value: Any, product: str | None = None, unit_hint: str = "") 
         return None
     text = unicodedata.normalize("NFKC", str(value)).strip()
     match = re.search(
-        r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:(万|千|百)\s*)?"
+        r"(?<![A-Za-z0-9])([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:(万|千|百|k|K)\s*)?"
         r"(平方米|平米|㎡|份|本|册|张|个|件|盒|套|包|箱|杯|块|枚)?",
         text,
     )
@@ -202,6 +211,10 @@ def _is_three_dimensional_size(value: Any) -> bool:
     return len(re.findall(r"×", unicodedata.normalize("NFKC", str(value or "")))) >= 2
 
 
+def size_dimension_key(value: Any, product: str = "") -> str:
+    return "packageSize" if _is_three_dimensional_size(normalize_dimension(value)) or product in PACKAGE_DIMENSION_PRODUCTS else "finishedSize"
+
+
 def normalize_order_dimensions(order: dict[str, Any]) -> None:
     """Keep explicit dimension meanings while migrating legacy ``size`` data."""
     raw = order.get("dimensions") if isinstance(order.get("dimensions"), dict) else {}
@@ -209,9 +222,16 @@ def normalize_order_dimensions(order: dict[str, Any]) -> None:
     for key in DIMENSION_DEFAULTS:
         value = _legacy_text(raw.get(key))
         if value:
-            dimensions[key] = value
+            dimensions[key] = normalize_dimension(value)
 
     specs = _normalize_legacy_specs(order.get("productSpecs"))
+    for key, value in list(specs.items()):
+        specs[key] = normalize_print_term(key, normalize_length(value))
+        if key in DIMENSION_DEFAULTS or key in {"boxSize", "bagSize", "boxSizeInner", "boxSizeOuter", "envelopeSize", "displaySize", "boardSize"}:
+            specs[key] = normalize_dimension(value)
+    for key in ("paper", "finishing"):
+        if key in order:
+            order[key] = normalize_print_term(key, order[key])
     # Capture aliases before the cleanup below. Legacy clients stored
     # finished/expanded/die-cut/package meanings under ``productSpecs``; once
     # removed from that map they must still be copied into canonical
@@ -225,11 +245,14 @@ def normalize_order_dimensions(order: dict[str, Any]) -> None:
     specs = order["productSpecs"]
     for key, value in legacy_dimension_aliases.items():
         if not dimensions[key] and value:
-            dimensions[key] = value
+            dimensions[key] = normalize_dimension(value)
     if not dimensions["packageSize"]:
         dimensions["packageSize"] = _legacy_text(specs.get("boxSize") or specs.get("bagSize"))
+    for source, key in (("boxSizeInner", "packageInnerSize"), ("boxSizeOuter", "packageOuterSize")):
+        if specs.get(source) and not dimensions[key]:
+            dimensions[key] = normalize_dimension(specs[source])
 
-    legacy_size = _legacy_text(order.get("size"))
+    legacy_size = normalize_dimension(_legacy_text(order.get("size")))
     # Keep the legacy compatibility field scalar as well; otherwise a
     # malformed persisted object could survive beside the canonical dimension.
     order["size"] = legacy_size
@@ -239,7 +262,18 @@ def normalize_order_dimensions(order: dict[str, Any]) -> None:
                 dimensions["packageSize"] = legacy_size
         elif not dimensions["finishedSize"]:
             dimensions["finishedSize"] = legacy_size
+    # Canonical meanings win over compatibility aliases. Keep every exported
+    # representation of the same physical dimension consistent.
+    primary_key = size_dimension_key(legacy_size, order.get("productType", ""))
+    if dimensions.get(primary_key):
+        order["size"] = dimensions[primary_key]
+    for alias, dimension in DIMENSION_SPEC_ALIASES.items():
+        if alias in specs and dimensions.get(dimension):
+            specs[alias] = dimensions[dimension]
     order["dimensions"] = dimensions
+    order["measurements"] = {key: measurement for key, value in dimensions.items()
+                             if (measurement := parse_measurement(value, SEMANTICS[key])) is not None}
+    order["unitSystem"] = "mm"
 
 
 def merge_dimension_patch(current: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, str]:
@@ -729,6 +763,9 @@ def _number(value: Any) -> int | None:
 
 def _parse_size_mm(value: str) -> tuple[float, ...] | None:
     """Parse common named/custom sizes for capability checks, without guessing units."""
+    parsed = dimension_values(value)
+    if parsed is not None:
+        return tuple(float(v) for v in parsed)
     text = unicodedata.normalize("NFKC", str(value or "")).upper().replace("＊", "×").replace("*", "×")
     named = {"A3": (297.0, 420.0), "A4": (210.0, 297.0), "A5": (148.0, 210.0),
              "B4": (257.0, 364.0), "B5": (182.0, 257.0)}
@@ -754,7 +791,7 @@ def _parse_max_size(value: str) -> tuple[float, ...] | None:
     return _parse_size_mm(text)
 
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 # ``revision`` is an optimistic-concurrency counter for the session-bound
 # patch bridge.  Keep it within the range that JSON/JavaScript clients can
 # represent exactly; older sessions simply start at zero.
@@ -853,12 +890,15 @@ def _normalize_state_confirmation(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {"status": "not_ready"}
     raw_status = value.get("status")
-    status = raw_status if isinstance(raw_status, str) and raw_status in {"not_ready", "pending", "confirmed"} else "not_ready"
+    status = raw_status if isinstance(raw_status, str) and raw_status in {"not_ready", "pending", "confirmed", "stale"} else "not_ready"
     result: dict[str, Any] = {"status": status}
-    for key in ("confirmedAt", "note"):
+    for key in ("confirmedAt", "note", "staleReason", "orderFingerprint"):
         raw = value.get(key)
         if isinstance(raw, str):
             result[key] = raw
+    revision = value.get("confirmedRevision")
+    if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0:
+        result["confirmedRevision"] = revision
     return result
 
 
@@ -924,7 +964,7 @@ def _normalize_state_field_meta(value: Any) -> dict[str, dict[str, Any]]:
             if raw_value is _STATE_MISSING:
                 continue
         entry: dict[str, Any] = {"value": deepcopy(raw_value)}
-        for name in ("source", "sourceLabel", "runId", "updatedAt"):
+        for name in ("source", "sourceLabel", "runId", "updatedAt", "status"):
             raw = raw_entry.get(name)
             if isinstance(raw, str):
                 entry[name] = raw
@@ -947,6 +987,9 @@ def _normalize_state_field_meta(value: Any) -> dict[str, dict[str, Any]]:
                 source = evidence.get("source")
                 if isinstance(source, str) and source.strip():
                     clean_evidence["source"] = source.strip()
+                for name in ("start", "end"):
+                    if isinstance(evidence.get(name), int) and not isinstance(evidence[name], bool) and evidence[name] >= 0:
+                        clean_evidence[name] = evidence[name]
                 entry["evidence"] = clean_evidence
         result[key] = entry
         if len(result) >= 128:
@@ -1192,10 +1235,117 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
     New session keys belong here (one setdefault each) together with a bump of
     ``STATE_SCHEMA_VERSION``; ad-hoc migrations stay in this single function.
     """
-    order = deepcopy(ORDER_DEFAULTS)
+    previous_schema = state.get("schemaVersion")
+    legacy_units = not isinstance(previous_schema, int) or isinstance(previous_schema, bool) or previous_schema < 3
+    legacy_delivery = None
     raw_order = state.get("order")
+    raw_items = raw_order.get("items") if isinstance(raw_order, dict) else None
+    def valid_entries(value, key):
+        return isinstance(value, list) and any(isinstance(entry, dict)
+               and isinstance(entry.get(key), str) and entry[key].strip() for entry in value)
+    def valid_options(value):
+        return valid_entries(value, "id") or (isinstance(value, dict)
+               and any(valid_entries(entries, "id") for entries in value.values()))
+    item_delivery = any(isinstance(item, dict) and (
+                        (isinstance(item.get("selectedOption"), str) and item["selectedOption"].strip())
+                        or item.get("orderGenerated") is True)
+                        for item in raw_items) if isinstance(raw_items, list) else False
+    confirmation = state.get("confirmation")
+    legacy_confirmed = isinstance(confirmation, dict) and confirmation.get("status") in ("pending", "confirmed")
+    handoff = state.get("handoff")
+    legacy_handoff = isinstance(handoff, dict) and isinstance(handoff.get("text"), str) and bool(handoff["text"])
+    legacy_selection = isinstance(state.get("selectedOption"), str) and bool(state["selectedOption"].strip())
+    if legacy_units and (item_delivery or legacy_confirmed or legacy_handoff or legacy_selection
+            or state.get("orderGenerated") is True or valid_entries(state.get("quoteRequests"), "requestId")
+            or valid_options(state.get("processOptions")) or valid_options(state.get("itemOptions"))
+            or valid_entries(state.get("toolReceipts"), "name")):
+        legacy_delivery = {
+            "fromSchemaVersion": previous_schema if isinstance(previous_schema, int) else None,
+            "toSchemaVersion": STATE_SCHEMA_VERSION, "reason": "order_schema_migrated",
+            "original": {key: deepcopy(state[key]) for key in (
+                "order", "handoff", "confirmation", "quoteRequests", "selectedOption", "processOptions",
+                "itemOptions", "preflightResults", "orderGenerated", "activeQuoteRequestId", "toolReceipts",
+                "stage", "workflowStage", "orderStatus") if key in state},
+        }
+    order = deepcopy(ORDER_DEFAULTS)
     if isinstance(raw_order, dict):
-        order.update(raw_order)
+        order.update(deepcopy(raw_order))
+    if legacy_units:
+        # Pre-v3 interpreted bare B4/B5 as JIS. Freeze the old physical size
+        # before new input starts using ISO 216; never resize an old job during
+        # migration. Keep source spelling in a migration receipt and evidence.
+        legacy_jis = {"B4": "257×364 mm", "B5": "182×257 mm"}
+        receipts = state.get("measurementMigrations")
+        receipts = deepcopy(receipts) if isinstance(receipts, list) else []
+        def migrate_value(value: Any, path: str) -> Any:
+            if not isinstance(value, str):
+                return value
+            name = re.sub(r"\s|-", "", unicodedata.normalize("NFKC", value)).upper()
+            if name not in legacy_jis:
+                return value
+            normalized = legacy_jis[name]
+            receipts.append({"field": path, "raw": value, "value": normalized,
+                             "sourceStandard": "legacy_jis", "unit": "mm"})
+            return normalized
+        def migrate_order(value: dict[str, Any], prefix: str = "order") -> None:
+            if "size" in value:
+                value["size"] = migrate_value(value["size"], prefix + ".size")
+            for container in ("dimensions", "productSpecs"):
+                fields = value.get(container)
+                if isinstance(fields, dict):
+                    for key in set(DIMENSION_DEFAULTS) | set(DIMENSION_SPEC_ALIASES):
+                        if key in fields:
+                            fields[key] = migrate_value(fields[key], prefix + "." + container + "." + key)
+            raw_items = value.get("items")
+            for index, item in enumerate(raw_items if isinstance(raw_items, list) else []):
+                if isinstance(item, dict):
+                    migrate_order(item, prefix + f".items.{item.get('itemId') or index}")
+        migrate_order(order)
+        metadata = state.get("fieldMeta")
+        if isinstance(metadata, dict):
+            for field_name, meta in metadata.items():
+                if (isinstance(field_name, str) and isinstance(meta, dict)
+                        and (field_name == "size" or field_name.endswith(".size")
+                             or ".dimensions." in "." + field_name)):
+                    original_value = meta.get("value")
+                    normalized = migrate_value(original_value, "fieldMeta." + field_name)
+                    if normalized != original_value:
+                        meta["value"] = normalized
+                        meta.setdefault("evidence", {"quote": original_value, "source": "legacy_unit_migration"})
+        if receipts:
+            state["measurementMigrations"] = receipts[-128:]
+        if legacy_delivery is not None:
+            evidence = state.get("legacyDeliveryEvidence")
+            evidence = deepcopy(evidence) if isinstance(evidence, list) else []
+            evidence.append(legacy_delivery)
+            state["legacyDeliveryEvidence"] = evidence
+            state["handoff"] = None
+            state["orderGenerated"] = False
+            state["confirmation"] = {"status": "stale", "staleReason": "order_schema_migrated"}
+            state["activeQuoteRequestId"] = None
+            requests = state.get("quoteRequests")
+            if isinstance(requests, list):
+                for request in requests:
+                    if isinstance(request, dict):
+                        request["migrationPreviousStatus"] = request.get("status")
+                        request["status"] = "stale"
+                        request["staleReason"] = "order_schema_migrated"
+            tool_receipts = state.get("toolReceipts")
+            if isinstance(tool_receipts, list):
+                for receipt in tool_receipts:
+                    if isinstance(receipt, dict):
+                        receipt["stale"] = True
+            state["selectedOption"] = None
+            state["processOptions"] = {}
+            state["itemOptions"] = {}
+            state["stage"] = "collect"
+            state["workflowStage"] = "collect"
+            if state.get("orderStatus") in ("confirmed", "handoff_ready", "ready_for_review", "quote_draft", "quote_received"):
+                state.pop("orderStatus", None)
+            for item in order.get("items") if isinstance(order.get("items"), list) else []:
+                if isinstance(item, dict):
+                    item["selectedOption"] = None
+                    item["orderGenerated"] = False
     # Normalize text-like order fields before dimension/quantity migration so
     # malformed containers cannot reach downstream lookups or capability code.
     text_fields = (
@@ -1295,7 +1445,7 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
     active_quote_id = state.get("activeQuoteRequestId")
     state["activeQuoteRequestId"] = active_quote_id.strip() if isinstance(active_quote_id, str) and active_quote_id.strip() else None
     schema_version = state.get("schemaVersion")
-    state["schemaVersion"] = schema_version if isinstance(schema_version, int) and not isinstance(schema_version, bool) \
+    state["schemaVersion"] = max(schema_version, STATE_SCHEMA_VERSION) if isinstance(schema_version, int) and not isinstance(schema_version, bool) \
         and schema_version > 0 else STATE_SCHEMA_VERSION
     raw_revision = state.get("revision")
     state["revision"] = (raw_revision if isinstance(raw_revision, int)

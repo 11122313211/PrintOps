@@ -15,6 +15,42 @@ from order_model import (DIMENSION_DEFAULTS, QUANTITY_CAPTURE,
                          _is_three_dimensional_size,
                          normalize_order_dimensions, parse_quantity)
 from product_knowledge import alias_map, find_product
+from unit_normalizer import normalize_dimension, dimension_values
+from domain_vocab import normalize_print_term
+
+NEGATION = r"(?:不要|不需要|无需|不用|去掉|取消|不是|不)"
+NEGATABLE = r"(?:\d{2,3}\s*(?:g|克)\s*)?(?:铜版纸|哑粉纸|白卡纸|牛皮纸|特种纸|胶版纸|骑马钉|锁线胶装|胶装|装订|[AB]\s*-?\s*[0-6]|烫金|烫银|覆膜|哑膜|亮膜|双面|单面|四色|黑白)"
+
+
+def _positive_text(text):
+    # Preserve string positions so evidence still points into the original input.
+    return re.sub(rf"{NEGATION}\s*(?:用|采用)?\s*{NEGATABLE}",
+                  lambda m: " " * len(m[0]), text, flags=re.I)
+
+
+def _chinese_number(text):
+    digits = dict(zip("零一二三四五六七八九两", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 2)))
+    total = section = number = 0
+    for char in text:
+        if char in digits:
+            number = digits[char]
+        elif char == "万":
+            total += (section + number) * 10000
+            section = number = 0
+        else:
+            section += (number or 1) * {"十": 10, "百": 100, "千": 1000}[char]
+            number = 0
+    return total + section + number
+
+
+def _quantity_text(text):
+    def convert(match):
+        before = text[:match.start()].rstrip()
+        # 2万 / 3 千 already use the numeric parser's multiplier grammar.
+        if before and (before[-1].isdigit() or before[-1] == "."):
+            return match[0]
+        return str(_chinese_number(match[0]))
+    return re.sub(r"[零一二三四五六七八九两十百千万]+(?=\s*(?:张|本|册|份|个|件|枚|套|箱|杯|块))", convert, text)
 
 
 def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
@@ -23,6 +59,8 @@ def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
     candidates = []
     for alias, product in sorted(alias_map().items(), key=lambda item: len(item[0]), reverse=True):
         for match in re.finditer(re.escape(alias), normalized, re.IGNORECASE):
+            if not _valid_product_mention(normalized, match.start(), match.end(), alias):
+                continue
             candidates.append((match.start(), match.end(), product))
     accepted: list[tuple[str, int, int]] = []
     for start, end, product in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
@@ -30,6 +68,15 @@ def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
             continue
         accepted.append((product, start, end))
     return sorted(accepted, key=lambda item: item[1])
+
+
+def _valid_product_mention(text, start, end, alias):
+    if text[end:end + 1] in {"机", "管", "线", "材", "架"}:
+        return False
+    if alias.isascii() and ((start and text[start - 1].isascii() and text[start - 1].isalnum())
+                             or (end < len(text) and text[end].isascii() and text[end].isalpha())):
+        return False
+    return not re.search(rf"{NEGATION}\s*$", text[max(0, start - 6):start])
 
 
 def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
@@ -43,11 +90,13 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
     like "改成可移胶" keep extracting category specs without naming it.
     """
     # Normalize full-width input copied from design tools or IMEs first.
-    text = unicodedata.normalize("NFKC", text or "")
+    original = unicodedata.normalize("NFKC", text or "")
+    text = _quantity_text(_positive_text(original))
     data: dict[str, Any] = {}
     confidence: dict[str, float] = {}
     catalog_aliases = set(alias_map())
-    product = find_product(text)
+    mentions = _find_product_mentions(text)
+    product = mentions[0][0] if mentions else ""
     # Keep invitation cards from the original MVP as a lightweight family.
     if not product and "邀请函" in text:
         product = "邀请函"
@@ -94,7 +143,8 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                 data["quantity"], data["quantityValue"], data["quantityUnit"] = parsed
                 # An explicit unit is strong evidence; a bare number that
                 # merely follows "做/需要" is a guess the user must confirm.
-                confidence["quantity"] = 0.95 if (match.group(3) and unit) else (0.9 if match.group(2) else 0.72)
+                confidence["quantity"] = (0.70 if re.search(r"大约|约", prefix_text) else
+                                          0.95 if (match.group(3) and unit) else (0.9 if match.group(2) else 0.72))
                 quantity_candidates.append((number_start, number_end, parsed, confidence["quantity"]))
     if size_matches:
         normalized_sizes = []
@@ -108,6 +158,8 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                 ("expandedSize", r"(?:展开|摊开)(?:尺寸|大小)?"),
                 ("dieCutSize", r"(?:刀模|刀线)(?:尺寸|大小)?"),
                 ("packageSize", r"(?:包装|盒体|袋体)(?:尺寸|大小)?"),
+                ("packageInnerSize", r"内(?:尺寸|径)"),
+                ("packageOuterSize", r"外(?:尺寸|径)"),
             )
         }
         labeled_dimensions = {key: value for key, value in labeled_dimensions.items() if value}
@@ -124,6 +176,9 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                 # Keep the legacy display field for structural products;
                 # the nested dimension remains the authoritative meaning.
                 data["size"] = labeled_dimensions["packageSize"]
+                confidence["size"] = 0.95
+            elif labeled_dimensions.get("packageInnerSize") or labeled_dimensions.get("packageOuterSize"):
+                data["size"] = labeled_dimensions.get("packageInnerSize") or labeled_dimensions["packageOuterSize"]
                 confidence["size"] = 0.95
             elif not data.get("size"):
                 data["size"] = ""
@@ -147,10 +202,10 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                 data["paper"] = item
                 confidence["paper"] = 0.75
                 break
-    if re.search(r"双面.*?(?:四色|彩印)?|两面", text):
-        data["printing"] = "双面四色"; confidence["printing"] = 0.85
+    if re.search(r"双面|两面", text):
+        data["printing"] = "双面黑白" if re.search(r"黑白|单色", text) else "双面四色"; confidence["printing"] = 0.85
     elif re.search(r"单面.*?(?:四色|彩印)?", text):
-        data["printing"] = "单面四色"; confidence["printing"] = 0.85
+        data["printing"] = "单面黑白" if re.search(r"黑白|单色", text) else "单面四色"; confidence["printing"] = 0.85
     elif "四色" in text or "彩色" in text or "彩印" in text:
         data["printing"] = "四色印刷"; confidence["printing"] = 0.78
     elif "黑白" in text or "单色" in text:
@@ -159,18 +214,20 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
     # The negation window must not cross punctuation, otherwise
     # "不要烫金，改哑膜" would negate the newly requested 哑膜 too.
     removed_finishes = [item for item in finish_names
-                        if re.search(rf"(?:不要|不需要|无需|不用|去掉|取消)[^，,。；;！?！]{{0,5}}{re.escape(item)}", text, re.I)]
+                        if re.search(rf"{NEGATION}[^，,。；;！?！]{{0,5}}{re.escape(item)}", original, re.I)]
     finishes = [item for item in finish_names if item.lower() in text.lower() and item not in removed_finishes]
-    if removed_finishes and not finishes:
+    if (removed_finishes or re.search(r"无特殊工艺|无需表面工艺|工艺都不要", original)) and not finishes:
         data["finishing"] = "无特殊工艺"; confidence["finishing"] = 0.85
     elif finishes:
         data["finishing"] = "、".join(dict.fromkeys(finishes)); confidence["finishing"] = 0.88
-    if "骑马钉" in text:
+    if re.search(rf"{NEGATION}.{{0,3}}装订", original):
+        data["binding"] = "无需装订"; confidence["binding"] = 0.95
+    elif "骑马钉" in text:
         data["binding"] = "骑马钉"; confidence["binding"] = 0.88
-    elif "胶装" in text:
-        data["binding"] = "胶装"; confidence["binding"] = 0.88
     elif "锁线" in text:
         data["binding"] = "锁线胶装"; confidence["binding"] = 0.88
+    elif "胶装" in text:
+        data["binding"] = "胶装"; confidence["binding"] = 0.88
     elif re.search(r"(?:不要|不需要|无需|不用|去掉|取消).{0,5}装订", text):
         data["binding"] = "无需装订"; confidence["binding"] = 0.85
     if budget_match := re.search(r"预算\s*(?:控制在|不超过|约|为)?\s*([\d,]+)\s*[元块]", text):
@@ -182,7 +239,7 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
         data["budget"] = "优先视觉质感"; confidence["budget"] = 0.62
     elif re.search(r"赶|尽快|明天|后天|下周|三天|两天", text):
         data["budget"] = "优先交期"; confidence["budget"] = 0.7
-    if match := re.search(r"(今天|明天|后天|(?:三|两|一|四|五|六|七)天(?:后|内)?|\d+\s*天(?:后|内)?|本周[一二三四五六日天]?|下周[一二三四五六日天]?|月底|\d{1,2}月\d{1,2}日)", text):
+    if match := re.search(r"(今天|明天|后天|(?:[一二三四五六七八九十两]|\d+)\s*(?:个)?(?:工作日|周|星期|天)(?:后|内)?|本周[一二三四五六日天]?|下周[一二三四五六日天]?|月底|\d{1,2}月\d{1,2}日)", text):
         data["deadline"] = re.sub(r"\s+", "", match.group(1))
         confidence["deadline"] = 0.85
     if "宣传" in text or "推广" in text or "活动" in text:
@@ -211,16 +268,24 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
     if ("size" in data or "dimensions" in data
             or any(key in dimension_specs for key in (data.get("productSpecs") or {}))):
         normalize_order_dimensions(data)
+        data["dimensions"] = {key: value for key, value in data.get("dimensions", {}).items() if value}
+        for key, value in data["dimensions"].items():
+            if dimension_values(value) is None:
+                confidence[f"dimensions.{key}"] = .55
+                if value == data.get("size"):
+                    confidence["size"] = .55
     if allow_multi:
         mentions = _find_product_mentions(text)
         distinct_products = list(dict.fromkeys(item[0] for item in mentions))
         if len(mentions) > 1 and len(distinct_products) > 1:
-            # Segment at midpoints between mentions so qualifiers written
-            # BEFORE a mention ("天地盖包装盒") stay with that product.
+            # Split at actual clauses or conjunctions. Midpoints can cut a
+            # material name ("白卡纸") and move postfix quantities to item 2.
             boundaries = [0]
             for (_, prev_end), (next_start, _) in zip(
                     [(m[1], m[2]) for m in mentions], [(m[1], m[2]) for m in mentions[1:]]):
-                boundaries.append((prev_end + next_start) // 2)
+                between = text[prev_end:next_start]
+                separators = list(re.finditer(r"[，,;；、]|以及|和|另做|另外", between))
+                boundaries.append(prev_end + separators[-1].end() if separators else next_start)
             boundaries.append(len(text))
             items = []
             items_confidence: list[dict[str, float]] = []
@@ -230,49 +295,90 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                 item["productType"] = item_product
                 items.append(item)
                 items_confidence.append(item_confidence)
-            # Chinese orders place the quantity before its product ("500 张
-            # 名片"); assign each captured quantity to the nearest following
-            # mention, falling back to the nearest preceding one.
-            taken: set[int] = set()
-            for cand_start, cand_end, parsed, cand_conf in quantity_candidates:
-                following = [m for m in range(len(mentions)) if m not in taken and mentions[m][1] >= cand_end]
-                preceding = [m for m in range(len(mentions)) if m not in taken and mentions[m][2] <= cand_start]
-                pool = following or preceding or [m for m in range(len(mentions)) if m not in taken]
-                if pool:
-                    cand_mid = (cand_start + cand_end) / 2
-                    target = min(pool, key=lambda m: (abs((mentions[m][1] + mentions[m][2]) / 2 - cand_mid), m))
-                    items[target]["quantity"] = parsed[0]
-                    items[target]["quantityValue"] = parsed[1]
-                    items[target]["quantityUnit"] = parsed[2]
-                    items_confidence[target]["quantity"] = cand_conf
-                    taken.add(target)
+            # Each clause has already parsed its own quantities. Reassigning
+            # a second quantity to another product would leak a correction or
+            # unresolved alternative across items.
+            shared_markers = list(re.finditer(r"都|统一|全部|均", text))
+            shared = {}
+            shared_confidence = {}
+            for marker in shared_markers:
+                values, grades = perceive(text[marker.end():], allow_multi=False)
+                shared.update(values)
+                shared_confidence.update(grades)
             for index, item in enumerate(items):
-                # Values written after the product mentions are commonly
-                # shared by every item. Copy only unambiguous shared fields;
-                # product-specific dimensions and specs stay item-local.
                 for shared_key in ("purpose", "orientation", "paper", "printing", "finishing", "binding", "deadline", "budget"):
-                    if not item.get(shared_key) and data.get(shared_key):
-                        item[shared_key] = deepcopy(data[shared_key])
-                        if shared_key in confidence:
-                            items_confidence[index][shared_key] = confidence[shared_key]
-                if len(size_matches) == 1 and not item.get("size") and data.get("size"):
-                    item["size"] = data["size"]
-                    if "size" in confidence:
-                        items_confidence[index]["size"] = confidence["size"]
-                if len(size_matches) == 1 and data.get("dimensions"):
-                    item["dimensions"] = deepcopy(data["dimensions"])
-                    for key in data["dimensions"]:
-                        if f"dimensions.{key}" in confidence:
-                            items_confidence[index][f"dimensions.{key}"] = confidence[f"dimensions.{key}"]
+                    if not item.get(shared_key) and shared.get(shared_key):
+                        item[shared_key] = deepcopy(shared[shared_key])
+                        items_confidence[index][shared_key] = shared_confidence.get(shared_key, .7)
+                if shared.get("size") and not item.get("size"):
+                    item["size"] = shared["size"]
+                    items_confidence[index]["size"] = shared_confidence.get("size", .7)
+                if shared.get("dimensions"):
+                    for key, value in shared["dimensions"].items():
+                        if not item.setdefault("dimensions", {}).get(key):
+                            item["dimensions"][key] = value
+                            items_confidence[index][f"dimensions.{key}"] = shared_confidence.get(f"dimensions.{key}", shared_confidence.get("size", .7))
             data["productType"] = mentions[0][0]
             data["productTypes"] = distinct_products
             data["items"] = items
+            # Scalar top-level fields are a compatibility projection of item 1,
+            # never the last quantity/material encountered in the sentence.
+            for key in ("quantity", "quantityValue", "quantityUnit", "size", "dimensions", "paper", "printing", "finishing", "binding", "productSpecs"):
+                data.pop(key, None)
+                if key in items[0]:
+                    data[key] = deepcopy(items[0][key])
+            for index, grades in enumerate(items_confidence):
+                for key, grade in grades.items():
+                    confidence[f"items.item-{index + 1}.{key}"] = grade
+    if "items" not in data:
+        # Alternatives and conflicting counts are proposals, never an implicit
+        # production choice. Keep their original sentence as candidate evidence.
+        alternatives = [part for part in re.split(r"[，,；;。]", text)
+                        if re.search(r"还是|或者|或是|二选一|待定", part)]
+        uncertain_fields = set()
+        for part in alternatives:
+            papers = set(re.findall(r"特种纸|牛皮纸|白卡纸|铜版纸|哑粉纸|胶版纸", part))
+            weights = set(re.findall(r"\d{2,3}\s*(?:g|克)", part, re.I))
+            if len(papers) > 1 or len(weights) > 1 or re.search(r"纸.*待定", part):
+                uncertain_fields.add("paper")
+            if (len(set(re.findall(r"单面|双面|两面", part))) > 1
+                    or len(set(re.findall(r"四色|黑白|专色|单色|彩色", part))) > 1
+                    or re.search(r"(?:印刷|面数|颜色).*待定", part)):
+                uncertain_fields.add("printing")
+            if len(set(re.findall(r"骑马钉|锁线胶装|胶装|无需装订", part))) > 1:
+                uncertain_fields.add("binding")
+            if len({name for name in finish_names if name in part}) > 1:
+                uncertain_fields.add("finishing")
+            if len(_extract_sizes(part)) > 1 or re.search(r"尺寸.*待定", part):
+                uncertain_fields.add("size")
+        for field in uncertain_fields:
+            if field in data:
+                confidence[field] = min(confidence.get(field, .55), .55)
+        if "size" in uncertain_fields:
+            for field in data.get("dimensions", {}):
+                confidence[f"dimensions.{field}"] = .55
+        if len({q[2][0] for q in quantity_candidates}) > 1 and not re.search(r"改成|改为|调整为", text):
+            confidence["quantity"] = .55
+    for field in ("paper", "finishing"):
+        if field in data:
+            data[field] = normalize_print_term(field, data[field])
+    for field, value in (data.get("productSpecs") or {}).items():
+        data["productSpecs"][field] = normalize_print_term(field, value)
+    # Structured measurements are derived once at the state boundary, not an
+    # editable model patch (which would create another source of dimensions).
+    data.pop("measurements", None)
+    data.pop("unitSystem", None)
     return data, confidence
 
 
 def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]:
     """Extract only the product-specific details understood by the MVP catalog."""
     specs: dict[str, str] = {}
+    if product == "标签":
+        if re.search(r"卷装|卷筒", text):
+            specs["labelFormat"] = "卷装"
+        elif re.search(r"张装|按张", text):
+            specs["labelFormat"] = "张装"
 
     def set_if(pattern: str, key: str, value: str | None = None, flags: int = re.I) -> None:
         match = re.search(pattern, text, flags)
@@ -399,25 +505,19 @@ def _extract_sizes(text: str) -> list[tuple[re.Match[str], str]]:
     # One-digit dimensions matter for small labels/stickers (e.g. 5×5cm);
     # the × separator keeps them distinct from quantities.
     dimension = (
-        rf"\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?\s*{separator}\s*"
-        rf"\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?"
-        rf"(?:\s*{separator}\s*\d{{1,4}}\s*(?:mm|毫米|cm|厘米)?)?"
+        rf"\d{{1,6}}(?:\.\d+)?\s*(?:mm|毫米|cm|厘米|inch|in|英寸)?\s*{separator}\s*"
+        rf"\d{{1,6}}(?:\.\d+)?\s*(?:mm|毫米|cm|厘米|inch|in|英寸)?"
+        rf"(?:\s*{separator}\s*\d{{1,6}}(?:\.\d+)?\s*(?:mm|毫米|cm|厘米|inch|in|英寸)?)?"
     )
     pattern = re.compile(
-        rf"(?<![A-Za-z0-9])(?:[AB]\s*-?\s*[3-6](?!\d)|{dimension})"
+        rf"(?<![A-Za-z0-9])(?:[AB]\s*-?\s*[0-6](?!\d)|{dimension})"
         rf"(?![A-Za-z0-9])",
         re.IGNORECASE,
     )
     found: list[tuple[re.Match[str], str]] = []
     for match in pattern.finditer(text):
-        compact = re.sub(r"\s+", "", match.group(0)).upper()
-        if re.fullmatch(r"[AB]-?[3-6]", compact):
-            size = compact.replace("-", "")
-        else:
-            size = compact.replace("毫米", "MM").replace("厘米", "CM")
-            size = size.replace("\\*", "×").replace("*", "×")
-            size = size.replace("X", "×").replace("✕", "×").replace("✖", "×")
-            size = re.sub(r"(?:MM|CM)(?=×)", "", size)
+        size = normalize_dimension(match.group(0))
+        size = size.replace("\\*", "×").replace("*", "×").replace("x", "×").replace("X", "×")
         found.append((match, size))
     return found
 
@@ -427,6 +527,9 @@ def _extract_labeled_size(text: str, marker_pattern: str) -> str:
     marker = re.search(rf"{marker_pattern}\s*[:：]?", text, re.IGNORECASE)
     if not marker:
         return ""
-    tail = text[marker.end(): marker.end() + 96]
-    matches = _extract_sizes(tail)
-    return matches[0][1] if matches else ""
+    candidates = _extract_sizes(text)
+    after = [(m, size) for m, size in candidates if m.start() >= marker.end()
+             and re.fullmatch(r"[\s:：为是,，]*", text[marker.end():m.start()])]
+    before = [(m, size) for m, size in candidates if m.end() <= marker.start()
+              and re.fullmatch(r"[\s,，:：]*", text[m.end():marker.start()])]
+    return after[0][1] if after else before[-1][1] if before else ""

@@ -17,8 +17,12 @@ import sys
 from pathlib import Path
 
 SECRET_PATTERNS = {
-    "OpenAI 风格 sk-": re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
-    "Google API Key": re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),
+    # Require a token boundary so CSS/JS identifiers such as
+    # ``risk-section-heading`` are not mistaken for an ``sk-`` credential.
+    "OpenAI 风格 sk-": re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{12,}"),
+    # A credential starts a token. Matching inside long encoded screenshot/ZIP
+    # payloads produces random false positives in browser acceptance reports.
+    "Google API Key": re.compile(r"(?<![A-Za-z0-9_\-])AIza[0-9A-Za-z_\-]{30,}"),
     "GitHub token": re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
     "Groq API Key": re.compile(r"gsk_[A-Za-z0-9]{20,}"),
     "HuggingFace token": re.compile(r"hf_[A-Za-z0-9]{30,}"),
@@ -27,7 +31,12 @@ SECRET_PATTERNS = {
     "通用凭据字段": re.compile(
         r"(?i)[\"']?(?:api[_-]?key|secret[_-]?key|access[_-]?token|password)[\"']?\s*[:=]\s*[\"'][^\"']{20,}[\"']"),
 }
-SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".zcode", ".mimosa"}
+SKIP_DIRS = {
+    ".git", "__pycache__", ".venv", "venv", "node_modules", ".zcode", ".mimosa",
+    # Reports are ignored local Playwright/runtime output. They may contain
+    # encoded traces and fixture strings that are not repository inputs.
+    "reports",
+}
 SKIP_SUFFIXES = {".pyc", ".sqlite3", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ico"}
 SENSITIVE_JSON_KEYS = re.compile(r"key|token|secret|password|credential", re.IGNORECASE)
 

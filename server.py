@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+from copy import copy, deepcopy
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -18,11 +21,19 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from agent import Agent, Memory, PLATFORMS, SUPPLIER_PROFILE_VERSION, TOOL_META, TOOL_SCHEMAS
-from product_knowledge import catalog_payload
+from agent import (Agent, Memory, RevisionConflictError, PLATFORMS, SUPPLIER_PROFILE_VERSION,
+                   TOOL_META, TOOL_SCHEMAS, WORKFLOW_LABELS)
+from product_knowledge import catalog_payload, parameter_state, KNOWLEDGE_MANIFEST
 from llm_adapter import OpenAICompatiblePlanner, read_saved_config, write_saved_config
+from order_contract import canonical_order, handoff_document
+from order_model import normalize_state
+from storage_contract import StoreConflictError, summary
+from supplier_adapters import list_platforms
+from tools import validate_order
+from request_runtime import (DeadlineExceeded, bounded_io, check_deadline, deadline_lock,
+                             deadline_scope, operation_deadline, remaining)
 
 
 ROOT = Path(__file__).parent
@@ -106,11 +117,13 @@ ACCESS_TOKEN = secrets.token_urlsafe(24)
 # docs, .git or runtime data. Non-API paths outside this set return 404.
 STATIC_FILES = {
     "": "index.html", "/": "index.html", "/index.html": "index.html",
-    "/app.js": "app.js", "/markdown.js": "markdown.js", "/styles.css": "styles.css",
+    "/app.js": "app.js", "/markdown.js": "markdown.js", "/workbench.js": "workbench.js", "/journey.js": "journey.js", "/styles.css": "styles.css",
 }
 STATIC_CONTENT_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "workbench.js": "text/javascript; charset=utf-8",
+    "journey.js": "text/javascript; charset=utf-8",
     "markdown.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
@@ -137,7 +150,7 @@ def _key_storage_warning() -> str:
 
 
 def llm_settings() -> dict[str, object]:
-    with LLM_LOCK:
+    with deadline_lock(LLM_LOCK):
         payload: dict[str, object] = {"llm": PLANNER.public_config()}
     warning = _key_storage_warning()
     if warning:
@@ -146,19 +159,23 @@ def llm_settings() -> dict[str, object]:
 
 
 def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
+    global PLANNER
     url = str(body.get("url", "")).strip()
     model = str(body.get("model", "")).strip()
     clear = bool(body.get("clear"))
     if bool(url) != bool(model):
         raise ValueError("URL 和模型名需要同时填写，或同时留空使用规则模式")
-    with LLM_LOCK:
-        if clear or not url:
-            PLANNER.configure("", "", "")
-            write_saved_config(LLM_CONFIG_PATH, {"url": "", "model": "", "key": ""})
-        else:
-            api_key = str(body.get("key", "")).strip() or PLANNER.api_key
-            PLANNER.configure(url, model, api_key)
-            write_saved_config(LLM_CONFIG_PATH, {"url": PLANNER.base_url, "model": PLANNER.model, "key": PLANNER.api_key})
+    candidate = planner_for_request()
+    if clear or not url:
+        candidate.configure("", "", "")
+    else:
+        api_key = str(body.get("key", "")).strip() or candidate.api_key
+        # URL validation can resolve DNS. Keep it outside the config lock,
+        # bounded, and confined to a candidate that is never published late.
+        bounded_io(lambda: candidate.configure(url, model, api_key), operation_deadline(candidate.timeout))
+    with deadline_lock(LLM_LOCK):
+        write_saved_config(LLM_CONFIG_PATH, {"url": candidate.base_url, "model": candidate.model, "key": candidate.api_key})
+        PLANNER = candidate
         payload: dict[str, object] = {"llm": PLANNER.public_config()}
     warning = _key_storage_warning()
     if warning:
@@ -166,24 +183,35 @@ def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
     return payload
 
 
+def planner_for_request():
+    """Copy config under a short lock; never share per-run diagnostics."""
+    with deadline_lock(LLM_LOCK):
+        if hasattr(PLANNER, "for_request"):
+            return PLANNER.for_request()
+        planner = copy(PLANNER)  # Compatibility for injected local planners.
+        for attribute in ("last_error", "last_protocol"):
+            if hasattr(planner, attribute):
+                setattr(planner, attribute, "")
+        return planner
+
+
 def test_llm_capabilities(body: dict[str, object]) -> dict[str, object]:
-    """Probe the configured or unsaved endpoint for Agent protocol support."""
-    with LLM_LOCK:
-        has_override = any(key in body for key in ("url", "model", "key"))
-        tester = PLANNER
-        if has_override:
-            tester = OpenAICompatiblePlanner(
-                timeout=PLANNER.timeout,
-                allow_private_hosts=getattr(PLANNER, "allow_private_hosts", False),
-            )
-            test_url = str(body.get("url", "")).strip()
-            test_model = str(body.get("model", "")).strip()
-            test_key = str(body.get("key", "")).strip()
-            if not test_key and test_url == PLANNER.base_url and test_model == PLANNER.model:
-                test_key = PLANNER.api_key
-            tester.configure(test_url, test_model, test_key)
-        result = tester.test_capabilities()
-        return {"llm": tester.public_config(), "test": result}
+    """Probe a request-local config snapshot without holding the config lock."""
+    saved = planner_for_request()
+    tester = saved
+    if any(key in body for key in ("url", "model", "key")):
+        tester = OpenAICompatiblePlanner(
+            timeout=saved.timeout,
+            allow_private_hosts=getattr(saved, "allow_private_hosts", False),
+        )
+        test_url = str(body.get("url", "")).strip()
+        test_model = str(body.get("model", "")).strip()
+        test_key = str(body.get("key", "")).strip()
+        if not test_key and test_url == saved.base_url and test_model == saved.model:
+            test_key = saved.api_key
+        bounded_io(lambda: tester.configure(test_url, test_model, test_key), operation_deadline(tester.timeout))
+    result = tester.test_capabilities()
+    return {"llm": tester.public_config(), "test": result}
 
 
 def _session_id(value: object) -> str | None:
@@ -196,13 +224,35 @@ def _session_id(value: object) -> str | None:
 
 
 def _session_lock(session_id: str) -> threading.Lock:
-    with SESSION_LOCKS_GUARD:
+    with deadline_lock(SESSION_LOCKS_GUARD):
         return SESSION_LOCKS.setdefault(session_id, threading.Lock())
 
 
 def _item_index(body: dict[str, object]) -> int | None:
     value = body.get("itemIndex")
-    return int(value) if value is not None else None
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        raise RequestError("itemIndex 必须是非负整数", code="INVALID_ITEM")
+    return value
+
+
+def _resolve_item_target(agent: Agent, body: dict[str, Any]) -> int | None:
+    """Resolve identity only after CAS has checked this exact revision."""
+    index, item_id = _item_index(body), body.get("itemId")
+    if index is None and item_id is None:
+        return None
+    items = agent.state["order"].get("items") or []
+    if item_id is not None:
+        if not isinstance(item_id, str) or not item_id.strip() or len(item_id) > 128:
+            raise RequestError("itemId 无效", code="INVALID_ITEM")
+        resolved = next((i for i, item in enumerate(items) if item.get("itemId") == item_id), None)
+        if resolved is None:
+            raise RequestError("指定产品项不存在，请恢复最新订单", 409, "ITEM_NOT_FOUND")
+        if index is not None and index != resolved:
+            raise RequestError("产品项与索引不一致，请恢复最新订单", 409, "ITEM_TARGET_CONFLICT")
+        index = resolved
+    if index is None or not 0 <= index < len(items) or len(items) < 2:
+        raise RequestError("指定产品项不存在，请恢复最新订单", 409, "ITEM_NOT_FOUND")
+    return index
 
 
 def _preflight(agent: Agent, body: dict[str, object]):
@@ -228,10 +278,107 @@ def _preflight(agent: Agent, body: dict[str, object]):
     )
 
 
+IDEMPOTENT_MUTATION_PATHS = frozenset({"/api/chat", "/api/fields", "/api/choose", "/api/generate",
+                                     "/api/confirm", "/api/preflight", "/api/tools/call", "/api/platform",
+                                     "/api/quote/status", "/api/quote/cancel"})
+
+
 def dispatch_post(path: str, body: dict[str, object], agent: Agent):
+    """Persist an operation receipt with every commit of an identified mutation."""
+    operation_id = body.get("operationId")
+    if path not in IDEMPOTENT_MUTATION_PATHS or operation_id is None:
+        return _dispatch_post(path, body, agent)
+    if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", operation_id):
+        raise RequestError("operationId 格式无效", code="INVALID_OPERATION")
+    request = {key: value for key, value in body.items() if key not in {"expectedRevision", "operationId"}}
+    request_hash = hashlib.sha256(json.dumps({"path": path, "body": request}, ensure_ascii=False,
+                                            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    receipts = agent.state.get("operationReceipts") or []
+    receipt = next((value for value in receipts if value.get("operationId") == operation_id), None)
+    if receipt is None:
+        # Snapshot receipts are bounded; the append-only events retain the
+        # operation identity for the entire lifetime of this order.
+        lookup = getattr(agent.memory.store, "find_operation_receipt", None)
+        if lookup:
+            receipt = lookup(agent.id, operation_id)
+        else:
+            receipt = next((event["payload"] for event in reversed(agent.memory.store.load_events(agent.id))
+                            if event.get("eventType") == "operation_receipt" and
+                            event.get("payload", {}).get("operationId") == operation_id), None)
+    if receipt:
+        if receipt.get("requestHash") != request_hash:
+            raise RequestError("同一 operationId 不可用于不同内容", 409, "OPERATION_CONFLICT")
+        result = order_history_snapshot(agent.memory, agent.id)
+        result.update({"operationReceipt": deepcopy(receipt), "duplicateOperation": True,
+                       "needsReconciliation": receipt.get("status") != "completed"})
+        return result
+    agent._operation_context = {"operationId": operation_id, "requestHash": request_hash,
+                                "path": path, "startedAt": agent._timestamp()}
+    agent._operation_complete = False
+    try:
+        result = _dispatch_post(path, body, agent)
+        # Normal business routes finish through Agent._result, which commits
+        # the receipt atomically with the final business state. A future route
+        # that returns early still records an outcome before returning success.
+        if not agent._operation_complete:
+            agent._operation_complete = True
+            agent._save()
+            result = {**result, **order_history_snapshot(agent.memory, agent.id)}
+        receipt = next(value for value in agent.state["operationReceipts"] if value["operationId"] == operation_id)
+        result.update({"operationReceipt": deepcopy(receipt), "duplicateOperation": False,
+                       "needsReconciliation": False})
+        return result
+    finally:
+        agent._operation_context = None
+        agent._operation_complete = False
+
+
+def _dispatch_post(path: str, body: dict[str, object], agent: Agent):
     """Dispatch a parsed API payload without doing network I/O."""
+    history_result = dispatch_history_post(path, body, agent.memory)
+    if history_result is not None:
+        return history_result
+    if agent.state.get("orderStatus") == "archived":
+        if path in {"/api/session", "/api/session/context", "/api/focus"}:
+            if path == "/api/focus":
+                return focus_snapshot(agent, body)
+            return order_history_snapshot(agent.memory, agent.id)
+        raise RequestError("已归档订单只读，请新建订单继续编辑", 409, "ORDER_ARCHIVED")
+    expected_revision = body.get("expectedRevision")
+    payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    target_body = {key: body[key] for key in ("itemId", "itemIndex") if body.get(key) is not None}
+    if path == "/api/tools/call":
+        for key in ("itemId", "itemIndex"):
+            if payload.get(key) is not None:
+                if key in target_body and target_body[key] != payload[key]:
+                    raise RequestError("工具作用对象不一致", 409, "ITEM_TARGET_CONFLICT")
+                target_body[key] = payload[key]
+    if (target_body or path in {"/api/focus", "/api/fields"}) and expected_revision is None:
+        raise RequestError("此操作需要 expectedRevision", code="REVISION_REQUIRED")
+    if expected_revision is not None:
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 0:
+            raise RequestError("expectedRevision 必须是非负整数", code="INVALID_REVISION")
+        if expected_revision != agent.state.get("revision", 0):
+            raise RequestError("订单已更新，请刷新后重试", 409, "REVISION_CONFLICT")
+        agent._cas_expected_revision = expected_revision
+    index = _resolve_item_target(agent, target_body)
+    if target_body:
+        body = {**body, "itemIndex": index}
+    if path == "/api/focus":
+        return focus_snapshot(agent, body)
+    if path == "/api/fields":
+        try:
+            result = agent.edit_fields(str(body.get("action", "")), body.get("values"), body.get("fields"), index)
+            result["requestContext"] = {"itemId": agent.state["order"]["items"][index]["itemId"] if index is not None else None,
+                                        "itemIndex": index, "expectedRevision": expected_revision}
+            return result
+        except ValueError as error:
+            raise RequestError(str(error), code="INVALID_FIELD")
+    if path == "/api/tools/call" and target_body:
+        payload = {key: value for key, value in payload.items() if key != "itemId"}
+        body = {**body, "payload": {**payload, "itemIndex": index}}
     routes = {
-        "/api/session": lambda: agent.snapshot(),
+        "/api/session": lambda: session_snapshot(agent),
         "/api/session/context": lambda: agent.context_snapshot(_item_index(body)),
         "/api/chat": lambda: agent.chat(str(body.get("text", "")), body.get("patch"), _item_index(body)),
         "/api/choose": lambda: agent.choose(str(body.get("optionId", "")), _item_index(body)),
@@ -249,18 +396,189 @@ def dispatch_post(path: str, body: dict[str, object], agent: Agent):
     action = routes.get(path)
     if action is None:
         raise RequestError("接口不存在", 404, "NOT_FOUND")
-    return action()
+    result = action()
+    if isinstance(result, dict):
+        result["requestContext"] = {"itemId": target_body.get("itemId") or (agent.state["order"]["items"][index]["itemId"] if index is not None else None),
+                                    "itemIndex": index, "expectedRevision": expected_revision}
+    return result
+
+
+def focus_snapshot(agent: Agent, body: dict[str, Any]) -> dict[str, Any]:
+    revision = body.get("expectedRevision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise RequestError("上下文切换需要 expectedRevision", code="REVISION_REQUIRED")
+    if revision != agent.state.get("revision", 0):
+        raise RequestError("订单已更新，请恢复最新订单", 409, "REVISION_CONFLICT")
+    index = _resolve_item_target(agent, body)
+    return order_history_snapshot(agent.memory, agent.id, item_index=index, override_focus=True,
+                                  expected_revision=revision)
+
+
+def session_snapshot(agent: Agent) -> dict[str, Any]:
+    """Create a new session once; restoring an existing order is read-only.
+
+    Browser reloads must not append workflow runs, consume a CAS revision, or
+    invalidate an existing quote. Explicit Agent.snapshot callers retain the
+    existing traced-operation behavior outside this HTTP read boundary.
+    """
+    if agent.memory.store.load_order(agent.id) is not None:
+        return order_history_snapshot(agent.memory, agent.id)
+    return agent.snapshot()
+
+
+def _history_record(memory: Memory, order_id: str) -> dict[str, Any]:
+    if not _session_id(order_id):
+        raise RequestError("订单标识无效", code="INVALID_ORDER")
+    record = memory.store.load_order(order_id)
+    if record is None:
+        raise RequestError("订单不存在", 404, "ORDER_NOT_FOUND")
+    return record
+
+
+def order_history_snapshot(memory: Memory, order_id: str, *, item_index: int | None = None,
+                           override_focus: bool = False, expected_revision: int | None = None) -> dict[str, Any]:
+    """Load UI history without running tools or consuming a workflow revision."""
+    record = _history_record(memory, order_id)
+    if expected_revision is not None and record["revision"] != expected_revision:
+        raise RequestError("订单已更新，请恢复最新订单", 409, "REVISION_CONFLICT")
+    agent = Agent(memory, record["sessionId"], planner=planner_for_request())
+    # Render the same revision whose timestamps/status were read above, even
+    # if another process commits between the two reads.
+    agent.state = normalize_state(deepcopy(record["state"]))
+    if override_focus:
+        agent.state["activeItemIndex"] = item_index
+    state = agent.state
+    context = agent.context_snapshot()
+    validation = validate_order(state["order"])
+    active_index = agent._item_index()
+    active = agent._item_order(active_index) if active_index is not None else None
+    review = agent.review()
+    return {**deepcopy(state), "orderId": record["orderId"], "sessionId": record["sessionId"],
+            "review": review, "handoffDocument": handoff_document(state, record["orderId"], review),
+            "activeItemId": active.get("itemId") if active else None,
+            "status": record["status"], "createdAt": record["createdAt"], "updatedAt": record["updatedAt"],
+            "canonicalOrder": canonical_order(state["order"], state.get("fieldMeta")),
+            "history": deepcopy(state.get("messages", [])), "messages": [], "quickReplies": [],
+            "options": agent._context_options(state, active), "availableTools": agent.available_tools(),
+            "validation": validation, "missingFields": validation.get("missing", []),
+            "readiness": validation.get("readiness", 0), "nextAction": agent._next_action(validation),
+            "workflowStage": context["workflowStage"], "workflowLabel": WORKFLOW_LABELS[context["workflowStage"]],
+            "productProfile": parameter_state(state["order"]), "knowledge": deepcopy(KNOWLEDGE_MANIFEST),
+            "decision": agent._decision_summary(validation), "supplierCapability": context.get("supplierCapability"),
+            "activeItemSelectedOption": active.get("selectedOption") if active else None,
+            "quoteRequest": deepcopy(agent._quote_request()), "toolTrace": ["恢复会话记忆"],
+            "runTrace": deepcopy((state.get("lastRun") or {}).get("events", [])),
+            "llm": agent.planner.public_config() if hasattr(agent.planner, "public_config") else None}
+
+
+def dispatch_history_post(path: str, body: dict[str, object], memory: Memory) -> dict[str, Any] | None:
+    if path == "/api/orders/import-local-history":
+        records = body.get("orders")
+        if not isinstance(records, list) or len(records) > 100:
+            raise RequestError("orders 必须是至多 100 项的数组", code="INVALID_PAYLOAD")
+        imported, skipped, errors = [], [], []
+        for index, raw in enumerate(records):
+            try:
+                if not isinstance(raw, dict) or not isinstance(raw.get("order"), dict):
+                    raise RequestError("历史项需要 id 和 order", code="INVALID_PAYLOAD")
+                order_id = _session_id(raw.get("id") or raw.get("orderId"))
+                if not order_id:
+                    raise RequestError("历史项缺少 id", code="INVALID_ORDER")
+                if memory.store.load_order(order_id) is not None:
+                    skipped.append(order_id)
+                    continue
+                state = Memory.fresh_state()
+                state["order"] = raw["order"]
+                state = normalize_state(state)
+                # Browser snapshots are unconfirmed input, never an approval
+                # or provider response. Retain the original record as evidence.
+                try:
+                    memory.store.create_order({"orderId": order_id, "state": state,
+                                               "events": [{"eventType": "browser_history_imported", "actor": "migration",
+                                                           "payload": {"source": "localStorage", "original": raw}}]})
+                    imported.append(order_id)
+                except StoreConflictError:
+                    skipped.append(order_id)
+            except (RequestError, TypeError, ValueError) as error:
+                errors.append({"index": index, "message": str(error)})
+        return {"imported": imported, "skipped": skipped, "errors": errors,
+                "orders": memory.store.list_orders()["orders"]}
+    match = re.fullmatch(r"/api/orders/([^/]+)/purge", path)
+    if match:
+        order_id = match.group(1)
+        record = _history_record(memory, order_id)
+        if record["status"] != "archived":
+            raise RequestError("只有已归档订单可以永久删除", 409, "ORDER_NOT_ARCHIVED")
+        if body.get("confirm") is not True:
+            raise RequestError("永久删除需要 confirm=true", 400, "CONFIRM_REQUIRED")
+        revision = body.get("expectedRevision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            raise RequestError("删除需要 expectedRevision 整数", code="INVALID_REVISION")
+        try:
+            return memory.store.purge_order(order_id, revision)
+        except StoreConflictError as error:
+            raise RequestError(f"订单已更新，请刷新后重试（当前 revision={error.current}）", 409, "REVISION_CONFLICT")
+        except KeyError:
+            raise RequestError("订单不存在", 404, "ORDER_NOT_FOUND")
+        except ValueError as error:
+            raise RequestError(str(error), 409, "ORDER_NOT_ARCHIVED")
+    match = re.fullmatch(r"/api/orders/([^/]+)/archive", path)
+    if match:
+        order_id = match.group(1)
+        _history_record(memory, order_id)
+        revision = body.get("expectedRevision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            raise RequestError("归档需要 expectedRevision 整数", code="INVALID_REVISION")
+        try:
+            return summary(memory.store.delete_order(order_id, revision))
+        except StoreConflictError as error:
+            raise RequestError(f"订单已更新，请刷新后重试（当前 revision={error.current}）", 409, "REVISION_CONFLICT")
+    return None
 
 
 def dispatch_get(path: str) -> dict[str, object] | None:
     """Return public GET payloads; ``None`` delegates to static file handling."""
+    parsed = urlsplit(path)
+    path, query = unquote(parsed.path), parse_qs(parsed.query)
+    if path == "/api/storage":
+        return session_memory().store.metadata()
+    if path == "/api/orders":
+        try:
+            limit, offset = int(query.get("limit", [50])[0]), int(query.get("offset", [0])[0])
+        except (TypeError, ValueError):
+            raise RequestError("分页参数必须是整数", code="INVALID_PAGINATION")
+        filters = {"limit": limit, "offset": offset,
+                   "includeArchived": query.get("includeArchived", ["false"])[0].lower() == "true",
+                   "status": query.get("status", [None])[0]}
+        return session_memory().store.list_orders(filters)
+    match = re.fullmatch(r"/api/orders/([^/]+)/handoff", path)
+    if match:
+        memory = session_memory()
+        record = _history_record(memory, match.group(1))
+        try:
+            revision = int(query.get("revision", [""])[0])
+        except (TypeError, ValueError):
+            raise RequestError("交接单读取需要 revision", code="REVISION_REQUIRED")
+        if revision != record["revision"]:
+            raise RequestError("订单版本已变化，请重新核对后导出", 409, "REVISION_CONFLICT")
+        agent = Agent(memory, record["sessionId"], planner=planner_for_request())
+        agent.state = normalize_state(deepcopy(record["state"]))
+        return handoff_document(agent.state, record["orderId"], agent.review())
+    match = re.fullmatch(r"/api/orders/([^/]+)(/export)?", path)
+    if match:
+        memory = session_memory()
+        record = _history_record(memory, match.group(1))
+        if match.group(2):
+            exported = memory.store.export_order(record["orderId"])
+            exported["canonicalOrder"] = canonical_order(exported["state"].get("order", {}), exported["state"].get("fieldMeta"))
+            return exported
+        return order_history_snapshot(memory, record["orderId"])
     if path == "/api/health":
         return {"ok": True}
     if path == "/api/settings":
         return llm_settings()
     if path == "/api/platforms":
-        return {"platforms": [{"id": key, **value, "supplierProfileVersion": SUPPLIER_PROFILE_VERSION}
-                               for key, value in PLATFORMS.items()]}
+        return {"platforms": list_platforms()}
     if path == "/api/tools":
         tools = [{**dict(meta), **dict(TOOL_SCHEMAS.get(name, {}))} for name, meta in TOOL_META.items()]
         return {"tools": tools}
@@ -446,8 +764,13 @@ def startup_checks(port: int | None = None) -> list[str]:
         if not (ROOT / name).is_file():
             problems.append(f"缺少静态资源 {name}（部署包不完整）")
     try:
-        memory_write_probe(memory_path())
-    except (OSError, sqlite3.Error) as error:
+        configured_store = getattr(MEMORY, "store", None)
+        mode = configured_store.metadata()["mode"] if configured_store is not None else os.getenv("PRINTOPS_STORE", "sqlite").strip() or "sqlite"
+        if mode == "sqlite":
+            memory_write_probe(memory_path())
+        else:
+            session_memory()  # Validate an explicit memory/custom selection.
+    except (OSError, sqlite3.Error, ValueError, TypeError) as error:
         problems.append(f"会话数据库不可写：{memory_path()}（{error}）")
     if port is not None:
         try:
@@ -575,6 +898,37 @@ class Handler(BaseHTTPRequestHandler):
     # read must not hold a slot (and a SQLite connection) forever.
     timeout = REQUEST_TIMEOUT_SECONDS if REQUEST_TIMEOUT_SECONDS > 0 else None
 
+    def handle_one_request(self):
+        # Start before request-line/header parsing. Per-read socket timeouts
+        # alone let a client send one byte before every timeout indefinitely.
+        self._request_received = time.monotonic()
+        seconds = self.timeout
+        deadline = (self._request_received + seconds
+                    if seconds is not None and math.isfinite(seconds) and seconds > 0 else None)
+        timer = None
+
+        def expire_read():
+            self.close_connection = True
+            try:
+                # Interrupt an in-progress buffered header/body read while
+                # leaving a brief opportunity for a structured 408 response.
+                self.connection.shutdown(socket.SHUT_RD)
+            except OSError:
+                pass
+
+        with deadline_scope(deadline):
+            if deadline is not None:
+                timer = threading.Timer(max(0.0, deadline - time.monotonic()), expire_read)
+                timer.daemon = True
+                timer.start()
+            try:
+                return super().handle_one_request()
+            except (DeadlineExceeded, OSError):
+                self.close_connection = True
+            finally:
+                if timer is not None:
+                    timer.cancel()
+
     def _origin_allowed(self) -> bool:
         """Same-origin check: a present Origin header must match Host."""
         origin = self.headers.get("Origin")
@@ -627,16 +981,19 @@ class Handler(BaseHTTPRequestHandler):
         self._begin_request()
         path = unquote(urlsplit(self.path).path)
         try:
+            check_deadline()
             if path.startswith("/api/"):
                 if path != "/api/health" and not self._guard():
                     return None
-                public_payload = dispatch_get(path)
+                public_payload = dispatch_get(self.path)
                 if public_payload is not None:
                     return self.reply(public_payload)
                 return self.error_response(RequestError("接口不存在", 404, "NOT_FOUND"))
             return self.serve_static(path)
         except RequestError as error:
             return self.error_response(error)
+        except DeadlineExceeded:
+            return self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
         except socket.timeout:
             return self.error_response(RequestError("请求读取超时，请重试", 408, "REQUEST_TIMEOUT"))
         except (BrokenPipeError, ConnectionResetError):
@@ -651,6 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
         self._begin_request()
         path = unquote(urlsplit(self.path).path)
         try:
+            check_deadline()
             if not self._guard():
                 return None
             body = self.read_json()
@@ -664,18 +1022,27 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(test_llm_capabilities(body))
                 except ValueError as error:
                     raise RequestError(str(error), 400, "INVALID_SETTINGS")
+            if path.startswith("/api/orders/"):
+                history_result = dispatch_history_post(path, body, session_memory())
+                if history_result is not None:
+                    return self.reply(history_result)
+                raise RequestError("接口不存在", 404, "NOT_FOUND")
             session_id = _session_id(body.get("sessionId"))
             if session_id:
                 # Lock before loading state so concurrent requests cannot read
                 # the same snapshot and overwrite each other's changes.
-                with _session_lock(session_id):
-                    agent = Agent(session_memory(), session_id, planner=PLANNER)
+                with deadline_lock(_session_lock(session_id)):
+                    agent = Agent(session_memory(), session_id, planner=planner_for_request())
                     return self.reply(dispatch_post(path, body, agent))
-            agent = Agent(session_memory(), planner=PLANNER)
-            with _session_lock(agent.id):
+            agent = Agent(session_memory(), planner=planner_for_request())
+            with deadline_lock(_session_lock(agent.id)):
                 return self.reply(dispatch_post(path, body, agent))
         except RequestError as error:
             return self.error_response(error)
+        except DeadlineExceeded:
+            return self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
+        except (RevisionConflictError, StoreConflictError):
+            return self.error_response(RequestError("订单已更新，请刷新后重试", 409, "REVISION_CONFLICT"))
         except (TypeError, ValueError):
             return self.error_response(RequestError("请求参数格式不正确", 400, "INVALID_PAYLOAD"))
         except socket.timeout:
@@ -704,6 +1071,9 @@ class Handler(BaseHTTPRequestHandler):
             self._drain(length)
             raise RequestError("请求内容过大，请缩小后重试", 413, "PAYLOAD_TOO_LARGE")
         raw = self.rfile.read(length)
+        check_deadline()
+        if len(raw) != length:
+            raise RequestError("请求内容未完整接收", 400, "INCOMPLETE_BODY")
         if not raw:
             return {}
         content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
@@ -720,6 +1090,7 @@ class Handler(BaseHTTPRequestHandler):
     def _drain(self, length: int, cap: int = 16 * 1024 * 1024) -> None:
         remaining = min(length, cap)
         while remaining > 0:
+            check_deadline()
             chunk = self.rfile.read(min(remaining, 65536))
             if not chunk:
                 break
@@ -736,6 +1107,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.error_response(RequestError("资源不存在", 404, "NOT_FOUND"))
         if name == "index.html":
             raw = index_html_with_token(raw)
+        self._bound_response_timeout()
         self.send_response(200)
         self.send_header("Content-Type", STATIC_CONTENT_TYPES[name])
         self.send_header("Content-Length", str(len(raw)))
@@ -748,6 +1120,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
     def reply(self, data, status=200):
+        self._bound_response_timeout(allow_expired=status >= 400)
         raw = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -763,9 +1136,20 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply({"ok": False, "code": error.code, "message": error.message,
                            "requestId": getattr(self, "request_id", "")}, error.status)
 
+    def _bound_response_timeout(self, allow_expired: bool = False) -> None:
+        try:
+            budget = remaining()
+        except DeadlineExceeded:
+            if not allow_expired:
+                raise
+            self.close_connection = True
+            budget = 0.1  # Bounded error delivery, never another business budget.
+        if budget is not None and hasattr(self, "connection"):
+            self.connection.settimeout(budget)
+
     def _begin_request(self) -> None:
         self.request_id = uuid.uuid4().hex[:12]
-        self._request_started = time.monotonic()
+        self._request_started = getattr(self, "_request_received", time.monotonic())
         self._response_status = None
         IN_FLIGHT.enter()
 

@@ -1,0 +1,35 @@
+{
+  "kind": "synthetic_manual_worked_examples",
+  "rateCardId": "cn-local-reference",
+  "version": "2026.10.15",
+  "asOf": "2026-10-15",
+  "currency": "CNY",
+  "isMarketData": false,
+  "cases": [
+    {
+      "id": "card_minimum",
+      "order": {"productType": "名片", "quantityValue": 500, "quantityUnit": "张", "size": "90×54 mm", "paper": "300 g/m² 铜版纸", "printing": "双面四色", "finishing": "无", "printMode": "合版"},
+      "expected": {"status": "ready", "lineItems": {"material": "6.53", "print_setup": "60.00", "print_run": "2.67", "packing": "10.00", "minimum_adjustment": "20.80"}, "knownSubtotal": "79.20", "range": {"low": "100.00", "mid": "100.00", "high": "125.00"}}
+    },
+    {
+      "id": "flyer_matte",
+      "order": {"productType": "单页", "quantityValue": 500, "quantityUnit": "张", "size": "210×297 mm", "paper": "157 g/m² 铜版纸", "printing": "双面四色", "finishing": "哑膜", "printMode": "合版"},
+      "expected": {"status": "ready", "lineItems": {"material": "43.87", "print_setup": "60.00", "print_run": "34.30", "finishing:哑膜": "65.54", "packing": "10.00"}, "knownSubtotal": "213.71", "range": {"low": "181.65", "mid": "213.71", "high": "267.14"}}
+    },
+    {
+      "id": "booklet_separate_cover",
+      "order": {"productType": "宣传册", "quantityValue": 500, "quantityUnit": "本", "size": "148×210 mm", "paper": "157 g/m² 铜版纸", "pages": "16", "printing": "双面四色", "finishing": "哑膜", "binding": "骑马钉", "printMode": "合版", "productSpecs": {"coverPaper": "250 g/m² 白卡纸"}},
+      "expected": {"status": "ready", "lineItems": {"material": "131.16", "cover_material": "82.67", "print_setup": "60.00", "print_run": "136.75", "finishing:哑膜": "65.40", "binding:骑马钉": "95.00", "packing": "10.00"}, "knownSubtotal": "580.98", "range": {"low": "493.83", "mid": "580.98", "high": "726.23"}}
+    },
+    {
+      "id": "unknown_finish_partial",
+      "order": {"productType": "单页", "quantityValue": 500, "quantityUnit": "张", "size": "210×297 mm", "paper": "157 g/m² 铜版纸", "printing": "双面四色", "finishing": "镭射膜", "printMode": "合版"},
+      "expected": {"status": "partial", "lineItems": {"material": "43.87", "print_setup": "60.00", "print_run": "34.30", "packing": "10.00"}, "knownSubtotal": "148.17", "range": null}
+    },
+    {
+      "id": "missing_gsm_blocked",
+      "order": {"productType": "名片", "quantityValue": 500, "quantityUnit": "张", "size": "90×54 mm", "paper": "铜版纸", "printing": "双面四色", "finishing": "无", "printMode": "合版"},
+      "expected": {"status": "blocked", "lineItems": {}, "range": null}
+    }
+  ]
+}

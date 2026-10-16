@@ -78,7 +78,7 @@ class PrintOpsMCPTest(unittest.TestCase):
 
     def test_get_order_context_can_scope_a_multi_product_item(self):
         session_id = "context-item"
-        Agent(self.server.memory, session_id).chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        Agent(self.server.memory, session_id).chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0")
         self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
         response = self.request(server, 2, "tools/call", {
@@ -221,11 +221,13 @@ class PrintOpsMCPTest(unittest.TestCase):
     def test_multi_product_shared_low_confidence_blocks_selected_item(self):
         session_id = "shared-uncertain"
         agent = Agent(self.server.memory, session_id)
-        agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         # The first item is complete enough for the readiness check. Its
         # paper and size are inherited from the top-level compatibility view,
         # where the parser stores their provenance.
         agent.state["order"]["items"][0]["selectedOption"] = "balanced"
+        agent.state["fieldMeta"].pop("items.item-1.paper", None)
+        agent.state["fieldMeta"].pop("items.item-1.dimensions.finishedSize", None)
         agent.state["fieldMeta"]["paper"]["confidence"] = 0.5
         agent.state["fieldMeta"]["dimensions.finishedSize"]["confidence"] = 0.5
         agent.memory.save(session_id, agent.state)
@@ -404,7 +406,7 @@ class PrintOpsMCPTest(unittest.TestCase):
         })
         self.assertEqual(missing["error"]["data"]["code"], "invalid_arguments")
 
-    def test_handoff_is_not_a_deliverable_when_supplier_capability_is_unsupported(self):
+    def test_unconfigured_supplier_handoff_discloses_unverified_capability(self):
         session_id = "unsupported-handoff"
         agent = Agent(self.server.memory, session_id)
         agent.state["order"].update({
@@ -420,9 +422,10 @@ class PrintOpsMCPTest(unittest.TestCase):
             "name": "prepare_handoff", "arguments": {"sessionId": session_id},
         })
         payload = response["result"]["structuredContent"]
-        self.assertEqual(payload["toolResult"]["status"], "blocked")
-        self.assertEqual(payload["toolResult"]["reason"], "supplier_unsupported")
-        self.assertNotIn("handoff", payload)
+        self.assertEqual(payload["toolResult"]["status"], "ready")
+        self.assertFalse(payload["toolResult"]["supplierReadiness"]["verified"])
+        self.assertEqual(payload["toolResult"]["supplierReadiness"]["unsupported"], [])
+        self.assertTrue(payload["toolResult"]["requiresHumanConfirmation"])
 
     def test_handoff_accepts_a_valid_target_platform_without_mutating_session(self):
         session_id = "handoff-target"
@@ -451,7 +454,7 @@ class PrintOpsMCPTest(unittest.TestCase):
 
     def test_multi_product_selectors_are_range_checked_and_item_id_resolves(self):
         session_id = "multi-session"
-        Agent(self.server.memory, session_id).chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        Agent(self.server.memory, session_id).chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0")
         self.request(server, 1, "initialize", {"protocolVersion": MCP_PROTOCOL_VERSION})
 

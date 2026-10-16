@@ -71,7 +71,7 @@ class PatchBridgeTest(unittest.TestCase):
         self.assertEqual(payload["toolResult"]["acceptedFields"], ["size"])
         self.assertEqual(payload["toolResult"]["rejectedFields"], ["unknownField"])
         self.assertEqual(payload["toolResult"]["revision"], before["revision"] + 1)
-        self.assertEqual(payload["order"]["size"], "A4")
+        self.assertEqual(payload["order"]["size"], '210×297 mm')
         self.assertEqual(payload["fieldMeta"]["size"]["confidence"], 0.96)
         self.assertEqual(payload["fieldMeta"]["size"]["evidence"]["quote"], "A4")
         self.assertEqual(payload["planMeta"]["knowledgeVersion"], KNOWLEDGE_VERSION)
@@ -121,7 +121,7 @@ class PatchBridgeTest(unittest.TestCase):
     def test_item_id_patch_is_scoped_to_one_product(self) -> None:
         sid = "items"
         agent = Agent(Memory(self.db), sid)
-        agent.chat("做 500 张名片和 1000 张折页，A4，157g哑粉纸，双面四色，下周内")
+        agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
         before = Agent(Memory(self.db), sid).state
         item_id = before["order"]["items"][1]["itemId"]
         server = PrintOpsMCP(self.db, bound_session_id=sid, capabilities="L0,L1")
@@ -199,7 +199,7 @@ class PatchBridgeTest(unittest.TestCase):
         self.assertEqual(conflicts[0]["error"]["data"]["code"], "revision_conflict")
         final = Agent(Memory(self.db), sid).state
         self.assertEqual(final["revision"], before + 1)
-        self.assertIn(final["order"]["size"], {"A4", "A5"})
+        self.assertIn(final["order"]["size"], {'210×297 mm', '148×210 mm'})
 
     def test_reusing_patch_id_with_different_content_is_rejected(self) -> None:
         sid = "id-conflict"
@@ -222,7 +222,7 @@ class PatchBridgeTest(unittest.TestCase):
                              {"name": "apply_order_patch", "arguments": changed})
         self.assertEqual(second["error"]["data"]["code"], "idempotency_conflict")
         final = Agent(Memory(self.db), sid).state
-        self.assertEqual(final["order"]["size"], "A4")
+        self.assertEqual(final["order"]["size"], '210×297 mm')
         self.assertEqual(final["revision"], first["result"]["structuredContent"]["revision"])
 
     def test_semantically_invalid_quantity_patch_does_not_write_order(self) -> None:

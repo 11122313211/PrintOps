@@ -1,252 +1,188 @@
 <div align="center">
 
-# PrintOps — Print Order Agent
+# PrintOps Print Order Agent
 
-**Turn “I need 500 brochures” into a complete, quote-ready, hand-off-ready print order**
+**Turn a vague print requirement into a local handoff with reviewable specifications and traceable evidence**
 
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0--candidate-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
-**Zero dependencies · Local-first · Rule mode stays local · Model mode sends only bounded context · Nothing ships without human confirmation**
+**Python standard-library runtime · Local first · Optional models · Human review and confirmation**
 
 ![PrintOps workbench](docs/screenshots/workbench.png)
 
 </div>
 
----
+## Who it helps
 
-PrintOps is a local-first print order agent for marketing, design, and procurement teams. Describe what you want to print; the agent fills in the product-specific parameters step by step, explains the trade-offs, produces three comparable production plans (with reference prices and lead times), and ends with an order hand-off whose **every field is traceable and human-confirmed**.
+PrintOps helps marketing, design, and procurement users without print production expertise. Start with a purpose and approximate requirement, then supply the product, quantity, dimensions, material, colors, and deadline as prompted. Compare production options, inspect their evidence, and prepare a local handoff for supplier review.
 
-> Positioning: a **pre-order intake and communication** tool. It does not place orders automatically, does not replace prepress checks, and does not promise real quotes — every outward-facing action stops before the human-confirmation gate.
+**North star**: a first-time user independently completes an accurate handoff with reviewed production parameters and traceable evidence within 10 minutes. Timing starts with the first valid requirement and includes clarification, waiting, edits, confirmation, and export. Completion requires opening the exported file and checking that it matches the current confirmed order version. Filled fields or a generated draft are intermediate states.
 
-> Release status: this is the `1.2.0` code baseline in candidate status, focused on local runtime hardening and a zero-dependency Markdown renderer. On top of the v1.1.0 controlled MCP/dsh integration it adds the model tool protocol and a session-context endpoint, graceful shutdown for MCP and HTTP, concurrency and timeout bounds, structured request logging, and a startup self-check; runtime dependencies remain limited to the Python standard library. The 20-case real-corpus gate, manual walkthrough, real dsh headless/model end-to-end checks, and browser smoke tests are still pending, so do not treat it as a general stable release. The v1.0.0 order kernel and the v1.1.0 integration boundary remain the historical baseline; the controlled live supplier integration planned for v1.2 moves to v1.3+.
+The initial study assigns one primary task to each of 8 non-expert participants who did not develop the product: 3 business-card, 3 flyer, and 2 standard-brochure tasks. The target is at least 7 independently completed, qualified tasks within 10 minutes, with zero critical dimension/quantity errors, item mix-ups, or stale confirmations. All participants must understand that estimates are not supplier quotes and no order has been sent. **Human validation is still pending**; fixed tasks, grading rules, and blank records are in the [user walkthrough pack](docs/USER_WALKTHROUGH.md).
 
-**North star**: let a non-printer person turn a vague requirement into a complete, reliable, traceable print order within 10 minutes.
+## Current capabilities and boundaries
 
-## ✨ Features
+- `VERSION` remains the **1.2.0 candidate baseline**, with unreleased work in the workspace. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
+- Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
+- The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
+- Current domain rules and demonstrated inputs use Chinese. This English README does not establish tested English conversation support.
 
-**From one sentence to one order**
-- 🗣️ Natural-language intake: product type, quantity, size, paper, color, finishing, binding, deadline, budget; supports revisions and negations (“change quantity to 1200”, “no lamination”)
-- 📐 Four size semantics: finished size / expanded size / die-cut size / package 3D size; labeled inputs are routed by meaning; inner vs outer box sizes supported
-- 🧩 Multi-product orders: each item gets a stable `itemId` with its own parameters, plan, and hand-off state
-- 💬 Chat bubbles render Markdown (headings, lists, tables, code, quotes, links); text is HTML-escaped before parsing, only http(s)/mailto links are emitted, and the composer has a preview toggle
+## Quick start
 
-**Professional rules up front (explainable, versioned)**
-- 🏭 Gang-run vs dedicated press: per-plan print mode, batch color-shift caveats, spot-color limits, dedicated-press premium factor
-- 💰 Reference prices: sample price parameter table (category base × quantity tier × finishing factor × print-mode factor, versioned) — explicitly “not a quote”
-- 📏 Minimum-quantity hints, imposition hints (sheet counts and utilization on 大度/正度 sheets), saddle-stitch page-count rules, and other trade practices
-- 🧾 Category-specific parameters: a 17-product catalog (business cards, labels, boxes, bags, cups, wide-format prints…) with category-aware follow-up questions
-
-**Explainable, confirmable**
-- 🔍 Field provenance: every field records its source (user / rule / model) and confidence; low-confidence production fields block the hand-off until confirmed
-- 🧭 Run traces: per-run step events (perceive → plan → tools) are inspectable; knowledge versions are traceable
-- ✋ Human-confirmation gate: hand-offs and quote requests require explicit confirmation; suppliers are never contacted automatically
-
-**Files & export**
-- 📄 In-browser PDF pre-check (page count, page boxes, color-space and font-embedding clues); the artwork never leaves your machine
-- 📦 Hand-off text + JSON / CSV / Markdown export
-
-**Local tools and optional model collaboration**
-- 🔧 Eight whitelisted tools always run through the local `Agent.call_tool()` gateway: validation, process recommendation, price estimation, term explanation, supplier capability matching, quote preparation, hand-off, and file preflight
-- 🔌 Supports OpenAI-compatible native `tools[].function`; gateways without native tools automatically fall back to the JSON envelope contract
-- 🧠 Tool planning is bounded to three rounds; an identical tool name plus arguments cannot loop forever, and tool results are returned for model synthesis
-- 🛟 If the model only returns prose, deterministic local intent rules still call required tools: `validate_order` for missing fields, `estimate_price` for price requests, `explain_print_term` for terminology, and `recommend_processes` for complete-order plan requests
-- 🧱 The model never owns order state: SQLite is authoritative, while the model receives a compact order digest and constrained tool arguments; quotes and hand-offs remain behind human confirmation
-
-## 🖼️ UI Preview
-
-| Plan comparison | Mobile (390px) |
-| --- | --- |
-| ![Plan comparison](docs/screenshots/plan-comparison.png) | <img src="docs/screenshots/mobile-390.png" width="260" alt="Mobile"> |
-
-## 🚀 Quick Start
-
-Requires **Python 3.9+**. No third-party packages.
+Running the product requires **Python 3.9+** and a browser. npm, Playwright, and third-party Python packages are not runtime dependencies.
 
 ```bash
 git clone https://github.com/11122313211/PrintOps.git
 cd PrintOps
-python3 server.py         # macOS / Linux; on Windows run start_windows.bat
+python3 server.py --check
+python3 server.py
 ```
 
-Open <http://localhost:4174/> — health check: <http://localhost:4174/api/health> → `{"ok": true}`
+On Windows, you can double-click `start_windows.bat` in the project directory. Open [http://localhost:4174/](http://localhost:4174/) after startup; the health endpoint is [http://localhost:4174/api/health](http://localhost:4174/api/health). **Do not double-click `index.html` or use `file://`**: the page needs the local API. No model configuration is needed for the rule-based mode.
 
-> 🔐 On first start the terminal prints a **local access token** (`X-PrintOps-Token`). The served page carries it automatically; for curl add `-H "X-PrintOps-Token: <token>"`.
+The terminal displays a local access token, which the served page supplies automatically. curl requests need the `X-PrintOps-Token` header, except for health checks. Defaults are `PRINTOPS_STORE=sqlite` and `PRINTOPS_MEMORY_PATH=data/agent.sqlite3`. The `memory` backend is for temporary demos or tests; its data disappears when the process exits. See the [storage contract](docs/STORAGE_CONTRACT.md) for history, archive, and full backups.
 
-### Connecting to an internal model endpoint
+| Startup issue | Next action |
+| --- | --- |
+| The address starts with `file://` | Start the service and use the HTTP address above. |
+| Connection fails / health endpoint is unavailable | Check that the server process is running, inspect its terminal, and run `python3 server.py --check`. |
+| Authentication fails after a restart | Reopen the served page to obtain the current process token; do not reuse an old token. |
+| Port 4174 is occupied | Identify the listener first: `lsof -nP -iTCP:4174 -sTCP:LISTEN` on macOS/Linux; `Get-NetTCPConnection -LocalPort 4174 -State Listen` in PowerShell. |
 
-Model URLs reject loopback, private-network, and other internal addresses by default. If the model is intentionally hosted on a company network reachable through your VPN/DNS, opt in when starting the local server:
+## A complete use-case example
+
+This is a **manually authored demonstration**. On 2026-10-15, an in-memory Agent without a model was used to verify the two inputs, option selection, draft generation, and local confirmation. This is not a human timing result or acceptance evidence for the new UI. UI entry points may change during development.
+
+1. Enter the tested Chinese input: `门店开业要发给路人，约500张，下周要用。`
+   It describes about 500 copies for a store-opening giveaway next week. The agent first asks which print product is wanted. Purpose does not replace production specifications, and approximate quantities need review.
+2. Once the example user chooses a flyer, enter: `做单页，数量确定500张，成品210×297mm，157g铜版纸，双面四色，下周内，无特殊工艺。`
+   The agent normalizes the values to 500 sheets, `210 × 297 mm` (A4), and `157 g/m²` coated paper, then offers three options. If unsure about a material, ask for an explanation or recommendation and review the selected parameters. This example is not a universal default specification.
+3. Inspect differences and cost assumptions, then select the economy option (`经济方案`) for this example. Review the quantity, finished size, material, double-sided four-color printing, no special finishing, and no binding. Other options may change material or finishing and require another review.
+4. Generate the handoff draft and inspect its fields and supplier questions. No file is available in this example. Record that the file is pending and price/deadline require supplier review, then explicitly confirm locally.
+5. Export and open the file; check its contents, confirmation state, and version. After changing quantity, size, material, or option, regenerate and confirm again. The review view provides authoritative current-version JSON/CSV/Markdown exports and A4 printing; full history backups serve recovery and audit. See [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md).
+
+### Handoff content example
+
+This is an excerpt of the **local draft generated by the rule-based run**, showing specifications and boundaries, not a sent order. Actual identifiers, revision, and confirmation time come from the run record. Domain content remains Chinese:
+
+```text
+目标平台：通用印刷平台
+供应商状态：仅本地草稿，生产能力、价格和交期需确认
+印刷品：单页
+数量：500 张
+成品尺寸：210×297 mm
+纸张/材料：157 g/m² 铜版纸
+印刷颜色：双面四色
+表面工艺：无特殊工艺
+装订/后道：无需装订
+交期：下周
+```
+
+The local confirmation note is `仅核对本地交接内容；文件待交付，价格与交期待供应商复核。` It acknowledges review of the local content while leaving the file, price, and deadline open for further work. It does not create a supplier commitment. Pending field candidates cannot be treated as approved production specifications in a handoff.
+
+## Capability matrix
+
+| Capability | Available now | Limits and evidence |
+| --- | --- | --- |
+| Product recognition and parameter intake | 17 catalog types, category questions, revisions/negations, independent product items | Catalog size does not imply complete pricing coverage. Accuracy on real customer language still needs a real corpus. |
+| Dimensions and evidence | mm normalization; cm/in and ISO 216 aliases; separate finished/expanded/die-cut/unspecified-package/inner/outer dimensions | Original text and candidates are retained. Low-confidence production parameters require confirmation. See the [order contract](docs/ORDER_CONTRACT.md). |
+| Conditional illustrative pricing | Business cards, flyers, digital printing, invitations; brochures/books, folded leaflets, and some packaging/labels/posters under category-specific conditions | Quantity units, material, sides, and pricing dimensions must be explicit. Folded leaflets need expanded size; books need pages/binding; box dimensions cannot replace a flat die-cut area. See [pricing coverage](docs/PRICING.md#当前覆盖范围). |
+| Uncalibrated categories | Parameters can be collected for PVC/PVC cards, hang tags, multipart forms, envelopes, bags, and paper cups | Pricing is blocked rather than using a generic category price. Unknown processes return known costs and unpriced items without a full range. |
+| Explainable estimates | Decimal costs for material, setup, printing, finishing, binding, die-cutting, packaging, and minimum-charge adjustments | `ready` gives a full illustrative range, `partial` a known subtotal, and `blocked` actionable reasons. Basis is tax-exclusive and ex-works; sources, versions, and exclusions are inspectable. |
+| Basic file checks | Local browser PDF page count, page boxes, color-space and embedded-font clues; originals are not uploaded | Not professional prepress validation. An absent file must remain marked as pending. |
+| Memory and recovery | Authoritative backend OrderStore; SQLite/memory/custom, CAS, full history, archive, and backup | SQLite is the built-in default. Memory is temporary; enterprise databases require trusted registered implementations. |
+| Supplier connections | Generic local export, unconfigured suppliers, local mock, connector protocol and contract tests | No real supplier connection. Mock/sandbox results do not verify production capability. |
+| Handoff and confirmation | Authoritative handoff, local confirmation, JSON/CSV/Markdown, A4 printing, separate full history backup | Confirmation is not an authenticated corporate signature; export is not transmission. Exports recheck the current version; edits invalidate prior confirmation. |
+
+## Interface previews
+
+These are historical Chromium screenshots from the **2026-10-15 uncommitted development workspace on the 1.2.0 candidate baseline**, using synthetic demonstration orders; the current UI-position tuning is represented by the live page and browser suites. The stages are intake, comparison, and review/handoff. The 390px image is a desktop narrow viewport, not real mobile/touch acceptance.
+
+| Option comparison | 390px narrow viewport |
+| --- | --- |
+| ![Option comparison](docs/screenshots/plan-comparison.png) | <img src="docs/screenshots/mobile-390.png" width="260" alt="390px narrow-viewport preview"> |
+
+## Development and acceptance
+
+The Python runtime and unit/contract checks use the standard library. **Browser development tests additionally require Node.js 18+, npm, pinned Playwright, and Chromium**. These are not needed to start the product.
+
+```bash
+python3 -m unittest discover -s tests -p "test_*.py"
+PYTHONPATH=. python3 tests/evaluate_agent.py             # Development report
+PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
+python3 tools/secret_scan.py
+python3 tools/repo_guard.py
+python3 tools/dsh_mcp_smoke.py
+npm ci
+npm run test:browser:install
+npm run test:browser
+npx playwright test --config tests/journey.config.mjs
+npx playwright test --config tests/ui_positions.config.mjs
+npx playwright test --config tests/ui_focus.config.mjs
+# Optional second browser engine
+npx playwright install webkit
+PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/journey.config.mjs
+PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_positions.config.mjs
+PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.mjs
+```
+
+The strict release gate requires synthetic field accuracy ≥90%, completion ≥80% on completable cases, and at least 20 real desensitized orders with field accuracy ≥95%. A missing, empty, invalid, insufficient, or inaccurate real corpus blocks release with exit code 1. The real corpus is currently empty. Success without `--release-gate` is not a release approval.
+
+On 2026-10-16, all **463 Python tests passed**. Chromium and WebKit each passed **34 journey scenarios**, Chromium passed **12 smoke scenarios**, and the UI position and focus suites passed **16 and 14 scenarios**. The 111 synthetic cases achieved 100% field accuracy and 13/14 basic completion (93% rounded), which is not a human handoff success rate. The strict release check failed as expected with zero real cases. See [browser acceptance](docs/BROWSER_JOURNEY.md) and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Firefox could not launch in this host environment; real phones, human walkthroughs, and real dsh/models remain unverified.
+
+## Advanced: models, MCP, and runtime boundaries
+
+### Optional models
+
+Without a model, the rule-based Agent, default SQLite storage, and basic PDF checks remain local. With an OpenAI-compatible model, the current message, bounded history, compact order, and tool results are sent to the configured endpoint; check that service's logging and retention policy. Model failures retain the rule-based fallback.
+
+Requests include the most recent 8 messages (up to 2,000 characters each), up to 12KB each for order summaries and tool results, plus nesting and collection bounds. Planning is capped at 3 tool rounds, with tools executed through `Agent.call_tool()`. Tool arguments cannot replace authoritative local state with an arbitrary full order. JSON envelopes provide a fallback when native `tools[].function` is unavailable. When the model does not request a tool, local intent rules supply necessary validation, estimates, terminology explanations, or recommendations.
+
+For a trusted company model on a private network, explicitly enable the address exception:
 
 ```bash
 PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1 python3 server.py
 ```
 
-Then enter an OpenAI-compatible base URL such as `https://llm.internal.example/v1`; the server requests its `/chat/completions` path. This is a documentation placeholder, not the project's service address. The option only relaxes the host-network check; protocol, credentials, and query/fragment URL rules remain enforced. It does not fix DNS, so connect to the company network/VPN or configure company DNS if the hostname cannot resolve. Do not expose the local server to the public internet while this option is enabled.
+Enter the company's base URL in settings, for example `https://llm.internal.example/v1`; requests target `/chat/completions`. This is an example address. The switch does not fix DNS: connect to the company network/VPN first. Private and loopback hosts are rejected by default; other URL checks remain active with the exception enabled. Do not expose the local service publicly.
 
-Privacy boundary: without a configured model, the rule Agent, SQLite memory, and PDF preflight run locally. When a model is enabled, the current user message, bounded history, compact order digest, and bounded tool results are sent to the endpoint you configure. Review that endpoint's logging, retention, and compliance policy first; API keys are not placed in chat content or run traces.
-
-### Local agent host without npm/pnpm
-
-When Node, npm, pnpm, or the real `dsh` CLI is unavailable, the dsh-facing
-contract can still be exercised with the Python standard library:
+### Local host without npm/pnpm
 
 ```bash
 python3 tools/printops_local_host.py \
   --session-id local-demo \
-  --message "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"
+  --message "做500张名片，成品90×54mm，300g铜版纸，双面四色，下周内"
 ```
 
-The command discovers the five project skills, runs the real stdio launcher
-through MCP `initialize`, `tools/list`, and read-only smoke calls, then passes
-the message to the deterministic local Agent. It does not call a DeepSeek
-model and does not require npm/pnpm; `runtime: "python-stdlib"` makes that
-mode explicit. Add `--memory-path data/agent.sqlite3` for persistence, or
-`--interactive` for one JSON result per input line.
+This standard-library host discovers five `.dsh/skills`, verifies the MCP boundary through the stdio launcher, and runs the rule-based Agent. It does not call a DeepSeek model or establish real dsh headless acceptance. Use `--interactive` for line-by-line interaction or `--memory-path data/agent.sqlite3` to retain the session. For boundary checks alone, run `python3 tools/dsh_mcp_smoke.py`.
 
-For an MCP-only check:
+### Security and data
 
-```bash
-python3 tools/dsh_mcp_smoke.py
-```
+APIs other than health require a process-local token; cross-origin requests carrying an Origin are rejected. Static files use an allowlist, so source, runtime data, and `.git` are not served. Model keys do not enter conversations, run traces, or handoff exports. Local `data/llm_config.json` uses mode 600; environment variables avoid writing that file. SQLite uses WAL and busy_timeout, with corrupt sessions quarantined. See the architecture, storage contract, and roadmap for further boundaries.
 
-This is a local fallback validation path, not a real dsh headless + model
-end-to-end run.
-
-### Model data flow and context budget
-
-```text
-user message
-  → rule perception + SQLite memory
-  → optional model planning
-  → local Agent.call_tool()
-  → bounded tool result returned for model synthesis
-  → UI order state, tool result, and runTrace
-```
-
-The planner uses explicit budgets so long sessions do not resend the full order,
-tool schemas, and unbounded history on every round:
-
-- the most recent 8 history messages, with at most 2,000 characters each
-- a compact order digest capped at 12KB and tool results capped at 12KB; nested depth, list length, and object keys are also bounded
-- native-tool follow-up rounds carry tool names only; the JSON fallback carries compact parameter schemas when needed
-- tool arguments do not carry the full `order`; the local session is authoritative, while selectors such as `itemIndex` and `platformId` are validated at the gateway
-
-Consequently, a model that does not emit a tool call cannot silently skip required read-only validation, pricing, terminology, or process recommendation. If the model or internal endpoint is unavailable, the deterministic local Agent continues to operate.
-
-<details>
-<summary><b>Port conflicts</b></summary>
-
-```bash
-# macOS / Linux
-lsof -nP -iTCP:4174 -sTCP:LISTEN
-# Windows PowerShell
-Get-NetTCPConnection -LocalPort 4174 -State Listen
-```
-
-Dev fallback: `PRINTOPS_PORT=4174 python3 server.py` (commits and acceptance always use 4174).
-
-</details>
-
-## 💬 Examples
-
-| You say | The agent does |
-| --- | --- |
-| 500 A4 brochures, 32 pages saddle-stitched, 157g matte paper, full color both sides, next week | Builds the order → three plans (print mode / reference price / lead time comparison table) → waits for your pick |
-| A batch of 5×5cm round clear vinyl stickers | Recognizes the small size plus label material/shape; asks about adhesive and use case |
-| 500 lid-and-base boxes, 60*40*20cm, inner size | Recognizes box structure and 3D size; stores the inner-size semantics |
-| Change quantity to 1200, no lamination | Updates the order, invalidates stale plans, re-recommends |
-
-The plan section renders a **side-by-side comparison table** (print mode / material / finishing / binding / reference price / lead time / fit) with the recommended column highlighted. Reference prices come from a versioned sample price table and are explicitly not quotes.
-
-## 🧠 How It Works
-
-```
-understand → clarify category → complete parameters → recommend plans → preflight files
-          → prepare quotes → human confirmation → platform hand-off / export
-```
-
-**Division of labor: the model understands and explains, rules constrain, tools execute, humans confirm high-risk results.**
-
-| Module | Responsibility |
-| --- | --- |
-| `nlu.py` | Rule-based perception: extraction + confidence grading (explicit evidence ≥0.9, weak inference <0.75 requires confirmation) |
-| `order_model.py` | Order data contract, quantity/size normalization, `schemaVersion` migrations |
-| `tools.py` | Eight whitelisted tools: validation, plan recommendation, pricing, term explanation, supplier capability matching, quote preparation, hand-off, and file preflight |
-| `agent.py` | Session memory (SQLite WAL), workflow stage machine, tool gateway, model collaboration (max three rounds) |
-| `llm_adapter.py` | Optional OpenAI-compatible planner with native tools/JSON fallback, context budgets, and rule fallback; built-in SSRF host validation |
-| `mcp_server.py` | Standard-library JSON-RPC stdio MCP server with session binding, L0/L1 capability boundaries, and argument validation |
-| `tools/dsh_mcp_launcher.py` | npm/pnpm-free trusted dsh/MCP launcher; rejects arbitrary sessions and L2 external writes |
-| `product_knowledge.py` | Product catalog, print knowledge, sample price parameter table (all versioned with sources) |
-| `supplier_adapters.py` | Platform capability profiles and per-category field-mapping protocol |
-
-Full design in [Architecture & data contracts](docs/ARCHITECTURE.md) (Chinese).
-
-## 🔐 Security Model
-
-- **Local access token**: every endpoint except `/api/health` requires `X-PrintOps-Token` (a per-process random token injected into the served page); cross-origin requests get 403
-- **Static whitelist**: only `/`, `/index.html`, `/app.js`, `/markdown.js`, `/styles.css` are served; source, docs, and runtime data return 404
-- **SSRF protection**: LLM endpoint URLs reject loopback / private / CGNAT / reserved / link-local hosts by default; trusted internal endpoints require the explicit `PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1` opt-in
-- **API keys**: stored only in local `data/llm_config.json` (permission 600), never in logs, exports, or Git; the UI warns about plaintext storage — prefer environment variables
-- **Durability**: SQLite runs with WAL and a 5s busy timeout; corrupted sessions are quarantined (backed up to `data/corrupted/`) without taking the service down
-
-Known limitations and the hardening backlog live in the [ROADMAP](docs/ROADMAP.md).
-
-## 🧪 Testing & Quality
-
-```bash
-python3 -m unittest discover -s tests -p "test_*.py"  # unit / contract / security tests (count varies by version)
-python3 tests/evaluate_agent.py                        # 111-case desensitized order evaluation + real-corpus evaluation
-python3 tools/repo_guard.py                            # check the local-file Git boundary
-python3 tools/secret_scan.py                           # secret scanning
-python3 tools/dsh_mcp_smoke.py                        # MCP stdio/L0 tool-boundary smoke
-```
-
-Release gates: the synthetic suite currently has 100% field accuracy and completion on completable cases; the real desensitized corpus is still pending, and the ≥95% hard accuracy gate activates once 20 cases are curated. The project does not depend on GitHub Actions; run the Python checks locally before release. The v1.2.0 runtime and rendering gates, plus the inherited MCP/dsh and context gates, are listed in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md).
-
-The current worktree holds 325 Python tests (the committed v1.1.0 baseline has 236),
-alongside passing MCP smoke, context-boundary tests, and the offline native-tool loop.
-Real dsh headless, three live internal model walkthroughs, and browser-level smoke
-tests remain release acceptance items.
-
-The 1.2 release checklist lives in [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md) (Chinese) and retains the v1.0.0 and v1.1.0 historical gates.
-
-## 🗺️ Roadmap
-
-- **v1.2.0 (current code baseline, candidate status)**: local runtime hardening and a zero-dependency Markdown renderer on top of the v1.1.0 integration boundary; real-corpus, manual, real dsh/model, and browser gates remain open
-- **v1.1.0 (historical baseline)**: the v1.0.0 order kernel plus MCP/dsh skill boundaries, an npm/pnpm-free local host, native/JSON tool-planning fallback, a bounded three-round tool loop, and bounded context transport
-- **v1.3+ (planned)**: controlled supplier integration (capability profiles + field adapters → quote drafts → human-confirmed submission), real quote write-back, and production lead-time scheduling; no live supplier submission is included today
-- Ongoing: replacing synthetic evaluation cases with real desensitized orders, expanding the trade-rule library, LLM lock and session isolation improvements
-
-See the full [ROADMAP](docs/ROADMAP.md).
-
-## 📖 Documentation
+## Documentation and roadmap
 
 | Document | Contents |
 | --- | --- |
-| [Architecture & data contracts](docs/ARCHITECTURE.md) | Module responsibilities, field contracts, confidence & migration strategy (Chinese) |
-| [Roadmap](docs/ROADMAP.md) | Milestones and the hardening backlog (Chinese) |
-| [1.2 release checklist](docs/RELEASE_CHECKLIST.md) | v1.2.0 runtime and rendering gates plus inherited v1.0.0/v1.1.0 corpus, walkthrough, and integration gates (Chinese) |
-| [File management & publishing boundary](docs/FILE_MANAGEMENT.md) | GitHub Desktop scope, local runtime data, and pre-push checks (Chinese) |
-| [DeepSeek Harness print-agent plan](docs/plan/dsh-print-agent.md) | dsh, first-party print skills, PrintOps MCP, and staged acceptance gates (Chinese) |
+| [Next-stage product and design plan](docs/NEXT_STAGE_PRODUCT_DESIGN_PLAN.md) / [acceptance](docs/NEXT_STAGE_ACCEPTANCE.md) / [UI states](docs/UI_STATES.md) | Goals, implementation evidence, pending human validation, and next actions. |
+| [User walkthrough pack](docs/USER_WALKTHROUGH.md) / [Metrics definitions](docs/plan/appendix-metrics.md) | Fixed tasks, 8-person allocation, independent review, blank records, and event design. |
+| [Roadmap](docs/ROADMAP.md) / [Release checklist](docs/RELEASE_CHECKLIST.md) | Current priorities, implemented work, and open gates. |
+| [Acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md) / [Browser acceptance](docs/BROWSER_SMOKE.md) | Actual evidence and unverified scope. |
+| [Architecture](docs/ARCHITECTURE.md) / [Order contract](docs/ORDER_CONTRACT.md) | Modules, field evidence, dimension semantics, and authoritative state. |
+| [Storage](docs/STORAGE_CONTRACT.md) / [Pricing](docs/PRICING.md) / [Supplier connectors](docs/SUPPLIER_CONNECTORS.md) | Replaceable contracts, illustrative costs, and future integration conditions. |
+| [Storage operations](docs/STORAGE_OPERATIONS.md) / [Worked pricing examples](docs/PRICING_WORKED_EXAMPLES.md) / [Connector extension guide](docs/SUPPLIER_EXTENSION_GUIDE.md) / [Request budgets](docs/RUNTIME_BUDGET.md) | Backup/recovery, manual cost review, local extension examples, and runtime boundaries. |
+| [File management](docs/FILE_MANAGEMENT.md) / [dsh integration](docs/plan/dsh-print-agent.md) | Commit boundaries and optional integration. |
+| [Historical development plan](docs/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
 
-## 🤝 Contributing
+v1.2.0 remains a candidate baseline. The next priority is the local order workflow and independent acceptance. Real supplier integration planned for v1.3+ separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
 
-Issues and PRs are welcome. Before submitting:
+## Contributing and license
 
-```bash
-python3 -m unittest discover -s tests -p "test_*.py"
-python3 tests/evaluate_agent.py
-python3 tools/repo_guard.py
-python3 tools/secret_scan.py
-```
+Issues and PRs are welcome. Run relevant Python/browser regressions, development evaluation, and secret scanning before submission. Releases additionally require the strict gate and recorded evidence. [MIT](LICENSE) © PrintOps contributors.
 
-## 📄 License
-
-[MIT](LICENSE) © PrintOps contributors
-
-## 🙈 Acknowledgments
-
-The product catalog and parameter structure reference public navigation from Shengda Printing ([sd2000.com](https://www.sd2000.com/)) and similar public sources, used only to align parameter conventions. They do not represent any supplier's live prices, capacity, or lead times.
+The category catalog references public navigation from Shengda Printing ([sd2000.com](https://www.sd2000.com/)) and other public material for parameter organization only, not real-time prices, capacity, or lead times.

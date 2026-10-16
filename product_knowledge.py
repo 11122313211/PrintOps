@@ -72,44 +72,12 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
     },
 }
 
-# Example price parameters consumed by ``estimate_price``.  Every number here
-# is SAMPLE DATA for order-of-magnitude guidance only; it is versioned so a
-# quote reference can be traced to the exact table that produced it.
-PRICE_MODEL_VERSION = "2026.09.05"
-PRICE_MODEL: dict[str, Any] = {
-    "version": PRICE_MODEL_VERSION,
-    "disclaimer": "示例参数，仅用于费用量级参考，不构成报价；实际价格以供应商回复为准。",
-    # Per-order base covering plate/make-ready effort for a small job.
-    "categories": {
-        "名片": 60, "单页": 120, "折页": 150, "数码印刷": 100, "海报": 90,
-        "喷画": 130, "PVC": 150, "宣传册": 300, "画册": 380, "联单": 200,
-        "信封封套": 220, "标签": 260, "吊牌": 240, "包装盒": 480,
-        "手提袋": 450, "纸杯": 400, "邀请函": 180,
-    },
-    "defaultBase": 200,
-    # Quantity tiers approximate per-unit price steps; going over a tier
-    # boundary drops the total factor instead of pricing linearly.
-    "quantityTiers": [
-        {"upTo": 500, "factor": 1.0},
-        {"upTo": 1000, "factor": 0.9},
-        {"upTo": 5000, "factor": 0.75},
-        {"upTo": 20000, "factor": 0.62},
-        {"upTo": None, "factor": 0.55},
-    ],
-    # Additive-process multipliers; the highest matching factor wins.
-    "finishingFactors": {
-        "覆膜": 1.15, "哑膜": 1.15, "亮膜": 1.1, "烫金": 1.35, "烫银": 1.35,
-        "局部UV": 1.3, "局部 UV": 1.3, "击凸": 1.25, "压凹": 1.2, "上光": 1.08,
-        "专色": 1.2,
-    },
-    # Press make-ready floor: tiny orders cannot fall below this.
-    "minimumTotal": 100,
-    # 专版单独制版的版费/开机摊销系数（合版为基准 1.0）。
-    "modeFactors": {"合版": 1.0, "专版": 1.6},
-    # 常规生产周期示例（不含运输与打样；免责见方案区说明行）。
-    "leadHints": {"合版": "2-4 天", "专版": "5-8 天"},
-    "band": {"low": 0.85, "high": 1.25},
-}
+# Compatibility facade; all monetary parameters live in a versioned JSON card.
+# This card is deliberately illustrative and is never a supplier price feed.
+from pricing_engine import load_rate_card
+
+PRICE_MODEL: dict[str, Any] = load_rate_card()
+PRICE_MODEL_VERSION = PRICE_MODEL["version"]
 
 
 PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
@@ -224,6 +192,7 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
             {"key": "labelMaterial", "label": "面材", "required": True, "question": "标签面材用铜版不干胶、透明膜、PET 还是其他？", "hint": "面材决定耐水、耐磨、透明效果和成本。"},
             {"key": "labelShape", "label": "标签形状", "required": True, "question": "标签是方形、圆形还是异形？", "hint": "异形标签需要刀模；圆角也要明确半径或效果。"},
             {"key": "adhesive", "label": "胶水类型", "required": False, "question": "需要普通胶、可移胶还是强粘胶？", "hint": "贴纸的使用表面和温度决定胶水选择。"},
+            {"key": "labelFormat", "label": "交付形式", "required": False, "question": "标签按张交付还是卷装？", "hint": "张装和卷装使用不同设备；本地估算目前仅标定张装。"},
         ],
         "defaultBinding": "模切 / 排废",
         "recommendation": "先确认贴在哪里、是否接触水/油，再选面材和胶水。",

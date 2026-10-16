@@ -10,11 +10,13 @@ data committed to the repository.
 from __future__ import annotations
 
 import json
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from contextlib import redirect_stdout
 
 _TESTS_DIR = str(Path(__file__).resolve().parent)
 if _TESTS_DIR not in sys.path:
@@ -30,7 +32,7 @@ SYNTHETIC_REPORT = {
 
 GOOD_CASE = {"name": "真实-名片", "tag": "真实",
              "turns": [{"text": "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"}],
-             "expected": {"productType": "名片", "quantity": "500 张", "size": "A4"}}
+             "expected": {"productType": "名片", "quantity": "500 张", "size": '210×297 mm'}}
 BAD_CASE = {"name": "真实-错例", "tag": "真实",
             "turns": [{"text": "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"}],
             "expected": {"productType": "包装盒"}}
@@ -95,25 +97,31 @@ class RealCorpusGateTest(unittest.TestCase):
         self.assertEqual(v(enough, {"cases": 20, "fieldAccuracy": 94.9}, "ok"), "fail")
         self.assertEqual(v(enough, {"cases": 20, "fieldAccuracy": 95}, "ok"), "pass")
         self.assertEqual(v(enough, {"cases": 20, "fieldAccuracy": 100}, "ok"), "pass")
+        self.assertEqual(v(enough, None, "ok"), "fail")
 
 
 class RealCorpusMainExitCodeTest(unittest.TestCase):
-    def run_main(self, corpus_payload: str):
+    def run_main(self, corpus_payload: str | None, *flags: str, synthetic_patch=None):
         """Run main() with the slow synthetic suite stubbed to a perfect report."""
         real_run_suite = evaluate_agent.run_suite
 
         def stub_suite(cases=None):
             if cases is None:
-                return dict(SYNTHETIC_REPORT)
+                return {**SYNTHETIC_REPORT, **(synthetic_patch or {})}
             return real_run_suite(cases)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "eval_cases_real.json"
-            path.write_text(corpus_payload, encoding="utf-8")
+            if corpus_payload is not None:
+                path.write_text(corpus_payload, encoding="utf-8")
+            output = io.StringIO()
             with mock.patch.object(evaluate_agent, "REAL_CORPUS_PATH", path), \
                  mock.patch.object(evaluate_agent, "run_suite", stub_suite), \
-                 mock.patch.object(evaluate_agent.sys, "argv", ["evaluate_agent.py"]):
-                return evaluate_agent.main()
+                 mock.patch.object(evaluate_agent.sys, "argv", ["evaluate_agent.py", *flags]), \
+                 redirect_stdout(output):
+                result = evaluate_agent.main()
+            self.last_output = output.getvalue()
+            return result
 
     def test_empty_corpus_keeps_synthetic_only_gate(self):
         self.assertEqual(self.run_main('{"cases": []}'), 0)
@@ -129,6 +137,24 @@ class RealCorpusMainExitCodeTest(unittest.TestCase):
     def test_gated_corpus_meeting_threshold_passes(self):
         payload = {"cases": [dict(GOOD_CASE) for _ in range(evaluate_agent.REAL_CORPUS_MIN_CASES)]}
         self.assertEqual(self.run_main(json.dumps(payload, ensure_ascii=False)), 0)
+
+    def test_release_gate_blocks_missing_empty_invalid_and_insufficient_corpora(self):
+        insufficient = json.dumps({"cases": [dict(GOOD_CASE) for _ in range(19)]}, ensure_ascii=False)
+        for payload in (None, '{"cases": []}', '{"cases": "oops"}', insufficient):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.run_main(payload, "--release-gate", "--json"), 1)
+                report = json.loads(self.last_output)
+                self.assertTrue(report["releaseGateEnabled"])
+                self.assertFalse(report["releaseGatePassed"])
+
+    def test_release_gate_requires_real_accuracy_and_synthetic_regression_to_pass(self):
+        good = json.dumps({"cases": [dict(GOOD_CASE) for _ in range(20)]}, ensure_ascii=False)
+        bad = json.dumps({"cases": [dict(GOOD_CASE) for _ in range(16)] + [dict(BAD_CASE) for _ in range(4)]}, ensure_ascii=False)
+        self.assertEqual(self.run_main(bad, "--release-gate"), 1)
+        self.assertEqual(self.run_main(good, "--release-gate", synthetic_patch={"fieldAccuracy": 89.9}), 1)
+        self.assertEqual(self.run_main(good, "--release-gate", synthetic_patch={"completionRate": 79.9}), 1)
+        self.assertEqual(self.run_main(good, "--release-gate", "--json"), 0)
+        self.assertTrue(json.loads(self.last_output)["releaseGatePassed"])
 
 
 if __name__ == "__main__":

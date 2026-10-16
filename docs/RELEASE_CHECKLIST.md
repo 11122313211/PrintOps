@@ -1,6 +1,8 @@
 # 1.2 发布门槛与验收清单
 
-本文回答"什么时候可以正式发布 1.2"。当前 `1.2.0` 是**本地运行时加固 + Markdown 渲染的代码基线候选版**，还不能宣称通用稳定发布；本清单继承 v1.0.0 与 v1.1.0 的真实语料、真人走查与集成门槛，并新增 v1.2.0 的运行时加固与渲染门槛。历史版本语义保留在 CHANGELOG，不因本清单升级而改写。
+本文回答“什么时候可以正式发布 1.2”。`VERSION` 仍为 `1.2.0` 候选基线，当前未发布改造增加存储、mm 契约、参考计价和供应商协议；逐项实现证据见 [实施验收矩阵](IMPLEMENTATION_ACCEPTANCE.md) 与 [下一阶段开发验收](NEXT_STAGE_ACCEPTANCE.md)。本清单继承历史门槛，不能把代码合并或旧测试结果等同于稳定发布。
+
+用户已确认当前没有真实脱敏语料。本轮代码交付要求是严格门槛可执行且保持阻断；真实语料不能由测试 fixtures、示例报价或人工编写需求代替。正式发布必须运行 `--release-gate`。
 
 ## v1.0.0 历史门槛（继承）
 
@@ -9,7 +11,7 @@
 | 1 | 静态路由白名单 + 本地访问令牌 | ✅ 已完成（`server.py`，401/403 守卫，跨来源拒绝） |
 | 2 | 真实 HTTP Handler 测试（socket 级） | ✅ 已完成（`tests/test_http_handler.py`，13 例） |
 | 3 | Key 明文风险提示 + 敏感扫描扩充并纳入 `data/` JSON | ✅ 已完成（设置面板警告 + `tools/secret_scan.py`） |
-| 4 | 真实脱敏订单评测（20-50 例，字段准确率 ≥95%） | ⏳ 机制已就绪，**等待真实语料**（见下） |
+| 4 | 真实脱敏订单评测（至少 20 例，字段准确率 ≥95%） | ⛔ 当前 `cases=[]`；严格发布检查非零退出，等待真实语料 |
 | 5 | 死代码清理 + 合并 `_update_item`/`_update_order` | ✅ 已完成（统一到 `_apply_patch`） |
 | 6 | SQLite WAL + busy_timeout + 损坏会话恢复 | ✅ 已完成（`tests/test_persistence.py`） |
 | 7 | 真人使用走查（10 分钟北极星场景） | ⏳ **需要真人执行**（脚本见下） |
@@ -23,8 +25,8 @@
 | 10 | 无 npm/pnpm 的 Python local host 与 MCP transcript smoke | ✅ 已完成（`tools/printops_local_host.py`、`tools/dsh_mcp_smoke.py`、`tests/test_local_host.py`） |
 | 11 | native `tool_calls`/JSON fallback、有界 3 轮工具循环与上下文预算 | ✅ 已完成离线契约验证（`llm_adapter.py`、`tests/test_agent.py`） |
 | 12 | 真实 dsh headless、真实模型 endpoint 和 dsh on/off parity | ⏳ **需要内网环境与真实运行时验收** |
-| 13 | 浏览器级工具时间线、错误恢复与窄屏冒烟 | ⏳ **需要浏览器验收** |
-| 14 | 真实供应商 live 接入 | ⏸ **不在 1.1.0 范围，顺延 v1.2+** |
+| 13 | 浏览器级工具时间线、错误恢复与窄屏冒烟 | ◐ Chromium 与 WebKit 桌面/窄视口自动化通过，详见 [BROWSER_JOURNEY](BROWSER_JOURNEY.md)；Firefox 启动环境阻断，真实移动和人工走查未完成 |
+| 14 | 真实供应商 live 接入 | ⏸ 不在当前候选范围，授权接入规划为 v1.3+；当前无真实 transport 或 live 工具入口 |
 
 ## v1.2.0 新增门槛
 
@@ -35,7 +37,20 @@
 | 17 | 请求超时与结构化日志（requestId / 耗时） | ✅ 已完成 |
 | 18 | 启动自检 `python3 server.py --check` 与可读失败原因 | ✅ 已完成 |
 | 19 | 零依赖 Markdown 渲染：仅白名单标签、无 `on*` 事件处理器、链接协议白名单 | ✅ 已完成（`markdown.js`、`tests/test_markdown_render.py`） |
-| 20 | 整请求截止时间（防滴灌式慢客户端占满连接槽） | ⏳ **未完成**（当前仅 per-op socket 超时） |
+| 20 | 整请求截止时间（防滴灌式慢客户端占满连接槽） | ✅ HTTP 共用 monotonic deadline：请求行/头/体、锁等待、SQLite、模型各轮/重试/回退和响应；`tests/test_request_deadlines.py` 覆盖慢客户端和超时无迟到提交。系统 DNS 等不可硬取消操作的受限线程边界见 [RUNTIME_BUDGET](RUNTIME_BUDGET.md) |
+
+## 2026-10 未发布改造验收
+
+| # | 门槛 | 实现与限制 |
+| --- | --- | --- |
+| 21 | 业务 schema 2.0、结构化尺寸 mm、g/m²、证据与候选 | `tests/test_order_contract_v2.py`、字段来源测试；canonical 视图与兼容扁平字段共存，交期不承诺节假日排期 |
+| 22 | 可替换存储、旧库迁移、CAS、消息/事件/审计、历史后端化 | `tests/test_storage.py`、`tests/test_storage_api.py`、持久化和跨进程测试；内置 SQLite/memory，Postgres 未实现 |
+| 23 | Decimal 计价 golden、来源有效期、缺驱动阻断、数量单调 | `tests/test_pricing_engine.py`；当前参数全部为 illustrative，不能作为市场或供应商报价 |
+| 24 | 离线校准与发布隔离 | CSV 仅生成统计 draft，不能写活动 rate_cards 或自动发布；示例 CSV 不是供应商数据 |
+| 25 | supplier registry、无网络默认、mock、超时/幂等/取消/审计 | `tests/test_supplier_connectors.py`；测试使用注入传输，不证明已授权接入；live 仍需认证人工处理器和真实供应商联调 |
+| 26 | 严格真实语料发布检查 | `tests/test_real_corpus_eval.py`；`--release-gate` 必须拒绝空库、不足样本、无效语料和低准确率，目前按预期阻断 |
+
+当前代码的完整测试总数、合成指标与浏览器结果以最终运行记录为准，不引用旧版本数字作为本轮验收证据。
 
 ## 1.2 集成门槛说明
 
@@ -60,42 +75,46 @@ python3 tools/printops_local_host.py --session-id release-smoke --smoke
    必须逐项与原话核对后保留——没提过的字段删掉，提过的值不符合的改掉。
 3. 核对后把 JSON 粘贴进 `tests/eval_cases_real.json` 的 `cases` 数组，脱敏要求同上。
    （不使用工具时，按文件内 `_instructions` 的结构手写也可。）
-4. 运行 `PYTHONPATH=. python3 tests/evaluate_agent.py`：报告会单独输出"真实脱敏语料"
-   一节。达到 20 例后启用硬门槛——字段准确率 <95% 时脚本以非零码退出。
+4. 发布检查运行 `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`：报告分别输出合成与真实语料。真实语料缺失、为空、不足 20 例、格式错误或字段准确率 <95% 都以退出码 1 阻断；合成字段准确率还须 ≥90%、可完成用例完整率 ≥80%。加 `--json` 可保存 `realCorpusVerdict`、`releaseGateEnabled` 和 `releaseGatePassed`。
 5. 未达 100% 的用例会逐字段打印期望值与实际值；修复规则或在 `expected` 中纠正标注后重跑。
 
-## 门槛 7：真人走查脚本（10 分钟北极星场景）
+日常开发可不加 `--release-gate`，此时真实语料不足仅记录；这个命令成功不代表发布通过。门槛单元测试中的临时“真实格式”样例是人工构造，仅验证退出码与阈值，不计入真实语料数量。
 
-由一名**未参与开发**的同事或目标用户执行，观察者记录。设备：任意一台本机。
+## 门槛 7：真人走查（10 分钟合格交接）
 
-准备：按 README 启动服务，浏览器打开 `http://localhost:4174/`，全程不提示操作细节。
+固定任务卡、可提供业务信息、许可规格集合、独立评分表、理解题和空白记录统一放在 [USER_WALKTHROUGH](USER_WALKTHROUGH.md)。**当前只准备了验收包，真人执行与结果仍留空。**
 
-| 步骤 | 任务（只把任务念给用户） | 记录 |
-| --- | --- | --- |
-| 1 | "你想印 500 份 A4 双面海报，下周要用，直接告诉它。" | 用户输入了几句话？系统追问了几轮（澄清轮数）？ |
-| 2 | "把数量改成 1200，不要覆膜。" | 字段是否正确更新？旧方案是否失效提示？ |
-| 3 | "再加一个 1000 张的三折页，组成一张订单。" | 两项之间数量/尺寸有没有串项？ |
-| 4 | "分别为两项选一个性价比方案。" | 方案对比表是否可读？参考费用是否被理解？ |
-| 5 | "把你的 PDF 拖进去做预检。"（准备一个有命名问题的 PDF） | 预检结论是否可理解？错误是否可见？ |
-| 6 | "生成交接单并确认，导出 Markdown。" | 确认与导出是否顺畅？刷新页面后会话是否恢复？ |
-| 7 | 断网/不配置模型重复步骤 1 | 规则回退是否无缝？ |
+- 8 名未参与开发的非专业首次用户，每人一个主任务：名片 3 人、单页 3 人、标准宣传册 2 人。补充的多产品、文件、故障恢复场景另报，不混入主指标。
+- 开始：服务就绪后，首条有效需求提交。结束：当前版本通过必要校验和关键生产参数核对、明确确认，导出后实际打开文件并与该版本核对一致。任务内澄清、等待、修改、确认和导出均计时；安装启动单列。
+- 主指标：600 秒内独立完成且内容复核合格的任务数 / 所有已开始主任务数。失败、超时、放弃和得到操作帮助的任务不得从分母删除。
+- 初轮目标：至少 7/8 合格完成；关键数量/尺寸错误、产品串项、过期确认沿用均为 0；8 人均理解示例估算不是供应商报价、订单尚未发送。逐品类样本很少，只作形成性验证，不外推总体成功率。
+- 主持人不提示按钮位置或步骤，只按固定业务信息卡回答需求问题；不同合理工艺按许可集合评分，不能事后改答案让结果通过。
+- 主任务无文件时明确“文件待交付、未检查”。有文件补充任务必须记录合成文件版本、归属、基础检查范围；不能把文件基础预检当成生产许可。
+- “缺失字段清空”“可以生成”“点击导出”都不能作为最终通过依据。正式记录包含原始产物、对应版本/确认、逐人耗时、帮助/失败原因、理解题原话和独立评分。
 
-通过标准：步骤 1 澄清轮数 ≤3；全程无静默错误；步骤 6 刷新恢复成功。
-结果记录到本文件末尾的"走查记录"小节（日期、执行人、澄清轮数、问题清单）。
+### 本轮记录入口
 
-### 走查记录
+| 材料 | 状态 / 实际记录位置 |
+| --- | --- |
+| 固定任务卡与 8 人分配 | 已定义于 USER_WALKTHROUGH，尚未执行 |
+| 逐人计时、独立评分、原始导出 | |
+| 四道理解题与关键错误清单 | |
+| 补充文件 / 恢复 / 多产品 / 环境验证 | |
+| 验收结论与下一轮问题 | |
 
-- （待填）日期 / 执行人 / 澄清轮数 / 遇到的问题 / 结论
+可用性任务均为人工编写，不能计入门槛 4 的真实客户语料。真人数据留空时不得写“通过”。
 
 ## 发布前最终检查（每次发布都要跑）
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
-PYTHONPATH=. python3 tests/evaluate_agent.py
-python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py order_model.py nlu.py tools.py mcp_server.py tools/dsh_mcp_launcher.py tools/dsh_mcp_smoke.py tools/printops_local_host.py
+PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate
+python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py supplier_contract.py supplier_connectors.py order_model.py order_contract.py measurement_model.py unit_normalizer.py domain_vocab.py perception_candidates.py storage_contract.py storage_factory.py storage_sqlite.py storage_memory.py pricing_schema.py pricing_engine.py nlu.py tools.py mcp_server.py tools/calibrate_pricing.py tools/dsh_mcp_launcher.py tools/dsh_mcp_smoke.py tools/printops_local_host.py request_runtime.py storage_policy.py storage_backup.py examples/supplier_mock.py tools/order_backup.py
 python3 tools/secret_scan.py
 python3 tools/dsh_mcp_smoke.py
 git diff --check
 ```
 
-转为稳定 1.1 发布前还需：门槛 4 真实语料达标 + 门槛 7 真人走查通过 + 门槛 12 真实 dsh/模型验收 + 门槛 13 浏览器冒烟通过 + `README`/`VERSION` 版本号核对。真实供应商 live 接入不是 1.1.0 的发布条件，仍须在 v1.2+ 单独验收。
+浏览器命令与报告位置见 [BROWSER_SMOKE](BROWSER_SMOKE.md)，需要独立安装开发测试依赖；运行产品本身仍只需 Python 标准库。真人走查和真实 dsh/模型验收必须在相应环境记录，不由自动浏览器或 mock 结果替代。
+
+转为稳定 1.2 发布前还需：门槛 4 真实语料达标、门槛 7 真人走查、门槛 12 真实 dsh/模型、门槛 13 浏览器范围及未完成运行时门槛闭合，并核对 `README`/`VERSION`。真实供应商 live 不是当前本地候选版的发布条件；后续启用需独立取得授权、通过 sandbox 和字段契约、实现人工身份认证与服务器确认记录，完成幂等/对账/审计验收。

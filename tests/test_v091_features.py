@@ -15,14 +15,14 @@ BASE_BOX = {"productType": "包装盒", "quantity": "500 个", "quantityValue": 
 class SizeSemanticsTest(unittest.TestCase):
     def test_single_digit_dimensions_are_recognized(self) -> None:
         data, _ = perceive("做 2000 张 5*5cm 圆形不干胶标签")
-        self.assertEqual(data["size"], "5×5CM")
+        self.assertEqual(data["size"], '50×50 mm')
 
     def test_inner_and_outer_box_sizes_are_recorded(self) -> None:
         inner, _ = perceive("做 500 个包装盒，内尺寸 60*40*20cm")
-        self.assertEqual(inner["productSpecs"]["boxSizeInner"], "60×40×20CM")
-        self.assertEqual(inner["productSpecs"]["boxSize"], "60×40×20CM")
+        self.assertEqual(inner["productSpecs"]["boxSizeInner"], '600×400×200 mm')
+        self.assertEqual(inner["productSpecs"]["boxSize"], '600×400×200 mm')
         outer, _ = perceive("做 500 个包装盒，外尺寸 65*45*25cm")
-        self.assertEqual(outer["productSpecs"]["boxSizeOuter"], "65×45×25CM")
+        self.assertEqual(outer["productSpecs"]["boxSizeOuter"], '650×450×250 mm')
 
     def test_missing_size_meaning_is_flagged_in_suggestions(self) -> None:
         result = validate_order(BASE_BOX)
