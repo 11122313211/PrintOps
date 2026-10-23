@@ -11,6 +11,8 @@ import io
 import json
 import os
 import socket
+import ssl
+import stat
 import tempfile
 import threading
 import time
@@ -20,6 +22,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 import llm_adapter
+import request_runtime
 import server
 from llm_adapter import OpenAICompatiblePlanner
 from request_runtime import current_deadline, deadline_scope
@@ -40,10 +43,10 @@ def generation_calls(opener) -> int:
 
 
 class ProbeClassification(unittest.TestCase):
-    def test_live_endpoint_answers_the_capability_probe_in_two_round_trips(self):
+    def test_live_endpoint_answers_the_capability_probe_in_one_round_trip(self):
         # Same latency shape as the field case that measured 8.7s: each model
         # hop needs a second.  The pre-flight settles liveness in milliseconds,
-        # so three hops overlap and only the continuation stays serial.
+        # so all three hops overlap in a single round trip.
         hop_seconds = 1.0
         state = {"live": 0, "peak": 0}
         guard = threading.Lock()
@@ -69,11 +72,11 @@ class ProbeClassification(unittest.TestCase):
         with patch.object(llm_adapter.urllib.request, "urlopen", side_effect=scripted):
             result = planner.test_capabilities()
             elapsed = time.monotonic() - started
-        self.assertEqual(sorted(hops), ["chat", "continuation", "json", "native"])
+        self.assertEqual(sorted(hops), ["chat", "json", "native"])
         self.assertEqual(result["chosenProtocol"], "native_tools")
         self.assertGreaterEqual(state["peak"], 3)
-        # Serial hops need four seconds here; the parallel probe needs about two.
-        self.assertLess(elapsed, 3.0, f"parallel probe took {elapsed:.2f}s")
+        # Serial hops need three seconds here; the parallel probe needs about one.
+        self.assertLess(elapsed, 2.0, f"parallel probe took {elapsed:.2f}s")
         self.assertGreaterEqual(result["probeTimings"]["reachMs"], 0)
 
     def test_unreachable_endpoint_stops_after_first_probe(self):
@@ -116,13 +119,12 @@ class ProbeClassification(unittest.TestCase):
         # fails open and the completion hops carry the auth verdict.  Whether
         # the JSON/tool probes were already in flight when the chat hop came
         # back is a race; the invariant is that they never grow past the three
-        # independent hops and the tool continuation never runs.
+        # independent hops.
         self.assertLessEqual(generation_calls(opener), 3)
         self.assertIn("鉴权失败", result["message"])
         self.assertIn("API Key", result["message"])
         self.assertEqual(result["chosenProtocol"], "unavailable")
         self.assertLessEqual(result["probeTimings"]["hops"], 3)
-        self.assertFalse(result["toolContinuation"])
 
     def test_protocol_errors_still_run_remaining_probes(self):
         def not_found(*_args, **_kwargs):
@@ -131,10 +133,31 @@ class ProbeClassification(unittest.TestCase):
         planner = make_planner()
         with patch.object(llm_adapter.urllib.request, "urlopen", side_effect=not_found) as opener:
             result = planner.test_capabilities()
-        # chat + json + native; the continuation probe only runs after a
-        # successful native tool call, so three model calls is the full run.
+        # chat + json + native; each protocol-level failure still says something
+        # about the endpoint, so the whole fan-out runs once.
         self.assertEqual(generation_calls(opener), 3)
         self.assertIn("HTTP 404", result["errors"]["chat"])
+
+    def test_a_reset_tls_tunnel_names_the_system_proxy_without_credentials(self):
+        # urllib honours the Windows system proxy.  When the proxy node is
+        # down it resets the TLS handshake, which looks exactly like a dead
+        # endpoint; naming the proxy host:port turns that into an actionable
+        # message (and never echoes proxy credentials).
+        error = URLError(ssl.SSLError(1, "EOF occurred in violation of protocol"))
+        with patch.object(llm_adapter.urllib.request, "getproxies",
+                          return_value={"https": "http://user:secret@127.0.0.1:3128"}):
+            message, kind = OpenAICompatiblePlanner._classify_probe_error(error)
+        self.assertIn("TLS 握手失败", message)
+        self.assertIn("127.0.0.1:3128", message)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("user:", message)
+        self.assertEqual(kind, "network")
+
+    def test_no_proxy_hint_when_the_system_has_no_proxy(self):
+        error = URLError(ConnectionRefusedError(111, "refused"))
+        with patch.object(llm_adapter.urllib.request, "getproxies", return_value={}):
+            message, _kind = OpenAICompatiblePlanner._classify_probe_error(error)
+        self.assertEqual(message, "连接被拒绝，目标端口未监听或地址错误")
 
 
 class SaveValidation(unittest.TestCase):
@@ -147,6 +170,55 @@ class SaveValidation(unittest.TestCase):
                     server.update_llm_settings({"url": "https://slow-dns.test/v1", "model": "m", "key": "k"})
         self.assertEqual(ctx.exception.code, "ADDRESS_VALIDATION_TIMEOUT")
         self.assertEqual(ctx.exception.status, 504)
+
+    def test_save_never_waits_for_the_model_outbound_pool(self):
+        # A stuck capability probe can own every model outbound slot.  Saving
+        # is the action that repairs a broken endpoint, so it must not queue
+        # behind the probe and then blame the address for the wait.
+        planner = OpenAICompatiblePlanner()
+        with patch.object(request_runtime, "_OUTBOUND_SLOTS", threading.BoundedSemaphore(0)):
+            server._configure_bounded(planner, "https://example.test/v1", "m", "k")
+        self.assertEqual(planner.base_url, "https://example.test/v1")
+
+    def test_a_busy_control_pool_is_not_reported_as_a_dns_timeout(self):
+        with patch.object(server, "CONTROL_SLOTS", threading.BoundedSemaphore(0)):
+            with deadline_scope(time.monotonic() + 0.2):
+                with self.assertRaises(server.RequestError) as ctx:
+                    server._configure_bounded(
+                        OpenAICompatiblePlanner(), "https://example.test/v1", "m", "k")
+        self.assertEqual(ctx.exception.code, "OUTBOUND_BUSY")
+        self.assertEqual(ctx.exception.status, 429)
+
+    def test_a_locked_config_file_names_the_write_failure(self):
+        # A read-only install or an antivirus lock used to surface as a generic
+        # 500; the save cannot succeed, and the user needs to know why.
+        with patch.object(server, "PLANNER", OpenAICompatiblePlanner()), \
+             patch.object(server, "_configure_bounded", lambda *_a: None), \
+             patch.object(server, "write_saved_config", side_effect=OSError("locked")):
+            with self.assertRaises(server.RequestError) as ctx:
+                server.update_llm_settings({"url": "https://x.test/v1", "model": "m", "key": "k"})
+        self.assertEqual(ctx.exception.code, "CONFIG_WRITE_FAILED")
+        self.assertEqual(ctx.exception.status, 500)
+        self.assertIn("llm_config.json", ctx.exception.message)
+
+    def test_a_blocked_replace_names_the_stage_and_os_error(self):
+        # The toast must say which step failed; "cannot write the config" alone
+        # sends the user looking at the URL again.
+        cause = PermissionError(13, "access denied", "data/llm_config.json", 5)
+        if getattr(cause, "winerror", None) != 5:
+            self.skipTest("winerror is only populated on Windows")
+        failure = llm_adapter.ConfigWriteError("替换配置文件", "data/llm_config.json", cause)
+        with patch.object(server, "PLANNER", OpenAICompatiblePlanner()), \
+             patch.object(server, "_configure_bounded", lambda *_a: None), \
+             patch.object(server, "write_saved_config", side_effect=failure):
+            with self.assertRaises(server.RequestError) as ctx:
+                server.update_llm_settings(
+                    {"url": "https://x.test/v1", "model": "m", "key": "k"},
+                    request_id="req-1")
+        message = ctx.exception.message
+        self.assertIn("替换配置文件失败", message)
+        self.assertIn("Windows 错误 5", message)
+        self.assertIn("拒绝访问", message)
 
 
 class RouteDeadline(unittest.TestCase):
@@ -236,8 +308,8 @@ def _mkstemp_allowed() -> bool:
     try:
         with tempfile.TemporaryDirectory() as probe_dir:
             fd, probe_file = tempfile.mkstemp(prefix=".llm-config-", dir=probe_dir)
-        os.close(fd)
-        os.unlink(probe_file)
+            os.close(fd)
+            os.unlink(probe_file)
         return True
     except OSError:
         return False
@@ -258,9 +330,58 @@ class KeyFileSafety(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "llm_config.json"
             with patch.object(llm_adapter.os, "replace", side_effect=OSError("boom")):
-                with self.assertRaises(OSError):
+                with self.assertRaises(llm_adapter.ConfigWriteError) as ctx:
                     llm_adapter.write_saved_config(target, {"key": "sk-1"})
+            self.assertEqual(ctx.exception.stage, "替换配置文件")
             self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_transient_replace_lock_is_retried(self):
+        # Antivirus and the search indexer hold files open for a few
+        # milliseconds; the first os.replace can fail with a sharing
+        # violation even though the next attempt succeeds.
+        real_replace = os.replace
+        calls = []
+
+        def flaky_replace(source, target):
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError(13, "sharing violation", str(source))
+            return real_replace(source, target)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "llm_config.json"
+            with patch.object(llm_adapter.os, "replace", side_effect=flaky_replace), \
+                 patch.object(llm_adapter.time, "sleep", lambda _s: None):
+                llm_adapter.write_saved_config(target, {"url": "https://x.test/v1", "key": "sk-1"})
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["key"], "sk-1")
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["llm_config.json"])
+
+    def test_permanent_replace_block_names_the_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "llm_config.json"
+            with patch.object(llm_adapter.os, "replace",
+                              side_effect=PermissionError(13, "denied", str(target))), \
+                 patch.object(llm_adapter.time, "sleep", lambda _s: None):
+                with self.assertRaises(llm_adapter.ConfigWriteError) as ctx:
+                    llm_adapter.write_saved_config(target, {"key": "sk-1"})
+            self.assertEqual(ctx.exception.stage, "替换配置文件")
+            self.assertIn(str(target), ctx.exception.path)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_read_only_destination_is_cleared_before_replace(self):
+        if os.name != "nt":
+            self.skipTest("the read-only attribute only blocks replacement on Windows")
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "llm_config.json"
+            target.write_text(json.dumps({"url": "https://old.test/v1", "key": "old"}), encoding="utf-8")
+            os.chmod(target, stat.S_IREAD)
+            try:
+                llm_adapter.write_saved_config(target, {"url": "https://x.test/v1", "key": "sk-2"})
+                self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["key"], "sk-2")
+            finally:
+                os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
+
 
     def test_read_self_heals_loose_posix_mode(self):
         if os.name == "nt":
@@ -353,17 +474,16 @@ class ProbeParallelism(unittest.TestCase):
         with patch.object(llm_adapter.urllib.request, "urlopen", side_effect=scripted):
             result = planner.test_capabilities()
         elapsed = time.monotonic() - started
-        self.assertEqual(sorted(hops), ["chat", "continuation", "json", "native"])
+        self.assertEqual(sorted(hops), ["chat", "json", "native"])
         self.assertEqual(result["chosenProtocol"], "native_tools")
         self.assertTrue(result["agentReady"])
-        # Four serial hops of this shape measured 8.7s in the field.  Only the
-        # continuation depends on an earlier answer, so the pre-flight lets the
-        # three independent hops overlap and the probe lands in about two hops.
+        # Three serial hops of this shape measured 8.7s in the field; the
+        # pre-flight lets all three overlap and the probe lands in one.
         self.assertGreaterEqual(state["peak"], 2)
-        self.assertLess(elapsed, 3 * hop_seconds)
+        self.assertLess(elapsed, 2 * hop_seconds)
         timings = result["probeTimings"]
-        self.assertEqual(timings["hops"], 4)
-        for key in ("gateMs", "chatMs", "jsonMs", "nativeMs", "continuationMs"):
+        self.assertEqual(timings["hops"], 3)
+        for key in ("gateMs", "chatMs", "jsonMs", "nativeMs"):
             self.assertIsInstance(timings[key], int)
 
     def test_dead_endpoint_still_costs_exactly_one_request(self):

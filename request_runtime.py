@@ -21,8 +21,20 @@ class DeadlineExceeded(TimeoutError):
     """The total request budget, rather than one socket operation, expired."""
 
 
+class OutboundBusy(DeadlineExceeded):
+    """No bounded outbound worker slot was free before the deadline.
+
+    Distinct from a socket or DNS timeout: the operation never started, so a
+    caller can tell the user to retry instead of blaming the endpoint.
+    """
+
+
 _DEADLINE: ContextVar[float | None] = ContextVar("printops_request_deadline", default=None)
 _OUTBOUND_SLOTS = threading.BoundedSemaphore(8)
+# Saving settings is user-blocking and repairs a broken endpoint.  Letting a
+# stuck capability probe own every outbound slot would block the very save
+# that fixes it, so control-plane I/O gets its own small pool instead.
+CONTROL_SLOTS = threading.BoundedSemaphore(2)
 T = TypeVar("T")
 
 
@@ -100,14 +112,18 @@ def deadline_sleep(seconds: float, deadline: float) -> None:
     remaining(deadline)
 
 
-def bounded_io(operation: Callable[[], T], deadline: float) -> T:
+def bounded_io(operation: Callable[[], T], deadline: float, slots=None) -> T:
     """Wait only until deadline, including worker capacity and DNS/header I/O.
 
     The worker must be read-only. Never dispatch Agent/state updates here: a
     timed-out worker can finish late, and no late result is applied by callers.
+    ``slots`` selects which bounded pool the worker draws from; the default
+    shares the model outbound pool, while control-plane callers pass
+    ``CONTROL_SLOTS`` so a stuck model probe cannot starve them.
     """
-    if not _OUTBOUND_SLOTS.acquire(timeout=remaining(deadline)):
-        raise DeadlineExceeded("request deadline expired waiting for outbound capacity")
+    pool = _OUTBOUND_SLOTS if slots is None else slots
+    if not pool.acquire(timeout=remaining(deadline)):
+        raise OutboundBusy("outbound capacity exhausted before the deadline")
     result: queue.Queue = queue.Queue(maxsize=1)
 
     def run() -> None:
@@ -120,13 +136,13 @@ def bounded_io(operation: Callable[[], T], deadline: float) -> T:
         except BaseException as error:
             result.put((False, error))
         finally:
-            _OUTBOUND_SLOTS.release()
+            pool.release()
 
     try:
         worker = threading.Thread(target=run, name="printops-outbound", daemon=True)
         worker.start()
     except BaseException:
-        _OUTBOUND_SLOTS.release()
+        pool.release()
         raise
     try:
         ok, value = result.get(timeout=remaining(deadline))

@@ -27,10 +27,6 @@ REQUIRED_TABLES = {"orders", "sessions", "storage_migrations", "legacy_session_b
                    "order_events", "messages", "quote_requests", "audit_log"}
 
 
-def _quoted(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
 def _read_only(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
     db.execute("PRAGMA query_only=ON")
@@ -51,7 +47,12 @@ def _json(value: Any) -> str:
 
 
 def inventory(path: str | Path) -> dict[str, Any]:
-    """Fingerprint all tables, including extensions and SQLite sequence state."""
+    """Fingerprint the contract tables, extension tables and sequence state.
+
+    Contract tables are row-digested through literal SQL; an extension table
+    is reported by its DDL instead, because a SELECT built from a table name
+    read out of sqlite_master would put database metadata into a statement.
+    """
     with closing(_read_only(Path(path))) as db:
         db.execute("BEGIN")
         if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
@@ -60,14 +61,36 @@ def inventory(path: str | Path) -> dict[str, Any]:
             raise ValueError("SQLite foreign key check failed")
         schema = [list(row) for row in db.execute(
             "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
+        existing = {row[1] for row in schema if row[0] == "table"}
+        if not REQUIRED_TABLES.issubset(existing):
+            raise ValueError("database is not a current PrintOps order store; migrate legacy sessions first")
         tables = {}
-        for name, in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
+        for name, rows in (
+            ("audit_log", db.execute("SELECT * FROM audit_log").fetchall()),
+            ("legacy_session_backups", db.execute("SELECT * FROM legacy_session_backups").fetchall()),
+            ("messages", db.execute("SELECT * FROM messages").fetchall()),
+            ("order_events", db.execute("SELECT * FROM order_events").fetchall()),
+            ("orders", db.execute("SELECT * FROM orders").fetchall()),
+            ("quote_requests", db.execute("SELECT * FROM quote_requests").fetchall()),
+            ("sessions", db.execute("SELECT * FROM sessions").fetchall()),
+            ("sqlite_sequence", db.execute("SELECT * FROM sqlite_sequence").fetchall()),
+            ("storage_migrations", db.execute("SELECT * FROM storage_migrations").fetchall()),
+        ):
             hashes = []
-            for row in db.execute("SELECT * FROM " + _quoted(name)):
+            for row in rows:
                 typed = [("blob", value.hex()) if isinstance(value, bytes) else (type(value).__name__, value)
                          for value in row]
                 hashes.append(hashlib.sha256(_json(typed).encode()).hexdigest())
             tables[name] = {"rows": len(hashes), "sha256": hashlib.sha256("".join(sorted(hashes)).encode()).hexdigest()}
+        # Extension tables are outside the PrintOps contract. They are still
+        # reported, identified by their DDL, because selecting from a table
+        # name read out of sqlite_master would put database metadata into a
+        # statement; the file digest covers their rows.
+        schema_by_name = {row[1]: row[3] for row in schema if row[0] == "table"}
+        for name, ddl in sorted(schema_by_name.items()):
+            if name not in tables:
+                tables[name] = {"rows": None,
+                                "sha256": hashlib.sha256(_json(ddl).encode()).hexdigest()}
         if not REQUIRED_TABLES.issubset(tables):
             raise ValueError("database is not a current PrintOps order store; migrate legacy sessions first")
         migrations = [row[0] for row in db.execute("SELECT version FROM storage_migrations ORDER BY version")]

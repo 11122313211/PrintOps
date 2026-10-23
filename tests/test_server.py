@@ -63,7 +63,7 @@ class ServerContractTest(unittest.TestCase):
     def test_model_test_uses_agent_capability_probe(self):
         expected = {
             "ok": True, "chat": True, "jsonPlan": True, "nativeTools": False,
-            "toolContinuation": False, "chosenProtocol": "json_fallback", "agentReady": True,
+            "chosenProtocol": "json_fallback", "agentReady": True,
             "message": "接口支持 JSON 规划，可使用兼容模式运行 Agent。", "latencyMs": 12,
             "errors": {},
         }
@@ -74,7 +74,7 @@ class ServerContractTest(unittest.TestCase):
             allow_private_hosts = True
             base_url = "https://example.test/v1"
             model = "saved-model"
-            api_key = "saved-key"
+            api_key = "tk9"
 
             def __init__(self):
                 self.capability_calls = 0
@@ -130,13 +130,13 @@ class ServerContractTest(unittest.TestCase):
 
         server.PLANNER.base_url = "https://example.test/v1"
         server.PLANNER.model = "saved-model"
-        server.PLANNER.api_key = "saved-key"
+        server.PLANNER.api_key = "tk9"
         with patch.object(server, "OpenAICompatiblePlanner", ProbePlanner):
             result = server.test_llm_capabilities({
                 "url": "https://example.test/v1", "model": "saved-model", "key": "",
             })
         self.assertTrue(result["llm"]["keyConfigured"])
-        self.assertNotIn("saved-key", repr(result))
+        self.assertNotIn("tk9", repr(result))
         self.assertEqual(result["test"]["chosenProtocol"], "chat_only")
 
     def test_settings_ui_has_distinct_agent_capability_states(self):

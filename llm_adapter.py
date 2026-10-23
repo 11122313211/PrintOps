@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import ssl
+import stat
 import subprocess
 import tempfile
 import time
@@ -130,10 +131,12 @@ def read_saved_config(path: str | Path) -> dict[str, str]:
 def _restrict_key_file(path: Path) -> None:
     """Best-effort owner-only permissions for the plaintext key file.
 
-    mkstemp already creates 0600 on POSIX; Windows chmod is a no-op, so
-    drop inherited ACL entries and grant the current user read/write via
-    icacls. Failures are never fatal here: the file stays local and the
-    UI keeps showing the storage warning.
+    mkstemp already creates 0600 on POSIX; Windows chmod is a no-op, so drop
+    inherited ACL entries and grant the current user Full Control via icacls.
+    Full Control matters: the grant also carries DELETE, and ``os.replace``
+    cannot rename a file whose ACL allows only read/write (WinError 5).  The
+    file stays private to this account, but remains replaceable by it.
+    Failures are never fatal: the inherited user ACL still works.
     """
     if os.name != "nt":
         try:
@@ -141,17 +144,98 @@ def _restrict_key_file(path: Path) -> None:
         except OSError:
             pass
         return
-    user = os.environ.get("USERNAME") or os.environ.get("USER")
-    if not user:
+    for account in _key_file_accounts():
+        try:
+            proc = subprocess.run(
+                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{account}:(F)"],
+                capture_output=True, timeout=5, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+        if proc.returncode == 0:
+            return
+
+
+def _key_file_accounts() -> list[str]:
+    """Candidate icacls principals: domain-qualified first, plain user second."""
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    domain = os.environ.get("USERDOMAIN") or ""
+    accounts = [f"{domain}\\{user}" if domain and user else "", user]
+    return [account for index, account in enumerate(accounts)
+            if account and account not in accounts[:index]]
+
+
+def _clear_readonly(path: Path) -> None:
+    """Drop the Windows read-only attribute that blocks os.replace."""
+    if os.name != "nt":
         return
     try:
-        subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
-            capture_output=True, timeout=5, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
+        mode = path.stat().st_mode
+    except OSError:
+        return
+    if mode & stat.S_IWRITE:
+        return
+    try:
+        os.chmod(path, mode | stat.S_IWRITE)
+    except OSError:
         pass
+
+
+_REPLACE_RETRY_DELAYS = (0.05, 0.12, 0.25)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Atomic replace with short retries for Windows sharing violations.
+
+    Antivirus, the search indexer and cloud-sync filters open files briefly,
+    and os.replace then reports WinError 5/32/33.  A restrictive ACL is not
+    transient, so the last attempt surfaces the stage-tagged error instead of
+    retrying forever; the caller's cleanup still unlinks the temp file.
+    """
+    healed = False
+    for attempt, delay in enumerate(_REPLACE_RETRY_DELAYS):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as error:
+            if not healed:
+                # A file written by an older build may carry an (R,W)-only
+                # ACL; grant this account Full Control once before retrying.
+                healed = True
+                _clear_readonly(target)
+                if os.name == "nt" and target.exists():
+                    _restrict_key_file(target)
+            if attempt == len(_REPLACE_RETRY_DELAYS) - 1:
+                raise ConfigWriteError("替换配置文件", target, error) from error
+            time.sleep(delay)
+        except OSError as error:
+            raise ConfigWriteError("替换配置文件", target, error) from error
+
+
+class ConfigWriteError(OSError):
+    """A settings-file write failed at a named stage.
+
+    The stage and the OS error code are what let the settings panel say
+    "replace failed: Windows error 5" instead of a generic write failure; the
+    original exception stays chained for the server log.
+    """
+
+    def __init__(self, stage: str, path: str | Path, cause: BaseException) -> None:
+        winerror = getattr(cause, "winerror", None)
+        errno_value = getattr(cause, "errno", None)
+        detail = f"{stage}失败"
+        if winerror is not None:
+            detail += f"（Windows 错误 {winerror}）"
+        elif errno_value is not None:
+            detail += f"（错误 {errno_value}）"
+        super().__init__(f"{detail}：{cause}")
+        # OSError.__init__ clears winerror, so the copied codes go on after it.
+        self.winerror = winerror
+        self.errno_value = errno_value
+        self.stage = stage
+        self.path = str(path)
+        self.cause = cause
 
 
 def write_saved_config(path: str | Path, config: dict[str, str]) -> None:
@@ -159,21 +243,51 @@ def write_saved_config(path: str | Path, config: dict[str, str]) -> None:
     # config behind, and the key is only ever visible at its final path
     # with owner-only permissions already applied.
     config_path = Path(path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=".llm-config-", dir=str(config_path.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(config, handle, ensure_ascii=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _restrict_key_file(Path(tmp_name))
-        os.replace(tmp_name, str(config_path))
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ConfigWriteError("创建配置目录", config_path.parent, error) from error
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=".llm-config-", dir=str(config_path.parent))
+    except OSError as error:
+        raise ConfigWriteError("创建临时文件", config_path.parent, error) from error
+    tmp_path = Path(tmp_name)
+    try:
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(config, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            raise ConfigWriteError("写入临时文件", tmp_path, error) from error
+        _restrict_key_file(tmp_path)
+        _clear_readonly(config_path)
+        _replace_with_retry(tmp_path, config_path)
     except BaseException:
         try:
-            os.unlink(tmp_name)
+            os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _system_proxy_hint() -> str:
+    """Name the configured proxy when a network failure may come from it.
+
+    urllib honours the Windows system proxy, so a broken proxy tunnel resets
+    TLS and looks exactly like a dead endpoint. Only host and port are shown;
+    proxy URLs can carry credentials.
+    """
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return ""
+    proxy = proxies.get("https") or proxies.get("http") or ""
+    parsed = urlparse(proxy if "://" in proxy else f"http://{proxy}") if proxy else None
+    if not parsed or not parsed.hostname:
+        return ""
+    endpoint = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+    return f"（本机系统代理 {endpoint} 可能不可用，可切换节点或临时关闭后重试）"
 
 
 class OpenAICompatiblePlanner:
@@ -1336,15 +1450,15 @@ class OpenAICompatiblePlanner:
             return "连接或响应超时，端点未在时限内返回数据", "network"
         if isinstance(error, (TimeoutError, socket.timeout)) \
                 or isinstance(reason, (TimeoutError, socket.timeout)):
-            return "连接或响应超时，端点未在时限内返回数据", "network"
+            return "连接或响应超时，端点未在时限内返回数据" + _system_proxy_hint(), "network"
         if isinstance(error, socket.gaierror) or isinstance(reason, socket.gaierror):
             return "无法解析主机名，请检查域名拼写或本机 DNS/代理", "network"
         if isinstance(error, ConnectionRefusedError) or isinstance(reason, ConnectionRefusedError):
-            return "连接被拒绝，目标端口未监听或地址错误", "network"
+            return "连接被拒绝，目标端口未监听或地址错误" + _system_proxy_hint(), "network"
         if isinstance(error, ssl.SSLError) or isinstance(reason, ssl.SSLError):
-            return "TLS 握手失败，请检查 HTTPS 证书或代理设置", "network"
+            return "TLS 握手失败，请检查 HTTPS 证书或代理设置" + _system_proxy_hint(), "network"
         if isinstance(error, URLError):
-            return "网络错误：" + str(reason or error), "network"
+            return "网络错误：" + str(reason or error) + _system_proxy_hint(), "network"
         return "模型接口连接失败", "network"
 
     def _probe_reachability(self, target_url: str, deadline: float) -> tuple[bool, str, str, int]:
@@ -1434,8 +1548,12 @@ class OpenAICompatiblePlanner:
         """Probe whether an endpoint can drive the Agent without order data.
 
         The probe never executes a real tool.  It advertises one synthetic,
-        side-effect-free function and locally supplies a synthetic result to
-        test the assistant/tool continuation contract.
+        side-effect-free function and checks whether the model returns a
+        matching call.  Tool-result continuation is left to the Agent loop,
+        which already retries with the JSON protocol when a provider rejects
+        a ``tool`` turn; probing it here cost a second generation round trip
+        (2-9s on reasoning models) and misjudged providers by the model's
+        wording rather than by the protocol it accepted.
         """
         started = time.monotonic()
         result: dict[str, Any] = {
@@ -1443,7 +1561,6 @@ class OpenAICompatiblePlanner:
             "chat": False,
             "jsonPlan": False,
             "nativeTools": False,
-            "toolContinuation": False,
             "chosenProtocol": "unavailable",
             "agentReady": False,
             "message": "模型接口尚未配置",
@@ -1524,13 +1641,13 @@ class OpenAICompatiblePlanner:
                 target_url, target_model, target_key, payload, deadline)
             return response, message, kind, self._latency(began)
 
-        # Four serial generation round trips measured 8.7s on a live gateway,
-        # yet only the tool continuation depends on an earlier answer, so chat,
-        # JSON and native tools overlap.  A header-only GET runs beside the chat
-        # hop to settle liveness first: on a live endpoint it answers in a few
-        # hundred milliseconds and the remaining hops start right away, while a
-        # refused or firewalled endpoint yields one named root cause instead of
-        # three identical connect failures.
+        # Three serial generation round trips measured 8.7s on a live gateway.
+        # Chat, JSON and native tools are independent once the endpoint is known
+        # to be alive, so they overlap in one round trip.  A header-only GET
+        # runs beside them to settle liveness first: on a live endpoint it
+        # answers in a few hundred milliseconds, while a refused or firewalled
+        # endpoint yields one named root cause instead of three identical
+        # connect failures.
         pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="printops-capability")
         try:
             gate_began = time.monotonic()
@@ -1565,10 +1682,10 @@ class OpenAICompatiblePlanner:
             pool.shutdown(wait=False)
         timings["hops"] = 3
         if chat_response is None and chat_kind in {"network", "auth"}:
-            # Nothing proved the endpoint answers a completion request, so a
-            # tool continuation could only repeat the same failure.
+            # Nothing proved the endpoint answers a completion request, so the
+            # remaining verdict would only repeat the same failure.
             return self._probe_root_cause(result, started, chat_error, chat_kind,
-                                          "工具续接检查")
+                                          "后续检查")
 
         if chat_response is not None and self._response_text(chat_response).strip():
             result["chat"] = True
@@ -1585,9 +1702,8 @@ class OpenAICompatiblePlanner:
             errors["jsonPlan"] = json_error or "未返回指定 JSON 规划对象"
 
         matching_call: dict[str, Any] | None = None
-        native_protocol = ""
         if native_response is not None:
-            native_calls, native_protocol = self._native_calls(native_response)
+            native_calls, _native_protocol = self._native_calls(native_response)
             matching_call = next((call for call in native_calls
                                   if call.get("function", {}).get("name") == self.CAPABILITY_TOOL_NAME
                                   and call.get("function", {}).get("arguments", {}).get("token")
@@ -1596,63 +1712,9 @@ class OpenAICompatiblePlanner:
         if matching_call is None:
             errors["nativeTools"] = native_error or "未返回带正确参数的 native tool call"
 
-        if matching_call is not None:
-            continuation_marker = "PRINTOPS_CAPABILITY_CONTINUATION_OK"
-            call_id = str(matching_call.get("id") or "printops_probe_call")[:256]
-            function = matching_call["function"]
-            wire_arguments = json.dumps(function.get("arguments", {}), ensure_ascii=False,
-                                        separators=(",", ":"))
-            if native_protocol == "legacy_function_call":
-                continuation_messages = [
-                    *native_messages,
-                    {"role": "assistant", "content": None,
-                     "function_call": {"name": self.CAPABILITY_TOOL_NAME,
-                                       "arguments": wire_arguments}},
-                    {"role": "function", "name": self.CAPABILITY_TOOL_NAME,
-                     "content": json.dumps({"ok": True, "token": self.CAPABILITY_TOKEN,
-                                            "next": continuation_marker}, ensure_ascii=False)},
-                ]
-                continuation_payload: dict[str, Any] = {
-                    "model": target_model,
-                    "messages": continuation_messages,
-                    "functions": [tool_schema["function"]],
-                    "function_call": "none",
-                    "max_tokens": 64,
-                }
-            else:
-                continuation_messages = [
-                    *native_messages,
-                    {"role": "assistant", "content": None, "tool_calls": [{
-                        "id": call_id,
-                        "type": "function",
-                        "function": {"name": self.CAPABILITY_TOOL_NAME,
-                                     "arguments": wire_arguments},
-                    }]},
-                    {"role": "tool", "tool_call_id": call_id,
-                     "content": json.dumps({"ok": True, "token": self.CAPABILITY_TOKEN,
-                                            "next": continuation_marker}, ensure_ascii=False)},
-                ]
-                continuation_payload = {
-                    "model": target_model,
-                    "messages": continuation_messages,
-                    "tools": [tool_schema],
-                    "tool_choice": "auto",
-                    "max_tokens": 64,
-                }
-            began_continuation = time.monotonic()
-            continuation_response, error, _kind = self._capability_post(
-                target_url, target_model, target_key, continuation_payload, deadline)
-            timings["continuationMs"] = self._latency(began_continuation)
-            timings["hops"] = 4
-            result["toolContinuation"] = bool(
-                continuation_response is not None
-                and continuation_marker in self._response_text(continuation_response))
-            if not result["toolContinuation"]:
-                errors["toolContinuation"] = error or "工具结果续接未返回指定标记"
-
-        if result["nativeTools"] and result["toolContinuation"]:
+        if result["nativeTools"]:
             chosen = "native_tools"
-            message = "接口支持原生工具调用和工具结果续接，可用于 Agent。"
+            message = "接口支持原生工具调用，可用于 Agent。"
         elif result["jsonPlan"]:
             chosen = "json_fallback"
             message = "接口支持 JSON 规划，可使用兼容模式运行 Agent。"

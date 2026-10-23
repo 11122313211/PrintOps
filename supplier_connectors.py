@@ -192,7 +192,7 @@ class MockConnector(ExportConnector):
             "source": {"kind": "mock", "description": "本地模拟响应，不代表供应商数据"},
             "updatedAt": None, "expiresAt": None, "supplierProfile": {}, "requiresHumanConfirmation": True,
         })
-        self.requests: dict[str, dict[str, Any]] = {}
+        self.quotes: dict[str, dict[str, Any]] = {}
         self.lock = RLock()
 
     def create_quote_draft(self, order: Mapping[str, Any], context: RequestContext | None = None) -> dict[str, Any]:
@@ -210,18 +210,18 @@ class MockConnector(ExportConnector):
                   "requiresHumanConfirmation": True, "orderFingerprint": order_fingerprint(order),
                   "orderRevision": (context or RequestContext()).revision}
         with self.lock:
-            self.requests[result["requestId"]] = deepcopy(result)
+            self.quotes[result["requestId"]] = deepcopy(result)
         return result
 
     def get_quote(self, request_id: str, context: RequestContext | None = None) -> dict[str, Any]:
         with self.lock:
-            return deepcopy(self.requests.get(request_id) or {"status": "not_found", "mock": True, "sent": False})
+            return deepcopy(self.quotes.get(request_id) or {"status": "not_found", "mock": True, "sent": False})
 
     def cancel(self, request_id: str, context: RequestContext | None = None) -> dict[str, Any]:
         with self.lock:
-            if request_id not in self.requests:
+            if request_id not in self.quotes:
                 return {"status": "not_found", "mock": True, "sent": False}
-            result = self.requests[request_id]
+            result = self.quotes[request_id]
             repeated = result["status"] == "cancelled"
             result["status"] = "cancelled"
             return {**deepcopy(result), "idempotent": repeated}

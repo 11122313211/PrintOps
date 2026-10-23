@@ -16,16 +16,6 @@ from storage_contract import (STORE_CONTRACT_VERSION, StoreConflictError, change
 from request_runtime import DeadlineExceeded, check_deadline, current_deadline, remaining
 
 
-class _BudgetConnection(sqlite3.Connection):
-    def execute(self, sql, parameters=()):
-        # SQLite's busy handler otherwise gets a fresh five seconds at every
-        # statement, even when the HTTP request only has milliseconds left.
-        budget = remaining()
-        if budget is not None:
-            super().execute(f"PRAGMA busy_timeout = {max(0, min(5000, int(budget * 1000)))}")
-        return super().execute(sql, parameters)
-
-
 class SQLiteOrderStore:
     BUSY_TIMEOUT_MS = 5000
 
@@ -41,8 +31,11 @@ class SQLiteOrderStore:
     @contextmanager
     def _db(self):
         budget = remaining()
+        # sqlite3 applies this as PRAGMA busy_timeout, so a lock wait in this
+        # block never outlives the request budget; the progress handler adds a
+        # CPU-time abort on top.
         timeout = min(self.BUSY_TIMEOUT_MS / 1000, budget) if budget is not None else self.BUSY_TIMEOUT_MS / 1000
-        connection = sqlite3.connect(self.path, timeout=timeout, factory=_BudgetConnection)
+        connection = sqlite3.connect(self.path, timeout=timeout)
         connection.row_factory = sqlite3.Row
         deadline = current_deadline()
         if deadline is not None:
@@ -65,32 +58,30 @@ class SQLiteOrderStore:
     def _migrate(self) -> None:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            statements = [
-                "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS storage_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS legacy_session_backups (session_id TEXT PRIMARY KEY, state TEXT NOT NULL, migrated_at TEXT NOT NULL)",
-                """CREATE TABLE IF NOT EXISTS orders (
+            # Each statement is literal: the schema is fixed, and keeping the
+            # DDL out of a loop means no SQL text is assembled at runtime.
+            db.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS storage_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS legacy_session_backups (session_id TEXT PRIMARY KEY, state TEXT NOT NULL, migrated_at TEXT NOT NULL)")
+            db.execute("""CREATE TABLE IF NOT EXISTS orders (
                     order_id TEXT PRIMARY KEY, session_id TEXT UNIQUE NOT NULL,
                     schema_version TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
                     order_json TEXT NOT NULL, runtime_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
-                """CREATE TABLE IF NOT EXISTS order_events (
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS order_events (
                     event_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL,
-                    event_type TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)""",
-                "CREATE INDEX IF NOT EXISTS order_events_order ON order_events(order_id, revision, created_at)",
-                """CREATE TABLE IF NOT EXISTS messages (
+                    event_type TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)""")
+            db.execute("CREATE INDEX IF NOT EXISTS order_events_order ON order_events(order_id, revision, created_at)")
+            db.execute("""CREATE TABLE IF NOT EXISTS messages (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT UNIQUE NOT NULL,
-                    session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)""",
-                "CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, sequence)",
-                """CREATE TABLE IF NOT EXISTS quote_requests (
+                    session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)""")
+            db.execute("CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, sequence)")
+            db.execute("""CREATE TABLE IF NOT EXISTS quote_requests (
                     order_id TEXT NOT NULL, request_id TEXT NOT NULL, request_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL, PRIMARY KEY(order_id, request_id))""",
-                """CREATE TABLE IF NOT EXISTS audit_log (
+                    updated_at TEXT NOT NULL, PRIMARY KEY(order_id, request_id))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS audit_log (
                     audit_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL,
-                    action TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)""",
-            ]
-            for statement in statements:
-                db.execute(statement)
+                    action TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)""")
             for row in db.execute("SELECT id, state FROM sessions WHERE id NOT IN (SELECT session_id FROM orders)").fetchall():
                 try:
                     state = json.loads(row["state"])
@@ -158,9 +149,10 @@ class SQLiteOrderStore:
                   "quoteRequests": [dict(row) for row in db.execute("SELECT * FROM quote_requests WHERE order_id = ?", (order_id,))]}
         (backup_dir / f"{safe_id}-{uuid.uuid4().hex}.json").write_text(json_text(backup), encoding="utf-8")
         # Keep append-only events/audit intact; only reset current projections.
-        for table, column in (("orders", "order_id"), ("messages", "session_id"),
-                              ("quote_requests", "order_id"), ("sessions", "id")):
-            db.execute(f"DELETE FROM {table} WHERE {column} = ?", (order_id,))
+        db.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
+        db.execute("DELETE FROM messages WHERE session_id = ?", (order_id,))
+        db.execute("DELETE FROM quote_requests WHERE order_id = ?", (order_id,))
+        db.execute("DELETE FROM sessions WHERE id = ?", (order_id,))
         self._insert_audit(db, order_id, 0, "corruption_quarantined", {"error": type(error).__name__}, "system")
 
     def create_order(self, order: dict[str, Any]) -> dict[str, Any]:
@@ -258,18 +250,19 @@ class SQLiteOrderStore:
     def list_orders(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         filters = filters or {}
         limit, offset = max(1, min(100, int(filters.get("limit", 50)))), max(0, int(filters.get("offset", 0)))
-        clauses, args = [], []
-        if not filters.get("includeArchived", False):
-            clauses.append("status <> 'archived'")
-        if filters.get("status"):
-            clauses.append("status = ?")
-            args.append(str(filters["status"]))
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        include_archived = 1 if filters.get("includeArchived", False) else 0
+        status = str(filters.get("status") or "")
         with self._db() as db:
             db.execute("BEGIN")
-            total = db.execute("SELECT COUNT(*) FROM orders" + where, args).fetchone()[0]
-            rows = db.execute("SELECT order_id FROM orders" + where + " ORDER BY updated_at DESC, order_id LIMIT ? OFFSET ?",
-                              args + [limit, offset]).fetchall()
+            # One literal statement carries both optional filters as bound
+            # parameters, so no WHERE clause is assembled from strings.
+            total = db.execute(
+                "SELECT COUNT(*) FROM orders WHERE (? = 1 OR status <> 'archived') AND (? = '' OR status = ?)",
+                (include_archived, status, status)).fetchone()[0]
+            rows = db.execute(
+                "SELECT order_id FROM orders WHERE (? = 1 OR status <> 'archived') AND (? = '' OR status = ?)"
+                " ORDER BY updated_at DESC, order_id LIMIT ? OFFSET ?",
+                (include_archived, status, status, limit, offset)).fetchall()
             records = [summary(self._load(db, row[0])) for row in rows]
         return {"orders": records, "total": total, "limit": limit, "offset": offset, "storage": self.metadata()}
 

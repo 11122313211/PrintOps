@@ -15,6 +15,7 @@ import signal
 import socket
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -26,15 +27,16 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from agent import (Agent, Memory, RevisionConflictError, PLATFORMS, SUPPLIER_PROFILE_VERSION,
                    TOOL_META, TOOL_SCHEMAS, WORKFLOW_LABELS)
 from product_knowledge import catalog_payload, parameter_state, KNOWLEDGE_MANIFEST
-from llm_adapter import OpenAICompatiblePlanner, read_saved_config, write_saved_config
+from llm_adapter import (ConfigWriteError, OpenAICompatiblePlanner, read_saved_config,
+                         write_saved_config)
 from order_contract import canonical_order, handoff_document
 from order_model import normalize_state
 from storage_contract import StoreConflictError, summary
 from supplier_adapters import list_platforms
 from tools import validate_order
-from request_runtime import (DeadlineExceeded, bounded_io, check_deadline, current_deadline,
-                             deadline_lock, deadline_scope, operation_deadline,
-                             remaining, replace_deadline)
+from request_runtime import (CONTROL_SLOTS, DeadlineExceeded, OutboundBusy, bounded_io,
+                             check_deadline, current_deadline, deadline_lock, deadline_scope,
+                             operation_deadline, remaining, replace_deadline)
 import stdio_utf8
 
 
@@ -63,7 +65,8 @@ SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 MAX_BODY_BYTES = 1 * 1024 * 1024
 # Scratch table used only by the startup write probe; the probe rolls back, so
-# a successful start never persists it.
+# a successful start never persists it. The probe uses literal SQL, so this
+# name must stay in sync with the statements in memory_write_probe().
 PROBE_TABLE = "printops_startup_probe"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 LOGGER = logging.getLogger("printops.server")
@@ -113,17 +116,17 @@ DNS_CHECK_SECONDS = 6.0
 MODEL_TEST_BUDGET_SECONDS = 40.0
 ROUTE_DEADLINE_CAP_SECONDS = 120.0
 MIN_ROUTE_EXTENSION_BASE_SECONDS = 5.0
-# Capability probes are bounded by construction: one gated hop, two parallel
-# hops, then one continuation hop.  Two more knobs keep the route itself from
-# becoming a way to spend the user's API quota or the shared outbound budget:
-# an unreachable verdict is reused for a few seconds instead of re-probing on
-# every click, and only two probes may run at once.
+# Capability probes are bounded by construction: one gated hop plus two
+# parallel hops in a single round trip.  Two more knobs keep the route itself
+# from becoming a way to spend the user's API quota or the shared outbound
+# budget: an unreachable verdict is reused for a few seconds instead of
+# re-probing on every click, and only two probes may run at once.
 MODEL_TEST_FAILURE_CACHE_SECONDS = float(
     _env_number("PRINTOPS_MODEL_TEST_FAILURE_CACHE_SECONDS", 15.0, float))
 MODEL_TEST_CACHE_MAX_ENTRIES = 16
 MODEL_TEST_MAX_CONCURRENT = 2
 MODEL_TEST_SLOT_WAIT_SECONDS = 2.0
-PROBE_FINGERPRINT_VERSION = "capability-probe-v2-parallel"
+PROBE_FINGERPRINT_VERSION = "capability-probe-v3-single-round-trip"
 SLOW_REQUEST_MS = float(_env_number("PRINTOPS_SLOW_REQUEST_MS", DEFAULT_SLOW_REQUEST_MS, float))
 SHUTDOWN_GRACE_SECONDS = float(
     _env_number("PRINTOPS_SHUTDOWN_GRACE_SECONDS", DEFAULT_SHUTDOWN_GRACE_SECONDS, float)
@@ -169,7 +172,12 @@ class RequestError(Exception):
 
 
 def _key_storage_warning() -> str:
-    """Warn when a plaintext API key is actually stored in the local config file."""
+    """Report plaintext key storage to API consumers only.
+
+    The settings panel deliberately does not print this note: it exposes the
+    local key path and storage detail in the UI.  The field stays in the
+    documented /api/settings payload for callers that audit key storage.
+    """
     try:
         return KEY_STORAGE_WARNING if read_saved_config(LLM_CONFIG_PATH).get("key") else ""
     except OSError:
@@ -192,18 +200,41 @@ def _configure_bounded(candidate, url: str, model: str, api_key: str) -> None:
     wait is capped at DNS_CHECK_SECONDS so a dead DNS turns into a specific,
     actionable error instead of eating the whole request budget and surfacing
     as a generic 408 while the user is only saving their API key.
+
+    A busy outbound pool is reported separately: the validation never ran, so
+    telling the user to check their address or DNS would be wrong.  The save
+    draws from the control pool, so a stuck model probe cannot starve it.
     """
     budget = min(DNS_CHECK_SECONDS, max(1.0, float(candidate.timeout)))
     try:
-        bounded_io(lambda: candidate.configure(url, model, api_key), operation_deadline(budget))
+        bounded_io(lambda: candidate.configure(url, model, api_key),
+                   operation_deadline(budget), CONTROL_SLOTS)
+    except OutboundBusy as error:
+        raise RequestError(
+            "上一次接口地址校验仍未结束，请稍后重试",
+            429, "OUTBOUND_BUSY") from error
     except DeadlineExceeded as error:
         raise RequestError(
-            f"接口地址校验超时（{DNS_CHECK_SECONDS:.0f} 秒）：主机名解析或出站等待未完成，"
+            f"接口地址校验超时（{budget:.0f} 秒）：主机名解析或出站等待未完成，"
             "请检查本机 DNS/代理，或确认端点可达后重试",
             504, "ADDRESS_VALIDATION_TIMEOUT") from error
 
 
-def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
+def _config_write_message(error: OSError) -> str:
+    """Name the failing step and the OS error code, not just "cannot write"."""
+    hints = {5: "拒绝访问", 32: "文件被其他程序占用", 33: "文件被锁定"}
+    detail = ""
+    winerror = getattr(error, "winerror", None)
+    if winerror is not None:
+        hint = hints.get(winerror)
+        detail = f"（Windows 错误 {winerror}{'：' + hint if hint else ''}）"
+    stage = getattr(error, "stage", "写入配置文件")
+    return (f"{stage}失败，无法写入本机配置文件 data/llm_config.json{detail}；"
+            "请检查 data 目录的写入权限，或确认同步盘/安全软件没有占用该文件")
+
+
+def update_llm_settings(body: dict[str, object],
+                        request_id: str = "") -> dict[str, object]:
     global PLANNER
     url = str(body.get("url", "")).strip()
     model = str(body.get("model", "")).strip()
@@ -219,7 +250,19 @@ def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
         # bounded, and confined to a candidate that is never published late.
         _configure_bounded(candidate, url, model, api_key)
     with deadline_lock(LLM_LOCK):
-        write_saved_config(LLM_CONFIG_PATH, {"url": candidate.base_url, "model": candidate.model, "key": candidate.api_key})
+        try:
+            write_saved_config(LLM_CONFIG_PATH, {"url": candidate.base_url, "model": candidate.model, "key": candidate.api_key})
+        except OSError as error:
+            # Antivirus locking the file, a read-only install and a restrictive
+            # ACL all land here; the generic 500 would hide an actionable
+            # permission issue, and the request id ties the toast to this line.
+            LOGGER.error(
+                "config write failed requestId=%s stage=%s path=%s winerror=%s errno=%s cause=%r",
+                request_id, getattr(error, "stage", "写入配置文件"),
+                getattr(error, "path", str(LLM_CONFIG_PATH)),
+                getattr(error, "winerror", None), getattr(error, "errno", None),
+                getattr(error, "cause", error))
+            raise RequestError(_config_write_message(error), 500, "CONFIG_WRITE_FAILED") from error
         PLANNER = candidate
         payload: dict[str, object] = {"llm": PLANNER.public_config()}
     warning = _key_storage_warning()
@@ -878,8 +921,8 @@ def memory_write_probe(path: str | Path) -> None:
     connection = sqlite3.connect(str(database), timeout=5.0)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute(f"CREATE TABLE IF NOT EXISTS {PROBE_TABLE} (id INTEGER PRIMARY KEY)")
-        connection.execute(f"INSERT INTO {PROBE_TABLE} (id) VALUES (1)")
+        connection.execute("CREATE TABLE IF NOT EXISTS printops_startup_probe (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO printops_startup_probe (id) VALUES (1)")
         connection.rollback()
     finally:
         connection.close()
@@ -920,6 +963,31 @@ def startup_checks(port: int | None = None) -> list[str]:
             problems.append(f"端口 {port} 不可用：{error}"
                             "（端口可能已被占用；可用 PRINTOPS_PORT 更换）")
     return problems
+
+
+def config_write_probe(directory: str | Path) -> str:
+    """Prove the settings directory accepts a temp file and an atomic replace.
+
+    Startup only logs this: a rules-mode session is still useful when the
+    config cannot be written, but the failure should be known before the user
+    fills the settings form and gets a 500 on save.
+    """
+    directory = Path(directory)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, probe = tempfile.mkstemp(prefix=".printops-config-probe-", dir=str(directory))
+        probe_path, target = Path(probe), None
+        try:
+            os.close(fd)
+            target = probe_path.with_name(probe_path.name + ".target")
+            os.replace(probe_path, target)
+        finally:
+            probe_path.unlink(missing_ok=True)
+            if target is not None:
+                target.unlink(missing_ok=True)
+    except OSError as error:
+        return f"模型配置文件目录不可写：{directory}（{error}）"
+    return ""
 
 
 def configure_logging() -> None:
@@ -995,15 +1063,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     problems = startup_checks(port if args.check else None)
+    config_problem = config_write_probe(LLM_CONFIG_PATH.parent)
     if args.check:
-        print(json.dumps({"ok": not problems, "port": port,
-                          "memoryPath": str(memory_path()), "problems": problems},
+        print(json.dumps({"ok": not problems and not config_problem, "port": port,
+                          "memoryPath": str(memory_path()), "configPath": str(LLM_CONFIG_PATH),
+                          "configWritable": not config_problem,
+                          "problems": problems + ([config_problem] if config_problem else [])},
                          ensure_ascii=False, allow_nan=False, separators=(",", ":")))
-        return 1 if problems else 0
+        return 1 if problems or config_problem else 0
     if problems:
         for problem in problems:
             print(f"PrintOps 启动自检失败：{problem}", file=sys.stderr)
         return 1
+    if config_problem:
+        LOGGER.warning("%s（模型设置将无法保存）", config_problem)
 
     try:
         httpd = build_server(port)
@@ -1218,14 +1291,14 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
             if path == "/api/settings":
                 try:
-                    return self.reply(update_llm_settings(body))
+                    return self.reply(update_llm_settings(body, self.request_id))
                 except ValueError as error:
                     raise RequestError(str(error), 400, "INVALID_SETTINGS")
             if path == "/api/model/test":
                 if str(body.get("url", "")).strip() or bool(getattr(PLANNER, "enabled", False)):
                     # The probe announces its own bounded workload: one DNS
-                    # check, a gated hop, two parallel capability hops and one
-                    # continuation hop, each capped at
+                    # check plus three capability hops in a single round trip,
+                    # each capped at
                     # llm_adapter.CAPABILITY_PROBE_REQUEST_MAX_SECONDS.  Give
                     # the route the matching capped budget instead of letting
                     # the global deadline abort a slow-endpoint test.

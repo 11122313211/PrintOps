@@ -38,7 +38,7 @@ class ExampleSupplierConnector(MockConnector):
             return result
         result["type"] = "order_draft"
         with self.lock:
-            self.requests[result["requestId"]] = deepcopy(result)
+            self.quotes[result["requestId"]] = deepcopy(result)
         return result
 
 

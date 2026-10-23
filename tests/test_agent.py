@@ -94,12 +94,12 @@ class AgentTest(unittest.TestCase):
         self.agent.chat("做 100 份 A5 名片，下周内拿到", {
             "paper": "250g 铜版纸", "printing": "双面四色",
         })
-        self.agent.planner = type("Planner", (), {"api_key": "secret-key"})()
+        self.agent.planner = type("Planner", (), {"api_key": "tk9"})()
         context = self.agent.context_snapshot()
         self.assertNotIn("messages", context)
         self.assertNotIn("history", context)
         self.assertNotIn("api_key", json.dumps(context, ensure_ascii=False))
-        self.assertNotIn("secret-key", json.dumps(context, ensure_ascii=False))
+        self.assertNotIn("tk9", json.dumps(context, ensure_ascii=False))
 
     def test_old_session_quantity_is_migrated_to_structured_fields(self):
         legacy_id = "legacy-session"

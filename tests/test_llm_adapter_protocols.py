@@ -207,7 +207,6 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self.assertTrue(result["chat"])
         self.assertFalse(result["jsonPlan"])
         self.assertFalse(result["nativeTools"])
-        self.assertFalse(result["toolContinuation"])
         self.assertEqual(result["chosenProtocol"], "chat_only")
         self.assertFalse(result["agentReady"])
         self.assertEqual(sorted(_capability_hop(body) for body in requests),
@@ -240,7 +239,7 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self.assertEqual(result["errors"]["nativeTools"], "HTTP 400")
         self._assert_no_order_payload(requests)
 
-    def test_capabilities_selects_native_only_after_continuation(self) -> None:
+    def test_capabilities_selects_native_tools_from_the_tool_call_alone(self) -> None:
         requests: list[dict] = []
 
         def fake_urlopen(request, timeout):
@@ -253,9 +252,6 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
                 return _Response(_JSON_PLAN)
             if hop == "native":
                 return _Response(_NATIVE_CALL)
-            if hop == "continuation":
-                return _Response({"choices": [{"message": {
-                    "content": "PRINTOPS_CAPABILITY_CONTINUATION_OK"}}]})
             return _Response(_CHAT_OK)
 
         planner = _planner()
@@ -264,16 +260,15 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self.assertTrue(result["chat"])
         self.assertTrue(result["jsonPlan"])
         self.assertTrue(result["nativeTools"])
-        self.assertTrue(result["toolContinuation"])
         self.assertEqual(result["chosenProtocol"], "native_tools")
         self.assertTrue(result["agentReady"])
         self.assertEqual(planner.last_protocol, "native_tools")
-        self.assertEqual(result["probeTimings"]["hops"], 4)
-        continuation = requests[-1]
-        self.assertEqual(_capability_hop(continuation), "continuation")
-        self.assertEqual([item["role"] for item in continuation["messages"][-2:]],
-                         ["assistant", "tool"])
-        self.assertEqual(continuation["messages"][-1]["tool_call_id"], "probe-call")
+        self.assertEqual(result["probeTimings"]["hops"], 3)
+        # The probe no longer spends a generation round trip replaying a tool
+        # result: that contract is exercised by the Agent, which falls back to
+        # JSON on its own.
+        self.assertEqual(sorted(_capability_hop(body) for body in requests),
+                         ["chat", "json", "native"])
         self._assert_no_order_payload(requests)
 
 

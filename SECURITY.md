@@ -20,7 +20,11 @@ that are never sent automatically.
 - **进程随机访问令牌**：`X-PrintOps-Token`，页面自动注入、重启即失效；健康检查豁免。
 - **请求边界**：1 MB 请求体、行级限制、总时限（408）、连接槽上限（过载 503 + Retry-After）。
 - **模型是候选而非权威**：LLM 只能提出白名单字段补丁与受限工具调用，执行仍由本地代码决定；
-  API Key 存 `data/llm_config.json`（gitignored、0600），不回显给前端。
+  API Key 存 `data/llm_config.json`（gitignored；POSIX 0600，Windows 经 `icacls` 收紧为仅当前用户 Full Control，
+  `icacls` 不可用时保留继承 ACL），不回显给前端。
+  保存走同目录临时文件 + `fsync` + 原子替换；Windows ACL 用 `(F)` 而不是 `(R,W)`——后者缺少 DELETE，
+  会让下一次 `os.replace` 以 WinError 5 失败。替换瞬间被同步盘/杀软占用时重试 50/120/250ms，
+  失败信息带阶段与系统错误码。
 - **MCP stdio 能力分级**：会话绑定、L0/L1 capability、参数校验与审计；launcher 拒绝 `--allow-any-session`。
 - **SSRF 守卫**：模型 Base URL 默认拒绝私网/环回地址（`PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS` 仅为显式调试）。
 - **无静默外部副作用**：供应商提交必须人工确认；内置连接器默认 `verified=false`、`networkEnabled=false`。
