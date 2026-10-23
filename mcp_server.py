@@ -28,6 +28,7 @@ from order_model import DIMENSION_DEFAULTS, parse_quantity
 from product_knowledge import KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION, catalog_payload
 from supplier_adapters import PLATFORMS
 from tools import TOOL_SCHEMAS, validate_order
+import stdio_utf8
 
 
 SERVER_NAME = "printops-mcp"
@@ -38,6 +39,7 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_STRING_LENGTH = 4096
 MAX_INSPECTION_BYTES = 16 * 1024
 MAX_MESSAGE_BYTES = 64 * 1024
+MAX_JSON_DEPTH = 64
 MAX_ITEM_ID_LENGTH = 128
 MAX_RESPONSE_BYTES = 128 * 1024
 # Keep numeric arguments within the range represented exactly by JSON clients
@@ -322,6 +324,24 @@ def _tool_definitions(allowed: set[str]) -> list[dict[str, Any]]:
              "inputSchema": definitions[name]["inputSchema"]}
             for name in definitions if name in allowed]
 
+
+
+def _nesting_depth_exceeded(line: str) -> bool:
+    """Reject absurdly nested input before the JSON parser can recurse.
+
+    Python 3.12 and newer can parse structures hundreds deep where older
+    versions raised RecursionError; both must answer with parse_error so
+    clients see one behaviour across interpreters.
+    """
+    depth = 0
+    for character in line:
+        if character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return True
+        elif character in "]}":
+            depth -= 1
+    return False
 
 class PrintOpsMCP:
     """Line-oriented JSON-RPC MCP server backed by one PrintOps memory store."""
@@ -1036,14 +1056,17 @@ class PrintOpsMCP:
                                                separators=(",", ":")) + "\n")
                 output_stream.flush()
                 continue
-            try:
-                # Python accepts JavaScript-style non-finite constants by
-                # default; MCP peers require strict JSON.
-                message = json.loads(line, parse_constant=_reject_json_constant)
-            except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
-                response = self._error(None, MCPError("parse_error", "请求不是有效 JSON", rpc_code=-32700))
+            if _nesting_depth_exceeded(line):
+                response = self._error(None, MCPError("parse_error", "请求嵌套层级过深", rpc_code=-32700))
             else:
-                response = self.handle(message)
+                try:
+                    # Python accepts JavaScript-style non-finite constants by
+                    # default; MCP peers require strict JSON.
+                    message = json.loads(line, parse_constant=_reject_json_constant)
+                except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+                    response = self._error(None, MCPError("parse_error", "请求不是有效 JSON", rpc_code=-32700))
+                else:
+                    response = self.handle(message)
             if response is not None:
                 output_stream.write(json.dumps(response, ensure_ascii=False, allow_nan=False,
                                                separators=(",", ":")) + "\n")
@@ -1058,6 +1081,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Allow any valid session ID (development/testing only)")
     parser.add_argument("--capabilities", default=None, help="Comma-separated levels: L0 or L0,L1")
     args = parser.parse_args(argv)
+    stdio_utf8.configure(stdin=True)
     if not args.session_id and not os.getenv("PRINTOPS_MCP_SESSION_ID") and not args.allow_any_session:
         print("PrintOps MCP requires --session-id or PRINTOPS_MCP_SESSION_ID; "
               "use --allow-any-session only for development", file=sys.stderr)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fnmatch
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -79,6 +80,7 @@ def _git(*args: str) -> list[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
     )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -91,6 +93,11 @@ def _matches(path: str, patterns: tuple[str, ...]) -> bool:
 
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
     try:
         tracked = _git("ls-files")
         status = _git("status", "--porcelain=v1", "--untracked-files=all")

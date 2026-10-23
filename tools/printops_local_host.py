@@ -19,11 +19,16 @@ import signal
 import sqlite3
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+import stdio_utf8
 SKILLS_ROOT = REPO_ROOT / ".dsh" / "skills"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TEMP_DIRS: list[Path] = []
@@ -182,7 +187,7 @@ def _session_exists(memory_path: Path, session_id: str) -> bool:
     if not memory_path.is_file():
         return False
     try:
-        with sqlite3.connect(memory_path, timeout=1.0) as db:
+        with closing(sqlite3.connect(memory_path, timeout=1.0)) as db:
             row = db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'"
             ).fetchone()
@@ -294,6 +299,7 @@ def _messages_from_stdin() -> Iterator[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    stdio_utf8.configure(stdin=True)
     parser = _JsonArgumentParser(
         description="Run the dependency-free local PrintOps host (no dsh/Node/npm/pnpm required)"
     )

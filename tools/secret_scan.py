@@ -91,6 +91,11 @@ def collect_hits(root: Path) -> list[str]:
 
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
     root = Path(__file__).resolve().parents[1]
     hits = collect_hits(root)
     if hits:

@@ -34,6 +34,7 @@ from supplier_adapters import list_platforms
 from tools import validate_order
 from request_runtime import (DeadlineExceeded, bounded_io, check_deadline, deadline_lock,
                              deadline_scope, operation_deadline, remaining)
+import stdio_utf8
 
 
 ROOT = Path(__file__).parent
@@ -646,7 +647,21 @@ def reject_overloaded(request) -> None:
         pass
     finally:
         try:
-            request.shutdown(socket.SHUT_RDWR)
+            # Read the peer's request out of the socket before teardown.
+            # On Windows a close() with unread receive data — or a SHUT_RD
+            # that discards it — answers with a RST that erases the 503
+            # written above, so give the bytes a brief chance to arrive and
+            # consume them, then half-close the write side only.
+            request.settimeout(0.2)
+            try:
+                while request.recv(8192):
+                    pass
+            except OSError:
+                pass
+        except (AttributeError, OSError):
+            pass
+        try:
+            request.shutdown(socket.SHUT_WR)
         except OSError:
             pass
         try:
@@ -844,6 +859,7 @@ def install_signal_handlers(server: Any, stream: Any = None) -> Callable[[], Non
 
 def main(argv: list[str] | None = None) -> int:
     """Run the local HTTP API with fail-fast startup and graceful shutdown."""
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(prog="server.py",
                                      description="PrintOps 本地 HTTP API（纯标准库）")
     parser.add_argument("--port", type=int, default=None,
@@ -923,11 +939,51 @@ class Handler(BaseHTTPRequestHandler):
                 timer.start()
             try:
                 return super().handle_one_request()
-            except (DeadlineExceeded, OSError):
+            except DeadlineExceeded:
                 self.close_connection = True
+                if self.command:
+                    self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
+            except OSError:
+                self.close_connection = True
+                # expire_read's shutdown(SHUT_RD) surfaces as an OSError here
+                # (WSAECONNABORTED on Windows) before any read-level check can
+                # raise DeadlineExceeded.  Clients that already sent a request
+                # line still get the structured 408 they would see on POSIX
+                # instead of a silent abort.
+                if self.command and deadline is not None and time.monotonic() >= deadline - 0.01:
+                    try:
+                        self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
+                    except OSError:
+                        pass
             finally:
                 if timer is not None:
                     timer.cancel()
+
+    def finish(self):
+        """Close the connection without provoking a Windows RST.
+
+        ``close()`` with unread receive data turns into WSAECONNRESET on
+        Windows and can erase an already-written response — the 408 deadline
+        reply among them.  Flush, drop pending client bytes within a bounded,
+        non-blocking budget, then let the normal FIN teardown run.
+        """
+        try:
+            self.wfile.flush()
+        except OSError:
+            pass
+        try:
+            self.connection.setblocking(False)
+            for _ in range(16):
+                try:
+                    if not self.connection.recv(8192):
+                        break
+                except (BlockingIOError, InterruptedError):
+                    break
+                except OSError:
+                    break
+        except OSError:
+            pass
+        super().finish()
 
     def _origin_allowed(self) -> bool:
         """Same-origin check: a present Origin header must match Host."""

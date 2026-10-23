@@ -20,6 +20,9 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "tools" / "dsh_mcp_launcher.py"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+import stdio_utf8
 PROTOCOL_VERSION = "2024-11-05"
 MAX_LINE_BYTES = 128 * 1024
 
@@ -36,7 +39,9 @@ def _request(request_id: int, method: str, params: dict[str, Any]) -> dict[str, 
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
-def _decode_responses(stdout: str) -> list[dict[str, Any]]:
+def _decode_responses(stdout: str | None) -> list[dict[str, Any]]:
+    if stdout is None:
+        raise SmokeError("MCP child stdout could not be decoded")
     responses: list[dict[str, Any]] = []
     for line_number, line in enumerate(stdout.splitlines(), 1):
         if not line.strip():
@@ -170,6 +175,7 @@ def run_smoke(session_id: str = "dsh-smoke", memory_path: str | Path | None = No
 
 
 def main(argv: list[str] | None = None) -> int:
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(description="Run the offline PrintOps dsh/MCP transcript smoke")
     parser.add_argument("--session-id", default="dsh-smoke")
     parser.add_argument("--memory-path", default=None)

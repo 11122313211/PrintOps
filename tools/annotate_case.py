@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import stdio_utf8
 
 from agent import Agent, Memory  # noqa: E402
 from order_model import LABELS  # noqa: E402
@@ -95,6 +96,7 @@ def build_case_draft(name: str, turns: list[str], tag: str = "真实",
 
 
 def main() -> int:
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(description="生成真实脱敏用例草稿（expected 为待人工核对的建议值）")
     parser.add_argument("--name", required=True, help="用例唯一名称，例如 真实-名片001")
     parser.add_argument("--tag", default="真实", help="分组标签，默认 真实")

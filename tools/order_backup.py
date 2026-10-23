@@ -12,9 +12,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from storage_backup import create_backup, restore_isolated, verify_backup
 from storage_policy import StoragePolicy, retention_plan
+import stdio_utf8
 
 
 def main(argv=None) -> int:
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, help="JSON StoragePolicy (optional)")
     commands = parser.add_subparsers(dest="command", required=True)

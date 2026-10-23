@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from supplier_adapters import SupplierAdapter
 from supplier_connectors import ConnectorRegistry, MockConnector
 from supplier_contract import RequestContext
+import stdio_utf8
 
 
 class ExampleSupplierConnector(MockConnector):
@@ -63,4 +64,5 @@ def demo() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
+    stdio_utf8.configure()
     print(json.dumps(demo(), ensure_ascii=False, indent=2))

@@ -6,6 +6,7 @@ at startup. Live effects remain disabled unless every guard is explicitly met.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
@@ -13,7 +14,7 @@ from queue import Empty, Queue
 import sqlite3
 from threading import BoundedSemaphore, Event, RLock, Thread
 import time
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from uuid import uuid4
 
 from supplier_adapters import (ADAPTERS, DEFAULT_FIELD_MAP, PLATFORMS, SupplierAdapter,
@@ -78,10 +79,17 @@ class SQLiteRequestJournal:
                 );
             """)
 
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=5)
-        db.execute("PRAGMA journal_mode=WAL")
-        return db
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # The connection context alone commits; Windows additionally requires
+        # the handle to close before the file may be renamed or deleted.
+        connection = sqlite3.connect(self.path, timeout=5)
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def claim(self, key: str, fingerprint: str, record: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         with self._connect() as db:

@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pricing_schema import decimal_value, money
+import stdio_utf8
 
 REQUIRED_COLUMNS = (
     "quote_id", "source_id", "source_description", "quote_date", "valid_until",
@@ -138,6 +139,7 @@ def calibrate(csv_path: str | Path, *, as_of: date, min_samples: int = 5,
 
 
 def main() -> int:
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv_path")
     parser.add_argument("--output", required=True)
