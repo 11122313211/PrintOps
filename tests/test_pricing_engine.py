@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -233,7 +234,9 @@ class CalibrationTest(unittest.TestCase):
 
     def test_offline_cli_writes_only_a_draft_and_rejects_active_rate_directory(self):
         root = Path(__file__).resolve().parents[1]
-        result = subprocess.run([sys.executable, str(root / "tools/calibrate_pricing.py"), "missing.csv", "--output", str(root / "rate_cards/draft.json")], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, str(root / "tools/calibrate_pricing.py"), "missing.csv", "--output", str(root / "rate_cards/draft.json")],
+                                capture_output=True, text=True, encoding="utf-8",
+                                env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"})
         self.assertEqual(result.returncode, 2)
         self.assertIn("活动 rate_cards", result.stderr)
 

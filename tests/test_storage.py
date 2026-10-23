@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -137,12 +138,12 @@ class SQLiteMigrationTest(unittest.TestCase):
             path = Path(temporary) / "corrupt.sqlite3"
             store = SQLiteOrderStore(path)
             store.create_order(fixture())
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE orders SET runtime_json = '{broken' WHERE order_id = 'sample'")
             self.assertIsNone(store.load_order("sample"))
             backups = list((Path(temporary) / "corrupted").glob("sample-*.json"))
             self.assertEqual(len(backups), 1)
-            backed_up = json.loads(backups[0].read_text())
+            backed_up = json.loads(backups[0].read_text(encoding="utf-8"))
             self.assertEqual(backed_up["snapshot"]["runtime_json"], "{broken")
             self.assertTrue(store.load_events("sample"))
 
@@ -153,7 +154,7 @@ class SQLiteMigrationTest(unittest.TestCase):
                    "messages": [{"role": "user", "text": "合成测试：A4"}],
                    "fieldMeta": {"size": {"value": "A4", "source": "rule", "confidence": 0.84}}, "revision": 7}
             encoded = json.dumps(raw, ensure_ascii=False)
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
                 db.execute("INSERT INTO sessions VALUES (?, ?)", ("legacy", encoded))
             store = SQLiteOrderStore(path)
@@ -162,7 +163,7 @@ class SQLiteMigrationTest(unittest.TestCase):
             events = store.load_events("legacy")
             reopened = SQLiteOrderStore(path)
             self.assertEqual(reopened.load_events("legacy"), events)
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 backup = db.execute("SELECT state FROM legacy_session_backups WHERE session_id='legacy'").fetchone()[0]
                 self.assertEqual(backup, encoded)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)

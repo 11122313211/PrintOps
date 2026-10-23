@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent import Agent, Memory
+import stdio_utf8
 
 
 def _hand_cases() -> list[dict[str, Any]]:
@@ -438,11 +439,12 @@ def real_corpus_verdict(real_cases: list[dict[str, Any]], real_report: dict[str,
 
 
 def main() -> int:
+    stdio_utf8.configure()
     parser = argparse.ArgumentParser(description="Run the deterministic PrintOps Agent evaluation suite")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON 报告")
     parser.add_argument("--only-failed", action="store_true", help="只打印未通过的用例")
     parser.add_argument("--release-gate", action="store_true",
-                        help="严格发布验收：真实语料须至少20例且字段准确率≥95%，空语料或不足20例也失败")
+                        help="严格发布验收：真实语料须至少20例且字段准确率≥95%%，空语料或不足20例也失败")
     args = parser.parse_args()
     report = run_suite()
     real_cases, real_status = load_real_cases()

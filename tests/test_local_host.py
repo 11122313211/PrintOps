@@ -74,8 +74,9 @@ class LocalHostTest(unittest.TestCase):
                  "--session-id", "cli-test", "--memory-path", str(db),
                  "--message", "解释一下出血"],
                 cwd=str(REPO_ROOT),
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
+                text=True, encoding="utf-8",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -97,8 +98,9 @@ class LocalHostTest(unittest.TestCase):
                 [sys.executable, "tools/printops_local_host.py", "--smoke",
                  "--session-id", "smoke-cli", "--memory-path", str(db)],
                 cwd=str(REPO_ROOT),
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
+                text=True, encoding="utf-8",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -112,8 +114,9 @@ class LocalHostTest(unittest.TestCase):
         completed = subprocess.run(
             [sys.executable, "tools/printops_local_host.py", "--session-id", "bad session"],
             cwd=str(REPO_ROOT),
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
+            text=True, encoding="utf-8",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             check=False,
         )
         self.assertEqual(completed.returncode, 1)

@@ -177,7 +177,7 @@ class MarkdownRenderTest(unittest.TestCase):
             handle.close()
             completed = subprocess.run(
                 [NODE, "-e", HARNESS, str(RENDERER), handle.name],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, encoding="utf-8", timeout=60)
         finally:
             Path(handle.name).unlink(missing_ok=True)
         if completed.returncode != 0:

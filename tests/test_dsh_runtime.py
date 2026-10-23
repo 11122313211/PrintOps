@@ -88,11 +88,12 @@ class DshRuntimeTest(unittest.TestCase):
                 "PRINTOPS_MCP_CAPABILITIES": "L0,L1",
                 "PRINTOPS_MEMORY_PATH": "/tmp/attacker.sqlite3",
                 "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONUTF8": "1",
             })
             completed = subprocess.run(
                 [sys.executable, "tools/dsh_mcp_launcher.py", "--session-id", "bound-session",
                  "--memory-path", str(db), "--capabilities", "L0", "--dry-run"],
-                cwd=str(REPO_ROOT), env=environment, text=True,
+                cwd=str(REPO_ROOT), env=environment, text=True, encoding="utf-8",
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -114,8 +115,9 @@ class DshRuntimeTest(unittest.TestCase):
                       ("--session-id", "ok", "--capabilities", "L2")):
             completed = subprocess.run(
                 [sys.executable, "tools/dsh_mcp_launcher.py", *extra, "--dry-run"],
-                cwd=str(REPO_ROOT), text=True, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                cwd=str(REPO_ROOT), text=True, encoding="utf-8", stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
                 check=False,
             )
             self.assertEqual(completed.returncode, 2)

@@ -1,6 +1,7 @@
 """Old delivery evidence survives schema migration without authorizing reuse."""
 from copy import deepcopy
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -84,7 +85,7 @@ class LegacyDeliveryMigrationTest(unittest.TestCase):
             path = Path(temporary) / "legacy.sqlite3"
             original = legacy_delivery()
             encoded = json.dumps(original, ensure_ascii=False)
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
                 db.execute("INSERT INTO sessions VALUES (?, ?)", ("legacy", encoded))
             memory = Memory(path)
@@ -102,7 +103,7 @@ class LegacyDeliveryMigrationTest(unittest.TestCase):
             self.assertEqual(export["quoteRequests"][0]["requestId"], "preserved-request")
             self.assertEqual(export["quoteRequests"][0]["status"], "stale")
             self.assertNotEqual(export["status"], "confirmed")
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 backup = db.execute("SELECT state FROM legacy_session_backups WHERE session_id = 'legacy'").fetchone()[0]
                 self.assertEqual(backup, encoded)
 

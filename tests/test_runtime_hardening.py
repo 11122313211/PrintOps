@@ -319,14 +319,16 @@ class McpSignalHandlerTest(unittest.TestCase):
             restore()
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
+    @unittest.skipIf(os.name == "nt",
+                     "Windows cannot deliver SIGTERM to a child process; graceful stop is POSIX-only")
     def test_sigterm_shuts_the_stdio_server_down_with_exit_code_zero(self):
         with tempfile.TemporaryDirectory() as temporary:
             process = subprocess.Popen(
                 [sys.executable, "mcp_server.py", "--session-id", "sigterm-test",
                  "--memory-path", str(Path(temporary) / "agent.sqlite3")],
                 cwd=str(REPO_ROOT), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
             )
             try:
                 initialize = json.dumps({
@@ -530,11 +532,12 @@ class MainEntrypointTest(unittest.TestCase):
             blocker = Path(temporary) / "not-a-directory"
             blocker.write_text("x", encoding="utf-8")
             environment = dict(os.environ,
-                               PRINTOPS_MEMORY_PATH=str(blocker / "agent.sqlite3"))
+                               PRINTOPS_MEMORY_PATH=str(blocker / "agent.sqlite3"),
+                               PYTHONUTF8="1")
             result = subprocess.run(
                 [sys.executable, "server.py", "--check"], cwd=str(REPO_ROOT),
                 env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, timeout=30,
+                stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=30,
             )
         self.assertNotIn("Traceback", result.stderr)
         payload = json.loads(result.stdout)
@@ -657,14 +660,16 @@ class LoopbackRuntimeTest(unittest.TestCase):
         finally:
             connection.close()
 
+    @unittest.skipIf(os.name == "nt",
+                     "Windows cannot deliver SIGTERM to a child process; graceful stop is POSIX-only")
     def test_sigterm_stops_the_server_process_with_exit_code_zero(self):
         with tempfile.TemporaryDirectory() as temporary:
             port = _free_port()
             process = subprocess.Popen(
                 [sys.executable, "server.py", "--port", str(port)],
                 cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                text=True, encoding="utf-8",
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1",
                      "PRINTOPS_MEMORY_PATH": str(Path(temporary) / "agent.sqlite3")},
             )
             try:
@@ -721,6 +726,8 @@ class LocalHostSignalTest(unittest.TestCase):
             restore()
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
+    @unittest.skipIf(os.name == "nt",
+                     "Windows cannot deliver SIGTERM to a child process; graceful stop is POSIX-only")
     def test_sigterm_still_produces_one_strict_json_document(self):
         host = self._load_host()
         with tempfile.TemporaryDirectory() as temporary:
@@ -729,8 +736,8 @@ class LocalHostSignalTest(unittest.TestCase):
                 [sys.executable, "tools/printops_local_host.py", "--interactive",
                  "--session-id", "sigterm-host", "--memory-path", str(database)],
                 cwd=str(REPO_ROOT), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
             )
             try:
                 first = _readline_with_timeout(process.stdout, 30.0)

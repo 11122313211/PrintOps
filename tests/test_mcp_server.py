@@ -497,7 +497,7 @@ class PrintOpsMCPTest(unittest.TestCase):
             [sys.executable, "mcp_server.py", "--session-id", "stdio-session",
              "--memory-path", str(self.db)],
             input="\n".join(json.dumps(item, ensure_ascii=False) for item in requests) + "\n",
-            text=True, capture_output=True, env=env, check=False,
+            text=True, encoding="utf-8", capture_output=True, env=env, check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         lines = [line for line in completed.stdout.splitlines() if line.strip()]
@@ -515,7 +515,7 @@ class PrintOpsMCPTest(unittest.TestCase):
         completed = subprocess.run(
             [sys.executable, "mcp_server.py", "--session-id", "stdio-session",
              "--memory-path", str(self.db)],
-            input="\n".join(requests) + "\n", text=True, capture_output=True,
+            input="\n".join(requests) + "\n", text=True, encoding="utf-8", capture_output=True,
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -529,7 +529,7 @@ class PrintOpsMCPTest(unittest.TestCase):
              "--memory-path", str(self.db)],
             input='{"jsonrpc":"2.0","id":1,"method":"initialize",'
                   '"params":{"protocolVersion":"2024-11-05","value":NaN}}\n',
-            text=True, capture_output=True, check=False,
+            text=True, encoding="utf-8", capture_output=True, check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         response = json.loads(completed.stdout)

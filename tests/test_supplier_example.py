@@ -1,6 +1,7 @@
 """Third-party mock integration with the public connector/registry contract."""
 from pathlib import Path
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -56,7 +57,8 @@ class SupplierExampleTest(unittest.TestCase):
 
     def test_example_runs_as_documented(self):
         script = Path(__file__).resolve().parents[1] / "examples" / "supplier_mock.py"
-        completed = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+        completed = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                             encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"})
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertTrue(json.loads(completed.stdout)["synthetic"])
 

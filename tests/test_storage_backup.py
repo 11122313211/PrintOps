@@ -1,5 +1,7 @@
 """Operational backup contracts: WAL consistency, evidence, restore and policy."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import os
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -30,7 +32,7 @@ class StorageBackupTest(unittest.TestCase):
         self.bundle = self.root / "backup"
 
     def test_backup_and_restore_preserve_all_tables_without_touching_source(self):
-        with sqlite3.connect(self.source) as db:
+        with closing(sqlite3.connect(self.source)) as db, db:
             db.execute("CREATE TABLE plugin_evidence (id TEXT, raw BLOB)")
             db.execute("INSERT INTO plugin_evidence VALUES ('extra', ?)", (b'\x00\xff',))
         before = inventory(self.source)
@@ -46,7 +48,7 @@ class StorageBackupTest(unittest.TestCase):
         self.assertEqual(SQLiteOrderStore(result["database"]).load_order("example")["revision"], 1)
 
     def test_wal_commits_are_included_but_uncommitted_writes_are_not(self):
-        with sqlite3.connect(self.source) as db:
+        with closing(sqlite3.connect(self.source)) as db, db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA wal_autocheckpoint=0")
             db.execute("CREATE TABLE wal_fixture (value TEXT)")
@@ -54,7 +56,7 @@ class StorageBackupTest(unittest.TestCase):
             db.commit()
             db.execute("INSERT INTO wal_fixture VALUES ('uncommitted')")
             create_backup(self.source, self.bundle)
-            with sqlite3.connect(self.bundle / "orders.sqlite3") as backup:
+            with closing(sqlite3.connect(self.bundle / "orders.sqlite3")) as backup, backup:
                 self.assertEqual(backup.execute("SELECT value FROM wal_fixture").fetchall(), [("committed",)])
             db.rollback()
 
@@ -69,7 +71,7 @@ class StorageBackupTest(unittest.TestCase):
             create_backup(self.source, self.bundle)
             future.result()
         verify_backup(self.bundle)
-        with sqlite3.connect(self.bundle / "orders.sqlite3") as db:
+        with closing(sqlite3.connect(self.bundle / "orders.sqlite3")) as db, db:
             revision = db.execute("SELECT revision FROM orders WHERE order_id='example'").fetchone()[0]
             self.assertEqual(db.execute("SELECT MAX(revision) FROM order_events WHERE order_id='example'").fetchone()[0], revision)
             mirror = json.loads(db.execute("SELECT state FROM sessions WHERE id='example'").fetchone()[0])
@@ -81,7 +83,7 @@ class StorageBackupTest(unittest.TestCase):
             restore_isolated(self.bundle, self.root)
         with self.assertRaises(ValueError):
             create_backup(self.source, self.bundle)
-        with sqlite3.connect(self.bundle / "orders.sqlite3") as db:
+        with closing(sqlite3.connect(self.bundle / "orders.sqlite3")) as db, db:
             db.execute("DELETE FROM audit_log")
         with self.assertRaisesRegex(ValueError, "digest"):
             verify_backup(self.bundle)
@@ -96,23 +98,25 @@ class StorageBackupTest(unittest.TestCase):
                           ["verify", str(self.bundle)],
                           ["restore", str(self.bundle), "--destination", str(self.root / "cli-restore")],
                           ["retention-plan", "--directory", str(self.root)]):
-            result = subprocess.run([sys.executable, str(script), *arguments], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(script), *arguments], capture_output=True, text=True,
+                                encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1",
+                                                       "PYTHONDONTWRITEBYTECODE": "1"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIsInstance(json.loads(result.stdout), dict)
 
     def test_malformed_manifest_is_rejected_without_unsafe_retention_planning(self):
         create_backup(self.source, self.bundle)
         path = self.bundle / "manifest.json"
-        original = json.loads(path.read_text())
+        original = json.loads(path.read_text(encoding="utf-8"))
         for invalid in ([], {**original, "createdAt": None}, {**original, "createdAt": "2026-10-15T00:00:00"}):
-            path.write_text(json.dumps(invalid))
+            path.write_text(json.dumps(invalid), encoding="utf-8")
             with self.assertRaises(ValueError):
                 verify_backup(self.bundle)
 
     def test_legacy_store_migrated_before_backup_retains_original_and_cas(self):
         legacy = self.root / "old.sqlite3"
         raw = json.dumps({"order": {"productType": "名片", "size": "B5"}, "revision": 7})
-        with sqlite3.connect(legacy) as db:
+        with closing(sqlite3.connect(legacy)) as db, db:
             db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
             db.execute("INSERT INTO sessions VALUES ('legacy', ?)", (raw,))
         with self.assertRaises(ValueError):
@@ -120,7 +124,7 @@ class StorageBackupTest(unittest.TestCase):
         SQLiteOrderStore(legacy)
         create_backup(legacy, self.bundle)
         result = restore_isolated(self.bundle, self.root / "migrated-restore")
-        with sqlite3.connect(result["database"]) as db:
+        with closing(sqlite3.connect(result["database"])) as db, db:
             self.assertEqual(db.execute("SELECT state FROM legacy_session_backups").fetchone()[0], raw)
             self.assertEqual(db.execute("SELECT revision FROM orders").fetchone()[0], 7)
 
