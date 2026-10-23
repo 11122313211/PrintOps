@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - 2026-10-23（API Key 超时链路、探测根因与密钥存储加固）
+
+针对"填入 API Key 测试连接超时"的浏览器实测修复（复现：黑洞端点空转 18.5 秒只报"接口不可用"）：
+
+- **探测快速失败与根因分类**：能力探测把网络性失败（连接超时/拒绝、DNS、TLS）与鉴权失败（HTTP 401/403）分类上报，首个网络性或鉴权性失败立即终止并给出可操作文案（如"鉴权失败：HTTP 401：API Key 被拒绝或无权访问该模型"），不再 4×6 秒空转后只报"接口不可用"；实测黑洞端点 18.5s→6.1s，无效 Key 98ms 返回。
+- **声明式路由预算（dsh clampTimeout 语义）**：`/api/model/test` 获得封顶 120 秒的独立预算（有界地址校验 + 最多四轮 6 秒探测 + 响应写出），慢端点不再被全局 30 秒截止线误伤成 408；显式配置更小 handler 预算的测试/加固部署保持原值。新增 `request_runtime.replace_deadline` 与 `Handler._extend_request_deadline`。
+- **保存路径 DNS 快速失败**：URL 校验的不可取消系统解析等待限制在 6 秒，超时返回 504 / `ADDRESS_VALIDATION_TIMEOUT` 与"检查 DNS/代理"提示，吃掉整个请求预算变成模糊 408 的路径被消除。
+- **`PRINTOPS_LLM_TIMEOUT`**：单次模型规划预算可配（默认 20 秒，5–120 封顶），慢推理模型无需修改代码即可放宽，文档要求与 `PRINTOPS_REQUEST_TIMEOUT` 同步调高。
+- **密钥文件写入加固（dsh credentials-local 模式）**：`write_saved_config` 改为 mkstemp+fsync+`os.replace` 原子写，权限在落盘前收紧（POSIX 0600；Windows 用 icacls 断继承并仅授权当前用户），崩溃不再留下半写配置或明文临时文件；`read_saved_config` 在 POSIX 上对宽权限密钥文件先自愈 chmod、仍泄露则拒载。
+- **前端取消与文案**：探测/保存进行中关闭设置弹窗即 abort 请求，无迟到 toast；错误 toast 附请求号；`ADDRESS_VALIDATION_TIMEOUT` 映射为"域名解析超时"提示。
+- **本轮验收**：新增 `tests/test_llm_probe_budget.py` 13 项；全量 476 项通过（4 项平台跳过）；浏览器实测黑洞/401/取消三场景；开发工具链在更新后的 Node v24.22.1（Brotli/llhttp 安全修复版）与 Playwright 1.56.1 上运行，npm audit 0 漏洞。
+
 ## Unreleased - 2026-10-23（Windows 兼容、3.14 适配与仓库外壳）
 
 本机全量 `python -m unittest discover`：463 项通过（3 项平台跳过），修复清单如下；git 历史自 GitHub `main` 恢复至 `92a71ca`。

@@ -144,6 +144,8 @@ On 2026-10-16, all **463 Python tests passed**. Chromium and WebKit each passed 
 
 Without a model, the rule-based Agent, default SQLite storage, and basic PDF checks remain local. With an OpenAI-compatible model, the current message, bounded history, compact order, and tool results are sent to the configured endpoint; check that service's logging and retention policy. Model failures retain the rule-based fallback.
 
+The settings dialog's connection test names the root cause (rejected key, DNS timeout, unreachable endpoint, TLS failure, ...) and stops at the first network-level failure; closing the dialog cancels an in-flight probe. Slow reasoning models can raise the per-plan budget via `PRINTOPS_LLM_TIMEOUT` (default 20s, clamped 5-120) together with `PRINTOPS_REQUEST_TIMEOUT` (see docs/RUNTIME_BUDGET.md).
+
 Requests include the most recent 8 messages (up to 2,000 characters each), up to 12KB each for order summaries and tool results, plus nesting and collection bounds. Planning is capped at 3 tool rounds, with tools executed through `Agent.call_tool()`. Tool arguments cannot replace authoritative local state with an arbitrary full order. JSON envelopes provide a fallback when native `tools[].function` is unavailable. When the model does not request a tool, local intent rules supply necessary validation, estimates, terminology explanations, or recommendations.
 
 For a trusted company model on a private network, explicitly enable the address exception:
