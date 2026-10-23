@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - 2026-10-23（Windows 兼容、3.14 适配与仓库外壳）
+
+本机全量 `python -m unittest discover`：463 项通过（3 项平台跳过），修复清单如下；git 历史自 GitHub `main` 恢复至 `92a71ca`。
+
+- **CLI/MCP stdio 统一 UTF-8**：新增 `stdio_utf8.py`；`mcp_server`、`server --check`/启动横幅、`printops_local_host`、`order_backup`、`annotate_case`、`calibrate_pricing`、`dsh_mcp_smoke`、`examples/supplier_mock.py`、`tests/evaluate_agent.py`、`secret_scan`、`repo_guard` 入口写出前强制 UTF-8，修复 GBK 控制台在 `g/m²`、`≥` 等字符上的 UnicodeEncodeError；`dsh_mcp_smoke` 对解码失败子进程报 `SmokeError` 而非 AttributeError。
+- **Windows 文件锁**：`SQLiteRequestJournal._connect` 改为 contextmanager 并在事务后关闭连接；`printops_local_host` 会话探测及 storage/backup/legacy 测试的 `with sqlite3.connect(...)`（只提交不关连接）统一改为 `closing(...)` 模式，消除 TEMP 目录清理 WinError 32。
+- **过载与超时不再擦除已写响应**：`reject_overloaded` 先排空对端请求字节再半关闭写端；`Handler.finish` 增加有界排空；Windows 不再把刚写出的 503/408 变成 RST。请求总时限触发后，已收到请求行的连接获得与 POSIX 一致的结构化 408 `REQUEST_DEADLINE`。
+- **MCP 深度嵌套守卫**：`serve()` 增加 `MAX_JSON_DEPTH=64` 输入深度守卫；Python 3.12+（可解析超深结构）与更早版本统一返回 `parse_error`。
+- **Python 3.14 argparse**：`tests/evaluate_agent.py --release-gate` 的 help 文本 `95%` 转义为 `95%%`，否则 3.14 的 help 校验直接拒绝。
+- **测试跨平台**：子进程管道显式 `encoding="utf-8"` 并注入 `PYTHONUTF8=1`；`read_text()` 补编码；SIGTERM 优雅退出用例在 Windows 明确跳过（3 项）；drip 时限用例接受“408 响应或 deadline abort”两种平台语义。
+- **仓库外壳**：`.gitignore` 覆盖 `.dsh-ops/`、`_sec_audit/`（一次性审计残留已移出工作区）；`.gitattributes` 为 `.bat/.cmd/.ps1` 固定 CRLF、`.sh` 固定 LF；新增 `.env.example`、`data/llm_config.example.json`（FILE_MANAGEMENT 既有承诺的示例配置，不含真实凭据）、`SECURITY.md`、`CONTRIBUTING.md` 与本机一键门禁 `tools/dev_check.py`（延续 2026-09-08 移除 CI、本机检查的决策）；README 双语同步。
+
 ## Unreleased - 2026-10-15（契约、存储与计价改造）
 
 `VERSION` 保持 `1.2.0` 候选基线，本节记录未发布改动，不将历史测试结果视为本轮发布证明。真实脱敏语料目前为空，严格发布检查保持失败；真实 dsh/模型、真人走查及实际供应商接入仍有独立验收边界。

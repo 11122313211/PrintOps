@@ -109,9 +109,12 @@ These are historical Chromium screenshots from the **2026-10-15 uncommitted deve
 
 ## Development and acceptance
 
+This project intentionally does not use GitHub Actions; release checks run on the local machine. See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for development constraints.
+
 The Python runtime and unit/contract checks use the standard library. **Browser development tests additionally require Node.js 18+, npm, pinned Playwright, and Chromium**. These are not needed to start the product.
 
 ```bash
+python3 tools/dev_check.py                             # one-command local gate: compile, tests, evaluation, guards
 python3 -m unittest discover -s tests -p "test_*.py"
 PYTHONPATH=. python3 tests/evaluate_agent.py             # Development report
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json

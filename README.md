@@ -109,9 +109,12 @@ Windows 可在项目目录双击 `start_windows.bat`。服务启动后打开 [ht
 
 ## 开发与验收
 
+本项目有意不使用 GitHub Actions，发布检查以本机为准。漏洞报告方式见 [SECURITY.md](SECURITY.md)，开发约束见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 Python 运行时和单元/契约检查使用标准库。**浏览器开发测试另需 Node.js 18+、npm、固定版本 Playwright 和 Chromium**；它们不是启动产品的依赖。
 
 ```bash
+python3 tools/dev_check.py                             # 本机一键门禁：编译+单测+评测+守护
 python3 -m unittest discover -s tests -p "test_*.py"
 PYTHONPATH=. python3 tests/evaluate_agent.py             # 开发报告
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
