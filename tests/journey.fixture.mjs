@@ -8,7 +8,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 
 export const test = base.extend({
   appURL: [async ({}, use) => {
-    const child = spawn(process.env.PRINTOPS_TEST_PYTHON || 'python3',
+    // Windows ships a store-alias `python3` stub that fails silently; pick the
+    // platform's real interpreter unless the caller overrides explicitly.
+    const python = process.env.PRINTOPS_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    const child = spawn(python,
       ['-u', 'tests/browser_smoke_server.py'], {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -20,7 +23,9 @@ export const test = base.extend({
         child.once('exit', (code) => { clearTimeout(timeout); reject(new Error(`Test server exited ${code}: ${stderr}`)); });
         child.stdout.on('data', (chunk) => {
           output += chunk;
-          const match = output.match(/PRINTOPS_BROWSER_SMOKE_READY (.+)\n/);
+          // Windows text-mode pipes emit CRLF; the old bare-LF regex never matched
+          // there, so the fixture always timed out with an empty stderr.
+          const match = output.match(/PRINTOPS_BROWSER_SMOKE_READY (.+)\r?\n/);
           if (match) {
             clearTimeout(timeout);
             const ready = JSON.parse(match[1]);

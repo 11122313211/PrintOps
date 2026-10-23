@@ -359,9 +359,9 @@ test('csv audit: real downloads preserve authoritative handoff details and prote
     const path = info.outputPath(`confirmed-handoff-formula-${index}.csv`);
     await download.saveAs(path);
     expect((await readFile(path, 'utf8')).charCodeAt(0)).toBe(0xfeff);
-    const rows = JSON.parse(execFileSync(process.env.PRINTOPS_TEST_PYTHON || 'python3', [
+    const rows = JSON.parse(execFileSync(process.env.PRINTOPS_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3'), [
       '-c', 'import csv,json,sys; print(json.dumps(list(csv.DictReader(open(sys.argv[1], encoding="utf-8-sig", newline=""))), ensure_ascii=False))', path,
-    ], {encoding:'utf8'}));
+    ], {encoding:'utf8', env:{...process.env, PYTHONIOENCODING:'utf-8'}}));
     expect(rows.length).toBeGreaterThan(20);
     const lookup = (fieldPath, itemId) => {
       const matches = rows.filter(row => row['字段路径'] === fieldPath && (itemId === undefined || row['产品标识'] === itemId));
