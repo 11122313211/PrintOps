@@ -3,6 +3,7 @@
 data/*
 !data/.gitkeep
 !data/README.md
+!data/llm_config.example.json
 data/corrupted/
 data/uploads/
 data/exports/
@@ -73,3 +74,7 @@ yarn-debug.log*
 yarn-error.log*
 *.egg-info/
 .vscode/settings.json
+
+# Local MCP ops panel state and one-off security-audit scratch (runtime only, never publish).
+.dsh-ops/
+_sec_audit/

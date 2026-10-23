@@ -2,3 +2,8 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+# Windows launcher scripts need CRLF for cmd; shell entrypoints stay LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
