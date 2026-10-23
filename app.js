@@ -81,6 +81,14 @@ let viewEpoch = 0;
 let viewLoading = false;
 const responseView = Symbol("responseView");
 let settingsView = "overview";
+// The plaintext-key warning rides on /api/settings payloads; the dialog
+// re-renders from cached state, so keep the last server-reported value
+// instead of letting the note silently fall back to the benign default.
+let keyStorageWarning = "";
+// Closing the dialog must cancel the in-flight model probe instead of
+// leaving a 20-40s request burning a handler slot and surprising the user
+// with a late toast (dsh fuses caller cancellation into every deadline).
+let settingsAbort = null;
 const specPresetKey = "printops_spec_presets";
 const layoutKey = "printops_layout";
 const LAYOUT_DEFAULTS = { sidebarW: 192, orderW: 335, orderCollapsed: false };
@@ -1027,6 +1035,7 @@ function trackOrderChanges(order) {
 }
 
 function renderSettings(data) {
+  if (data?.keyStorageWarning !== undefined) keyStorageWarning = data.keyStorageWarning;
   llmSettings = data?.llm || llmSettings;
   const enabled = Boolean(llmSettings.enabled);
   const hasError = enabled && Boolean(llmSettings.lastError);
@@ -1039,7 +1048,7 @@ function renderSettings(data) {
     stateText.classList.remove("is-ready", "is-warning", "is-error");
   }
   const note = $("#settings-note");
-  if (note) note.textContent = data?.keyStorageWarning
+  if (note) note.textContent = keyStorageWarning
     || (llmSettings.privateHostsAllowed
       ? "当前已允许访问本机或公司内网模型地址；不要把此服务暴露到公网。Key 仅由本机服务保存。"
       : "Key 仅由本机服务保存，不会显示在页面或接口响应中。内网模型地址默认拦截；URL 与模型留空即可继续使用规则模式。");
@@ -1070,6 +1079,12 @@ function modelCapabilityPresentation(test = {}) {
   }
   if (test.chosenProtocol === "chat_only" || (test.chat && !test.agentReady)) {
     return { label: "仅支持聊天 · 不满足 Agent 协议", tone: "warning" };
+  }
+  if (test.chosenProtocol === "unreachable" && test.message) {
+    return { label: test.message, tone: "error" };
+  }
+  if (!test.ok && test.message && (test.message.includes("鉴权") || test.message.includes("API Key"))) {
+    return { label: test.message, tone: "error" };
   }
   return { label: "接口不可用", tone: "error" };
 }
@@ -2468,15 +2483,24 @@ $("#settings-test").addEventListener("click", async () => {
   const button = $("#settings-test");
   button.disabled = true;
   button.textContent = "测试中…";
+  settingsAbort?.abort();
+  const controller = new AbortController();
+  settingsAbort = controller;
   try {
     const result = await api("/api/model/test", {
       url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value
-    });
+    }, "POST", { signal: controller.signal });
+    if (controller.signal.aborted) return;
     const presentation = renderModelCapabilities(result.test);
     showToast(presentation.label, presentation.tone === "ready" ? "success" : presentation.tone);
   } catch (error) {
-    showToast(error.message || "模型连接测试失败", "error");
+    if (error?.name === "AbortError" || controller.signal.aborted) return;
+    const message = error?.code === "ADDRESS_VALIDATION_TIMEOUT"
+      ? "域名解析超时，请检查本机 DNS 或代理后重试"
+      : (error?.message || "模型连接测试失败");
+    showToast(`${message}${error?.requestId ? `（请求号 ${error.requestId}）` : ""}`, "error");
   } finally {
+    if (settingsAbort === controller) settingsAbort = null;
     button.disabled = false;
     button.textContent = "测试连接";
   }
@@ -2488,19 +2512,29 @@ $("#settings-button").addEventListener("click", () => {
   activateSettingsView("overview", {focus: true});
 });
 $("#settings-cancel").addEventListener("click", () => $("#settings-dialog").close());
+$("#settings-dialog").addEventListener("close", () => { settingsAbort?.abort(); settingsAbort = null; });
 $("#settings-cancel-secondary").addEventListener("click", () => $("#settings-dialog").close());
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const save = $("#settings-save");
   save.disabled = true;
   try {
-    const result = await api("/api/settings", {
-      url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value
-    });
+    settingsAbort?.abort();
+    const controller = new AbortController();
+    settingsAbort = controller;
+    let result;
+    try {
+      result = await api("/api/settings", {
+        url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value
+      }, "POST", { signal: controller.signal });
+    } finally {
+      if (settingsAbort === controller) settingsAbort = null;
+    }
     renderSettings(result);
     $("#settings-dialog").close();
     showToast(result.llm.enabled ? `已启用模型：${result.llm.model}` : "已切换为规则模式");
   } catch (error) {
+    if (error?.name === "AbortError") return;
     const message = error?.message || "";
     const settingsMessage = message.includes("URL 和模型名")
       ? "URL 和模型名需要同时填写"
