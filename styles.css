@@ -734,6 +734,9 @@ body.is-resizing { user-select: none; cursor: col-resize; }
 .settings-capabilities dd { margin: 0; font-family: ui-monospace, monospace; font-weight: 800; text-align: right; }
 .settings-capabilities dd.is-supported { color: var(--green); }
 .settings-capabilities dd.is-unsupported { color: var(--red-deep); }
+.settings-probe-detail { margin: calc(-1 * var(--space-3)) 0 var(--space-4); color: var(--ink-faint); font-size: var(--font-xs); font-family: ui-monospace, monospace; }
+.settings-probe-detail[hidden] { display: none; }
+.settings-test-elapsed { display: inline-block; min-width: 3.4em; font-variant-numeric: tabular-nums; }
 .settings-fields { display: grid; gap: var(--space-3); }
 .settings-field { display: grid; gap: 6px; color: var(--quiet); font-size: var(--font-xs); font-weight: 800; letter-spacing: .05em; }
 .settings-field small { color: var(--ink-faint); font-size: var(--font-xs); font-weight: 500; letter-spacing: 0; }

@@ -38,6 +38,31 @@ def _planner() -> OpenAICompatiblePlanner:
     return OpenAICompatiblePlanner("https://example.test/v1", "", "test-model")
 
 
+def _capability_hop(body: dict) -> str:
+    """Name a probe hop from its own request.
+
+    The independent probes now overlap, so the order the fake transport sees
+    them in is the scheduler's choice; dispatching on the request body keeps
+    these assertions about the probe *set* rather than its sequence.
+    """
+    messages = body.get("messages") or []
+    if body.get("tools") or body.get("functions"):
+        roles = {item.get("role") for item in messages if isinstance(item, dict)}
+        return "continuation" if roles & {"tool", "function"} else "native"
+    joined = json.dumps(messages, ensure_ascii=False)
+    return "json" if "PRINTOPS_CAPABILITY_JSON_OK" in joined else "chat"
+
+
+_JSON_PLAN = {"choices": [{"message": {"content":
+    '{"reply":"PRINTOPS_CAPABILITY_JSON_OK","patch":{},"tool":null}'}}]}
+_NATIVE_CALL = {"choices": [{"message": {"content": None, "tool_calls": [{
+    "id": "probe-call", "type": "function",
+    "function": {"name": "printops_capability_probe",
+                 "arguments": '{"token":"printops-probe-v1"}'},
+}]}}]}
+_CHAT_OK = {"choices": [{"message": {"content": "OK"}}]}
+
+
 class LlmAdapterProtocolTest(unittest.TestCase):
     def test_native_batch_and_content_patch_are_preserved(self) -> None:
         response = {
@@ -171,8 +196,11 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         requests: list[dict] = []
 
         def fake_urlopen(request, timeout):
-            requests.append(json.loads(request.data.decode("utf-8")))
-            return _Response({"choices": [{"message": {"content": "OK"}}]})
+            if getattr(request, "method", "POST") == "GET":
+                return _Response({"data": []})  # reachability pre-flight, no model call
+            body = json.loads(request.data.decode("utf-8"))
+            requests.append(body)
+            return _Response(_CHAT_OK)
 
         with patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
             result = _planner().test_capabilities()
@@ -182,21 +210,25 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self.assertFalse(result["toolContinuation"])
         self.assertEqual(result["chosenProtocol"], "chat_only")
         self.assertFalse(result["agentReady"])
-        self.assertEqual(len(requests), 3)
+        self.assertEqual(sorted(_capability_hop(body) for body in requests),
+                         ["chat", "json", "native"])
+        self.assertEqual(result["probeTimings"]["hops"], 3)
         self._assert_no_order_payload(requests)
 
     def test_capabilities_selects_json_fallback(self) -> None:
         requests: list[dict] = []
 
         def fake_urlopen(request, timeout):
+            if getattr(request, "method", "POST") == "GET":
+                return _Response({"data": []})  # reachability pre-flight, no model call
             body = json.loads(request.data.decode("utf-8"))
             requests.append(body)
-            if len(requests) == 1:
-                return _Response({"choices": [{"message": {"content": "OK"}}]})
-            if len(requests) == 2:
-                return _Response({"choices": [{"message": {"content":
-                    '{"reply":"PRINTOPS_CAPABILITY_JSON_OK","patch":{},"tool":null}'}}]})
-            raise HTTPError(request.full_url, 400, "tools unsupported", {}, None)
+            hop = _capability_hop(body)
+            if hop == "json":
+                return _Response(_JSON_PLAN)
+            if hop == "native":
+                raise HTTPError(request.full_url, 400, "tools unsupported", {}, None)
+            return _Response(_CHAT_OK)
 
         with patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
             result = _planner().test_capabilities()
@@ -212,22 +244,19 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         requests: list[dict] = []
 
         def fake_urlopen(request, timeout):
+            if getattr(request, "method", "POST") == "GET":
+                return _Response({"data": []})  # reachability pre-flight, no model call
             body = json.loads(request.data.decode("utf-8"))
             requests.append(body)
-            if len(requests) == 1:
-                return _Response({"choices": [{"message": {"content": "OK"}}]})
-            if len(requests) == 2:
-                return _Response({"choices": [{"message": {"content":
-                    '{"reply":"PRINTOPS_CAPABILITY_JSON_OK","patch":{},"tool":null}'}}]})
-            if len(requests) == 3:
-                return _Response({"choices": [{"message": {"content": None, "tool_calls": [{
-                    "id": "probe-call", "type": "function",
-                    "function": {"name": "printops_capability_probe",
-                                 "arguments": '{"token":"printops-probe-v1"}'},
-                }]}}]})
-            return _Response({"choices": [{"message": {
-                "content": "PRINTOPS_CAPABILITY_CONTINUATION_OK",
-            }}]})
+            hop = _capability_hop(body)
+            if hop == "json":
+                return _Response(_JSON_PLAN)
+            if hop == "native":
+                return _Response(_NATIVE_CALL)
+            if hop == "continuation":
+                return _Response({"choices": [{"message": {
+                    "content": "PRINTOPS_CAPABILITY_CONTINUATION_OK"}}]})
+            return _Response(_CHAT_OK)
 
         planner = _planner()
         with patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
@@ -239,7 +268,9 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self.assertEqual(result["chosenProtocol"], "native_tools")
         self.assertTrue(result["agentReady"])
         self.assertEqual(planner.last_protocol, "native_tools")
+        self.assertEqual(result["probeTimings"]["hops"], 4)
         continuation = requests[-1]
+        self.assertEqual(_capability_hop(continuation), "continuation")
         self.assertEqual([item["role"] for item in continuation["messages"][-2:]],
                          ["assistant", "tool"])
         self.assertEqual(continuation["messages"][-1]["tool_call_id"], "probe-call")

@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as futures_wait
 from urllib.error import HTTPError, URLError
 from copy import copy, deepcopy
 from pathlib import Path
@@ -84,6 +85,22 @@ def normalize_base_url(value: str, allow_private_hosts: bool = False) -> str:
     if not allow_private_hosts:
         _reject_private_host(parsed.hostname)
     return value
+
+
+def _close_error_response(error: HTTPError) -> None:
+    """Drop the unread response body an HTTPError keeps attached.
+
+    urllib raises HTTPError before the body is read, so the connection stays
+    open until the exception - and the traceback that references it - is
+    collected. A capability probe fans out concurrently, and every provider
+    rejection (401, 404, 405) would otherwise park a live socket for the
+    lifetime of the traceback. Closing is best effort: this is cleanup on an
+    error path and must never mask the original diagnosis.
+    """
+    try:
+        error.close()
+    except Exception:
+        pass
 
 
 def read_saved_config(path: str | Path) -> dict[str, str]:
@@ -191,7 +208,20 @@ class OpenAICompatiblePlanner:
     MAX_CONTEXT_LEDGER_BYTES = 32 * 1024
     MAX_TOOL_DESCRIPTION = 512
     CAPABILITY_PROBE_TOTAL_SECONDS = 26.0
+    # One probe hop is the unit of probe latency.  The floor keeps a fast
+    # endpoint from being judged inside a two-second window; the ceiling lets a
+    # reasoning model answer within PRINTOPS_LLM_TIMEOUT without letting one
+    # hung hop eat the whole probe (see docs/RUNTIME_BUDGET.md).
     CAPABILITY_PROBE_REQUEST_SECONDS = 6.0
+    CAPABILITY_PROBE_REQUEST_MAX_SECONDS = 15.0
+    # cc-switch's health check is a header-only GET on the base URL: any HTTP
+    # answer proves the endpoint is live, and only a network-level failure is
+    # decisive.  A refused port costs about two seconds on Windows and a
+    # firewalled one the whole TCP retransmission budget, so liveness must be
+    # settled by a cheap GET next to the chat hop instead of by waiting on a
+    # generation request.  Both waits below are therefore deliberately short.
+    CAPABILITY_PROBE_CONNECT_SECONDS = 2.5
+    CAPABILITY_PROBE_GATE_SECONDS = 2.5
     MAX_CAPABILITY_RESPONSE_BYTES = 256 * 1024
     MAX_PLAN_RESPONSE_BYTES = 2 * 1024 * 1024
     CAPABILITY_TOOL_NAME = "printops_capability_probe"
@@ -1242,6 +1272,7 @@ class OpenAICompatiblePlanner:
                 except HTTPError as error:
                     self.last_error = f"模型接口返回 HTTP {error.code}"
                     self.last_protocol = "error"
+                    _close_error_response(error)
                     if variant_index == 0 and error.code in {400, 404, 405, 422}:
                         break
                     retryable = error.code in self.RETRYABLE_HTTP_CODES
@@ -1316,6 +1347,39 @@ class OpenAICompatiblePlanner:
             return "网络错误：" + str(reason or error), "network"
         return "模型接口连接失败", "network"
 
+    def _probe_reachability(self, target_url: str, deadline: float) -> tuple[bool, str, str, int]:
+        """Ask the endpoint once, without a model request, whether it answers.
+
+        Only a network-level failure decides anything: a 401/404 on the base
+        path says nothing about the key or the completions route, which the
+        capability hops judge.  Any unexpected shape fails open, because a
+        diagnostic must never veto the probe it is trying to accelerate.
+        """
+        began = time.monotonic()
+        budget = min(self.CAPABILITY_PROBE_CONNECT_SECONDS,
+                     max(0.5, deadline - time.monotonic()))
+        request = urllib.request.Request(target_url, method="GET",
+                                         headers={"Accept": "*/*"})
+
+        def fetch() -> Any:
+            with urllib.request.urlopen(request, timeout=remaining(
+                    operation_deadline(budget, deadline))) as response:
+                return getattr(response, "status", 200)
+
+        try:
+            bounded_io(fetch, operation_deadline(budget, deadline))
+            return True, "", "", self._latency(began)
+        except HTTPError as error:
+            _close_error_response(error)
+            return True, "", "", self._latency(began)
+        except (URLError, TimeoutError, OSError) as error:
+            message, kind = self._classify_probe_error(error)
+            if kind == "network" and "超时" in message:
+                message = f"{message}（{budget:.1f} 秒内未能建立连接）"
+            return False, message, kind, self._latency(began)
+        except Exception:
+            return True, "", "", self._latency(began)
+
     def _capability_post(self, target_url: str, target_model: str, target_key: str,
                          payload: dict[str, Any], deadline: float) -> tuple[dict[str, Any] | None, str, str]:
         """Send one bounded, non-retrying capability request."""
@@ -1328,7 +1392,9 @@ class OpenAICompatiblePlanner:
             configured_timeout = self.CAPABILITY_PROBE_REQUEST_SECONDS
         if not math.isfinite(configured_timeout) or configured_timeout <= 0:
             configured_timeout = self.CAPABILITY_PROBE_REQUEST_SECONDS
-        request_timeout = min(remaining, configured_timeout, self.CAPABILITY_PROBE_REQUEST_SECONDS)
+        probe_budget = max(self.CAPABILITY_PROBE_REQUEST_SECONDS,
+                           min(configured_timeout, self.CAPABILITY_PROBE_REQUEST_MAX_SECONDS))
+        request_timeout = min(remaining, probe_budget)
         request = urllib.request.Request(
             f"{target_url}/chat/completions",
             data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -1344,12 +1410,24 @@ class OpenAICompatiblePlanner:
             return decoded, "", ""
         except HTTPError as error:
             message, kind = self._classify_probe_error(error)
+            _close_error_response(error)
             return None, message, kind
         except (URLError, TimeoutError, OSError) as error:
             message, kind = self._classify_probe_error(error)
             return None, message, kind
         except (UnicodeError, TypeError, ValueError, json.JSONDecodeError):
             return None, "模型接口返回格式异常", "protocol"
+
+    def _probe_root_cause(self, result: dict[str, Any], started: float,
+                          error: str, kind: str, skipped: str) -> dict[str, Any]:
+        """Stop the probe and report the one cause the user can act on."""
+        result["errors"]["chat"] = error
+        prefix = "鉴权失败：" if kind == "auth" else "模型接口不可达："
+        result["message"] = f"{prefix}{error}，已跳过{skipped}"
+        result["chosenProtocol"] = "unavailable" if kind == "auth" else "unreachable"
+        result["latencyMs"] = self._latency(started)
+        self.last_error, self.last_protocol = result["message"], ""
+        return result
 
     def test_capabilities(self, base_url: str | None = None, model: str | None = None,
                           api_key: str | None = None) -> dict[str, Any]:
@@ -1387,6 +1465,8 @@ class OpenAICompatiblePlanner:
 
         deadline = started + self.CAPABILITY_PROBE_TOTAL_SECONDS
         errors: dict[str, str] = result["errors"]
+        timings: dict[str, int] = {}
+        result["probeTimings"] = timings
 
         chat_marker = "PRINTOPS_CAPABILITY_CHAT_OK"
         chat_payload = {
@@ -1397,25 +1477,6 @@ class OpenAICompatiblePlanner:
             ],
             "max_tokens": 32,
         }
-        chat_response, error, kind = self._capability_post(
-            target_url, target_model, target_key, chat_payload, deadline)
-        if chat_response is None and kind in {"network", "auth"}:
-            # The remaining probes hit the same endpoint with the same
-            # key; burning up to 3x6 more seconds only produced the
-            # ambiguous "接口不可用" users could not act on. Report the
-            # single root cause now.
-            errors["chat"] = error
-            prefix = "鉴权失败：" if kind == "auth" else "模型接口不可达："
-            result["message"] = f"{prefix}{error}，已跳过后续检查"
-            result["chosenProtocol"] = "unavailable" if kind == "auth" else "unreachable"
-            result["latencyMs"] = self._latency(started)
-            self.last_error, self.last_protocol = result["message"], ""
-            return result
-        if chat_response is not None and self._response_text(chat_response).strip():
-            result["chat"] = True
-        else:
-            errors["chat"] = error or "模型接口返回空内容"
-
         json_marker = "PRINTOPS_CAPABILITY_JSON_OK"
         json_payload = {
             "model": target_model,
@@ -1428,17 +1489,6 @@ class OpenAICompatiblePlanner:
             ],
             "max_tokens": 96,
         }
-        json_response, error, _kind = self._capability_post(
-            target_url, target_model, target_key, json_payload, deadline)
-        if json_response is not None:
-            value = self._strict_json_object(self._response_text(json_response))
-            normalized = self.validate_plan(value, set())
-            result["jsonPlan"] = bool(
-                normalized and normalized.get("reply") == json_marker
-                and normalized.get("patch") == {} and normalized.get("tool") is None)
-        if not result["jsonPlan"]:
-            errors["jsonPlan"] = error or "未返回指定 JSON 规划对象"
-
         tool_schema = {
             "type": "function",
             "function": {
@@ -1467,8 +1517,73 @@ class OpenAICompatiblePlanner:
             "tool_choice": "auto",
             "max_tokens": 96,
         }
-        native_response, error, _kind = self._capability_post(
-            target_url, target_model, target_key, native_payload, deadline)
+
+        def hop(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str, int]:
+            began = time.monotonic()
+            response, message, kind = self._capability_post(
+                target_url, target_model, target_key, payload, deadline)
+            return response, message, kind, self._latency(began)
+
+        # Four serial generation round trips measured 8.7s on a live gateway,
+        # yet only the tool continuation depends on an earlier answer, so chat,
+        # JSON and native tools overlap.  A header-only GET runs beside the chat
+        # hop to settle liveness first: on a live endpoint it answers in a few
+        # hundred milliseconds and the remaining hops start right away, while a
+        # refused or firewalled endpoint yields one named root cause instead of
+        # three identical connect failures.
+        pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="printops-capability")
+        try:
+            gate_began = time.monotonic()
+            chat_future = pool.submit(hop, chat_payload)
+            reach_future = pool.submit(self._probe_reachability, target_url, deadline)
+            futures_wait((chat_future, reach_future), self.CAPABILITY_PROBE_GATE_SECONDS,
+                         return_when=FIRST_COMPLETED)
+            timings["gateMs"] = self._latency(gate_began)
+            if reach_future.done():
+                reachable, reach_error, reach_kind, timings["reachMs"] = reach_future.result()
+                if not reachable:
+                    timings["hops"] = 1
+                    return self._probe_root_cause(result, started, reach_error, reach_kind,
+                                                  "后续检查")
+            chat_resolved = chat_future.done()
+            if chat_resolved:
+                chat_response, chat_error, chat_kind, timings["chatMs"] = chat_future.result()
+                if chat_response is None and chat_kind in {"network", "auth"}:
+                    timings["hops"] = 1
+                    return self._probe_root_cause(result, started, chat_error, chat_kind,
+                                                  "后续检查")
+            json_future = pool.submit(hop, json_payload)
+            native_future = pool.submit(hop, native_payload)
+            if not chat_resolved:
+                chat_response, chat_error, chat_kind, timings["chatMs"] = chat_future.result()
+            json_response, json_error, _json_kind, timings["jsonMs"] = json_future.result()
+            native_response, native_error, _native_kind, timings["nativeMs"] = native_future.result()
+        finally:
+            # Abandon a hop that outlived the verdict instead of holding the
+            # handler open: request_runtime discards late results, and a hung
+            # connection does not heal while the user waits for an answer.
+            pool.shutdown(wait=False)
+        timings["hops"] = 3
+        if chat_response is None and chat_kind in {"network", "auth"}:
+            # Nothing proved the endpoint answers a completion request, so a
+            # tool continuation could only repeat the same failure.
+            return self._probe_root_cause(result, started, chat_error, chat_kind,
+                                          "工具续接检查")
+
+        if chat_response is not None and self._response_text(chat_response).strip():
+            result["chat"] = True
+        else:
+            errors["chat"] = chat_error or "模型接口返回空内容"
+
+        if json_response is not None:
+            value = self._strict_json_object(self._response_text(json_response))
+            normalized = self.validate_plan(value, set())
+            result["jsonPlan"] = bool(
+                normalized and normalized.get("reply") == json_marker
+                and normalized.get("patch") == {} and normalized.get("tool") is None)
+        if not result["jsonPlan"]:
+            errors["jsonPlan"] = json_error or "未返回指定 JSON 规划对象"
+
         matching_call: dict[str, Any] | None = None
         native_protocol = ""
         if native_response is not None:
@@ -1479,7 +1594,7 @@ class OpenAICompatiblePlanner:
                                   == self.CAPABILITY_TOKEN), None)
         result["nativeTools"] = matching_call is not None
         if matching_call is None:
-            errors["nativeTools"] = error or "未返回带正确参数的 native tool call"
+            errors["nativeTools"] = native_error or "未返回带正确参数的 native tool call"
 
         if matching_call is not None:
             continuation_marker = "PRINTOPS_CAPABILITY_CONTINUATION_OK"
@@ -1524,8 +1639,11 @@ class OpenAICompatiblePlanner:
                     "tool_choice": "auto",
                     "max_tokens": 64,
                 }
+            began_continuation = time.monotonic()
             continuation_response, error, _kind = self._capability_post(
                 target_url, target_model, target_key, continuation_payload, deadline)
+            timings["continuationMs"] = self._latency(began_continuation)
+            timings["hops"] = 4
             result["toolContinuation"] = bool(
                 continuation_response is not None
                 and continuation_marker in self._response_text(continuation_response))
@@ -1583,6 +1701,7 @@ class OpenAICompatiblePlanner:
             return {"ok": True, "message": "模型接口连接正常", "latencyMs": self._latency(started)}
         except HTTPError as error:
             self.last_error = f"模型接口返回 HTTP {error.code}"
+            _close_error_response(error)
         except (URLError, TimeoutError, OSError):
             self.last_error = "模型接口连接失败"
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):

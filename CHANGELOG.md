@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased - 2026-10-23（能力探测并行化、连通预探测与 Windows 中断写）
+
+针对浏览器实测"Agent 工具链可用 · JSON 兼容 · 8759ms"的根因：`test_capabilities` 把聊天/JSON/原生工具/续接四次生成往返**串行**执行，每次新建 TCP+TLS 连接并等模型生成完毕，零并发；单跳预算又被硬顶在 6 秒，慢推理模型因此被误判为"接口不可达"。参照开源 cc-switch 的 `speedtest.rs`（所有端点并发、共享连接池、先热身再计时）与 `stream_check.rs`（健康检查由"真实请求等 45 秒"改为 header-only 请求，收到响应头即返回）重构：
+
+- **连通预探测**：先对 base URL 发一次不携带 API Key、不读响应体的 header-only GET（连接预算 2.5 秒）。任何 HTTP 状态都证明端点活着，只有网络级失败判定不可达并当场返回根因。实测 Windows 拒绝连接需要约 2.05 秒（并非瞬时失败），死端点不再产生三次相同的连接失败。
+- **三跳并发扇出**：聊天、JSON、原生工具跳用 `ThreadPoolExecutor` 重叠执行，只有依赖原生工具结果的续接跳保持串行；预探测或任一跳先给出网络性/鉴权结论时立即早退。同一假网关 A/B：旧串行 8077ms → 新 4057ms（浏览器实测 4032ms），生成请求数不变（4 次），往返数 4 → 2。
+- **单跳预算 6–15 秒**：`max(6, min(PRINTOPS_LLM_TIMEOUT, 15))`。8 秒/跳的慢推理模型不再被 6 秒硬顶误杀（旧：6.0 秒报不可达；新：16.9 秒正确判定原生工具）。
+- **不可达结论 15 秒复用**：只缓存"不可达 / 服务不可用"结论，键为 URL+模型的 SHA-256 指纹（不含 API Key）；成功与鉴权结论一律不缓存。设置页标注"复用 N 秒前的不可达判定"，第二次点击自动强制重测（实测复用 443ms、强制重测 2085ms）。新增 `PRINTOPS_MODEL_TEST_FAILURE_CACHE_SECONDS`。
+- **探测并发上限**：同时在飞的探测限制 2 个，等待 2 秒仍无槽位返回 429 / `MODEL_TEST_BUSY`，连点不再吃满连接与 I/O 预算。
+- **耗时归因**：结果新增 `probeTimings`（gateMs/reachMs/chatMs/jsonMs/nativeMs/continuationMs/hops），设置页展示"并行探测 · 聊天 2.0s · JSON 2.0s · 工具链 2.0s · 续接 2.0s · 合计 4.0s"，按钮实时显示"测试中… x.xs"，"慢在哪一跳"不再是黑盒。
+- **Windows 中断写不再是 500**：探测期间关闭设置弹窗时，Windows 以 `ConnectionAbortedError`（WSAEINTR 10053）报告这次写中断，既不是 `BrokenPipeError` 也不是 `ConnectionResetError`，此前会落到通用处理器并记成 500。新增 `server.CLIENT_ABORTS`，在 GET/POST/静态文件/响应写出四处统一按正常流量吞掉。
+- **HTTPError 套接字即时释放**：urllib 抛出 HTTPError 时响应体尚未读取，连接要等 traceback 回收才释放；并行扇出会把每个 401/404/405 变成一只滞留套接字。新增 `_close_error_response`，预探测、能力跳、规划循环与健康检查四处显式关闭。
+- **受限环境测试**：`KeyFileSafety` 在 `mkstemp` 的 `O_TEMPORARY` 被沙箱禁止时跳过，与 `test_runtime_hardening` 的 loopback 用例同一模式；测试内假 Key 字面量改名，避免 `tools/secret_scan.py` 把长串误判为凭据。
+- **文档补全**：`.env.example` 此前缺少已在文档中承诺的 `PRINTOPS_LLM_TIMEOUT`、`PRINTOPS_REQUEST_TIMEOUT`，以及既有 `PRINTOPS_MAX_CONNECTIONS`、`PRINTOPS_SLOW_REQUEST_MS`、`PRINTOPS_SHUTDOWN_GRACE_SECONDS`，本轮补齐并加入新的复用缓存开关；`docs/RUNTIME_BUDGET.md` 修正过时的"最多四轮 6 秒探测"预算描述并补写预探测/并发/缓存语义；README 中英同步。
+- **本轮验收**：`tests/test_llm_probe_budget.py` 新增并行扇出、预探测分类、跳预算上下界、失败结论复用、并发上限 429 等用例，`tests/test_runtime_hardening.py` 新增 `ClientAbortTest`；全量 494 项通过（6 项平台跳过），`python tools/dev_check.py` 五步全绿。Playwright Chromium 真实设置页：连通 4086ms、死端口 2106ms、缓存复用 443ms、强制重测 2085ms、关窗取消无迟到 toast 且 pageerrors 为空。全程使用假网关与临时目录，未读取或写入真实 `data/llm_config.json`。
+
 ## Unreleased - 2026-10-23（API Key 超时链路、探测根因与密钥存储加固）
 
 针对"填入 API Key 测试连接超时"的浏览器实测修复（复现：黑洞端点空转 18.5 秒只报"接口不可用"）：

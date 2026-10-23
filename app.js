@@ -89,6 +89,9 @@ let keyStorageWarning = "";
 // leaving a 20-40s request burning a handler slot and surprising the user
 // with a late toast (dsh fuses caller cancellation into every deadline).
 let settingsAbort = null;
+// A cached "unreachable" verdict is reused for a few seconds instead of
+// re-probing; the click right after it must go to the endpoint for real.
+let settingsProbeUsedCache = false;
 const specPresetKey = "printops_spec_presets";
 const layoutKey = "printops_layout";
 const LAYOUT_DEFAULTS = { sidebarW: 192, orderW: 335, orderCollapsed: false };
@@ -1068,6 +1071,8 @@ function renderSettings(data) {
   }
   const capabilities = $("#settings-capabilities");
   if (capabilities) capabilities.hidden = true;
+  const probeDetail = $("#settings-probe-detail");
+  if (probeDetail) { probeDetail.textContent = ""; probeDetail.hidden = true; }
 }
 
 function modelCapabilityPresentation(test = {}) {
@@ -1087,6 +1092,31 @@ function modelCapabilityPresentation(test = {}) {
     return { label: test.message, tone: "error" };
   }
   return { label: "接口不可用", tone: "error" };
+}
+
+function modelProbeDetail(test = {}) {
+  // Attribute the wait instead of showing one number: which hop of the
+  // capability probe actually cost the time.
+  const timings = test?.probeTimings || {};
+  const seconds = (label, value) => {
+    const ms = Number(value);
+    return Number.isFinite(ms) && ms > 0 ? label + " " + (ms / 1000).toFixed(1) + "s" : "";
+  };
+  const hops = [
+    seconds("聊天", timings.chatMs),
+    seconds("JSON", timings.jsonMs),
+    seconds("工具链", timings.nativeMs),
+    seconds("续接", timings.continuationMs),
+  ].filter(Boolean);
+  const parts = [];
+  if (hops.length) parts.push("并行探测 · " + hops.join(" · "));
+  const total = Number(test?.latencyMs);
+  if (Number.isFinite(total) && total > 0) parts.push("合计 " + (total / 1000).toFixed(1) + "s");
+  if (test?.cached) {
+    const left = Math.max(1, Math.round((Number(test.cacheTtlMs) || 0) / 1000));
+    parts.push("复用 " + left + " 秒前的不可达判定，再点一次将强制重测");
+  }
+  return parts.join(" · ");
 }
 
 function renderModelCapabilities(test = {}) {
@@ -1113,6 +1143,11 @@ function renderModelCapabilities(test = {}) {
   setCapability("#capability-chat", Boolean(test.chat));
   const capabilities = $("#settings-capabilities");
   if (capabilities) capabilities.hidden = false;
+  const detail = $("#settings-probe-detail");
+  if (detail) {
+    detail.textContent = modelProbeDetail(test);
+    detail.hidden = !detail.textContent;
+  }
   return presentation;
 }
 
@@ -2481,25 +2516,46 @@ confirmResetDialog.addEventListener("close", () => {
 
 $("#settings-test").addEventListener("click", async () => {
   const button = $("#settings-test");
+  const force = settingsProbeUsedCache;
+  settingsProbeUsedCache = false;
   button.disabled = true;
+  // The accessible name stays constant while the elapsed digits live in an
+  // aria-hidden span: a button whose label mutates five times a second makes
+  // screen readers re-announce it, and proportional digits make it jitter.
   button.textContent = "测试中…";
+  const elapsed = document.createElement("span");
+  elapsed.className = "settings-test-elapsed";
+  elapsed.setAttribute("aria-hidden", "true");
+  button.append(elapsed);
+  const began = performance.now();
+  const tick = () => {
+    elapsed.textContent = " " + ((performance.now() - began) / 1000).toFixed(1) + "s";
+  };
+  tick();
+  const timer = setInterval(tick, 200);
   settingsAbort?.abort();
   const controller = new AbortController();
   settingsAbort = controller;
   try {
     const result = await api("/api/model/test", {
-      url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value
+      url: $("#settings-url").value.trim(), model: $("#settings-model").value.trim(), key: $("#settings-key").value,
+      force,
     }, "POST", { signal: controller.signal });
     if (controller.signal.aborted) return;
+    settingsProbeUsedCache = Boolean(result.test?.cached);
     const presentation = renderModelCapabilities(result.test);
     showToast(presentation.label, presentation.tone === "ready" ? "success" : presentation.tone);
   } catch (error) {
     if (error?.name === "AbortError" || controller.signal.aborted) return;
+    // A forced click that never reached the endpoint must stay forced: falling
+    // through would show the very verdict the user clicked to replace.
+    settingsProbeUsedCache = force;
     const message = error?.code === "ADDRESS_VALIDATION_TIMEOUT"
       ? "域名解析超时，请检查本机 DNS 或代理后重试"
       : (error?.message || "模型连接测试失败");
     showToast(`${message}${error?.requestId ? `（请求号 ${error.requestId}）` : ""}`, "error");
   } finally {
+    clearInterval(timer);
     if (settingsAbort === controller) settingsAbort = null;
     button.disabled = false;
     button.textContent = "测试连接";

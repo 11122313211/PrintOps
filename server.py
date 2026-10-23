@@ -113,6 +113,17 @@ DNS_CHECK_SECONDS = 6.0
 MODEL_TEST_BUDGET_SECONDS = 40.0
 ROUTE_DEADLINE_CAP_SECONDS = 120.0
 MIN_ROUTE_EXTENSION_BASE_SECONDS = 5.0
+# Capability probes are bounded by construction: one gated hop, two parallel
+# hops, then one continuation hop.  Two more knobs keep the route itself from
+# becoming a way to spend the user's API quota or the shared outbound budget:
+# an unreachable verdict is reused for a few seconds instead of re-probing on
+# every click, and only two probes may run at once.
+MODEL_TEST_FAILURE_CACHE_SECONDS = float(
+    _env_number("PRINTOPS_MODEL_TEST_FAILURE_CACHE_SECONDS", 15.0, float))
+MODEL_TEST_CACHE_MAX_ENTRIES = 16
+MODEL_TEST_MAX_CONCURRENT = 2
+MODEL_TEST_SLOT_WAIT_SECONDS = 2.0
+PROBE_FINGERPRINT_VERSION = "capability-probe-v2-parallel"
 SLOW_REQUEST_MS = float(_env_number("PRINTOPS_SLOW_REQUEST_MS", DEFAULT_SLOW_REQUEST_MS, float))
 SHUTDOWN_GRACE_SECONDS = float(
     _env_number("PRINTOPS_SHUTDOWN_GRACE_SECONDS", DEFAULT_SHUTDOWN_GRACE_SECONDS, float)
@@ -138,6 +149,11 @@ STATIC_CONTENT_TYPES = {
     "markdown.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
+# Windows reports a browser that disappeared mid-request as ConnectionAbortedError
+# (WSAEINTR 10053), which is neither BrokenPipeError nor ConnectionResetError.
+# Closing the settings dialog during a probe is normal traffic, so these writes
+# must not fall through to the generic handler and be logged as a 500.
+CLIENT_ABORTS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 KEY_STORAGE_WARNING = ("API Key 以明文保存在本机 data/llm_config.json（文件权限 600）。"
                        "请勿把该文件提交到 Git 或分享给他人；更安全的做法是仅用环境变量提供 Key。")
 
@@ -224,22 +240,99 @@ def planner_for_request():
         return planner
 
 
+MODEL_TEST_CACHE: dict[str, tuple[float, dict[str, object]]] = {}
+MODEL_TEST_CACHE_LOCK = threading.Lock()
+MODEL_TEST_SLOTS = threading.BoundedSemaphore(MODEL_TEST_MAX_CONCURRENT)
+
+
+def _model_test_fingerprint(url: str, model: str, api_key: str) -> str:
+    """Identify one probe run; the API key is hashed here and never leaves."""
+    digest = hashlib.sha256()
+    for part in (PROBE_FINGERPRINT_VERSION, url, model, api_key):
+        digest.update(str(part).encode("utf-8", "surrogatepass"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:32]
+
+
+def _cached_model_test(fingerprint: str) -> dict[str, object] | None:
+    """Reuse a very recent "unreachable / rejected" verdict if one stands."""
+    with deadline_lock(MODEL_TEST_CACHE_LOCK):
+        stored = MODEL_TEST_CACHE.get(fingerprint)
+        if stored is None:
+            return None
+        expiry, payload = stored
+        now = time.monotonic()
+        if expiry <= now:
+            MODEL_TEST_CACHE.pop(fingerprint, None)
+            return None
+        cached = deepcopy(payload)
+        cached["cached"] = True
+        cached["cacheAgeMs"] = max(
+            0, int((MODEL_TEST_FAILURE_CACHE_SECONDS - (expiry - now)) * 1000))
+        cached["cacheTtlMs"] = max(0, int((expiry - now) * 1000))
+        return cached
+
+
+def _remember_model_test(fingerprint: str, result: dict[str, object]) -> None:
+    """Cache only "cannot reach" or "cannot authenticate" verdicts.
+
+    A capability verdict goes stale the moment the user edits a field, so live
+    results are never reused.  The failure cache exists so a dead endpoint does
+    not absorb the outbound budget on every repeated click; force bypasses it
+    and no entry ever holds the key itself.
+    """
+    if result.get("ok") or str(result.get("chosenProtocol")) not in {"unreachable", "unavailable"}:
+        return
+    if not isinstance(result.get("message"), str) or not result.get("message"):
+        return
+    with deadline_lock(MODEL_TEST_CACHE_LOCK):
+        now = time.monotonic()
+        expired = [key for key, (expiry, _payload) in MODEL_TEST_CACHE.items() if expiry <= now]
+        for key in expired:
+            MODEL_TEST_CACHE.pop(key, None)
+        MODEL_TEST_CACHE[fingerprint] = (now + MODEL_TEST_FAILURE_CACHE_SECONDS, deepcopy(result))
+        while len(MODEL_TEST_CACHE) > MODEL_TEST_CACHE_MAX_ENTRIES:
+            oldest = min(MODEL_TEST_CACHE, key=lambda key: MODEL_TEST_CACHE[key][0])
+            MODEL_TEST_CACHE.pop(oldest, None)
+
+
+def _acquire_model_test_slot() -> None:
+    """Stop a probe storm from starving the shared outbound worker pool."""
+    budget = MODEL_TEST_SLOT_WAIT_SECONDS
+    left = remaining()
+    if left is not None:
+        budget = min(budget, max(0.0, left))
+    if not MODEL_TEST_SLOTS.acquire(timeout=budget):
+        raise RequestError("同时进行的模型检测已达上限，请稍候再试", 429, "MODEL_TEST_BUSY")
+
+
 def test_llm_capabilities(body: dict[str, object]) -> dict[str, object]:
     """Probe a request-local config snapshot without holding the config lock."""
     saved = planner_for_request()
     tester = saved
+    probe_url, probe_model, probe_key = saved.base_url, saved.model, saved.api_key
     if any(key in body for key in ("url", "model", "key")):
         tester = OpenAICompatiblePlanner(
             timeout=saved.timeout,
             allow_private_hosts=getattr(saved, "allow_private_hosts", False),
         )
-        test_url = str(body.get("url", "")).strip()
-        test_model = str(body.get("model", "")).strip()
-        test_key = str(body.get("key", "")).strip()
-        if not test_key and test_url == saved.base_url and test_model == saved.model:
-            test_key = saved.api_key
-        _configure_bounded(tester, test_url, test_model, test_key)
-    result = tester.test_capabilities()
+        probe_url = str(body.get("url", "")).strip()
+        probe_model = str(body.get("model", "")).strip()
+        probe_key = str(body.get("key", "")).strip()
+        if not probe_key and probe_url == saved.base_url and probe_model == saved.model:
+            probe_key = saved.api_key
+        _configure_bounded(tester, probe_url, probe_model, probe_key)
+    fingerprint = _model_test_fingerprint(probe_url, probe_model, probe_key)
+    if not bool(body.get("force")):
+        cached = _cached_model_test(fingerprint)
+        if cached is not None:
+            return {"llm": tester.public_config(), "test": cached}
+    _acquire_model_test_slot()
+    try:
+        result = tester.test_capabilities()
+    finally:
+        MODEL_TEST_SLOTS.release()
+    _remember_model_test(fingerprint, result)
     return {"llm": tester.public_config(), "test": result}
 
 
@@ -1107,7 +1200,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
         except socket.timeout:
             return self.error_response(RequestError("请求读取超时，请重试", 408, "REQUEST_TIMEOUT"))
-        except (BrokenPipeError, ConnectionResetError):
+        except CLIENT_ABORTS:
             return None
         except Exception:
             LOGGER.exception("GET request failed requestId=%s path=%s", self.request_id, path)
@@ -1130,10 +1223,12 @@ class Handler(BaseHTTPRequestHandler):
                     raise RequestError(str(error), 400, "INVALID_SETTINGS")
             if path == "/api/model/test":
                 if str(body.get("url", "")).strip() or bool(getattr(PLANNER, "enabled", False)):
-                    # The probe announces its own bounded workload (one DNS
-                    # check + up to four 6s probes); give the route the
-                    # matching capped budget instead of letting the global
-                    # deadline abort a legitimate slow-endpoint test.
+                    # The probe announces its own bounded workload: one DNS
+                    # check, a gated hop, two parallel capability hops and one
+                    # continuation hop, each capped at
+                    # llm_adapter.CAPABILITY_PROBE_REQUEST_MAX_SECONDS.  Give
+                    # the route the matching capped budget instead of letting
+                    # the global deadline abort a slow-endpoint test.
                     self._extend_request_deadline(MODEL_TEST_BUDGET_SECONDS)
                 try:
                     return self.reply(test_llm_capabilities(body))
@@ -1164,7 +1259,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.error_response(RequestError("请求参数格式不正确", 400, "INVALID_PAYLOAD"))
         except socket.timeout:
             return self.error_response(RequestError("请求读取超时，请重试", 408, "REQUEST_TIMEOUT"))
-        except (BrokenPipeError, ConnectionResetError):
+        except CLIENT_ABORTS:
             return None
         except Exception:
             LOGGER.exception("POST request failed requestId=%s path=%s", self.request_id, path)
@@ -1233,7 +1328,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(raw)
-        except (BrokenPipeError, ConnectionResetError):
+        except CLIENT_ABORTS:
             return None
 
     def reply(self, data, status=200):
@@ -1246,7 +1341,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(raw)
-        except (BrokenPipeError, ConnectionResetError):
+        except CLIENT_ABORTS:
             return None
 
     def error_response(self, error: RequestError):

@@ -144,7 +144,7 @@ PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.
 
 未配置模型时，规则 Agent、默认 SQLite 和 PDF 基础检查留在本机。启用 OpenAI-compatible 模型后，当前消息、有限历史、精简订单和工具结果发送到配置的 endpoint；确认该服务的日志与留存策略。模型不可用时保留规则回退。
 
-设置页的"测试连接"会给出具体根因（Key 被拒、DNS 超时、端点不可达、TLS 失败等）并在首个网络性失败时立即返回；探测进行中关闭设置弹窗即取消请求。慢推理模型可通过 `PRINTOPS_LLM_TIMEOUT`（默认 20 秒，5–120 封顶）放宽单次规划预算，需同步调高 `PRINTOPS_REQUEST_TIMEOUT`（见 [请求预算](docs/RUNTIME_BUDGET.md)）。
+设置页的"测试连接"会给出具体根因（Key 被拒、DNS 超时、端点不可达、TLS 失败等）并在首个网络性失败时立即返回；探测进行中关闭设置弹窗即取消请求。慢推理模型可通过 `PRINTOPS_LLM_TIMEOUT`（默认 20 秒，5–120 封顶）放宽单次规划预算，需同步调高 `PRINTOPS_REQUEST_TIMEOUT`（见 [请求预算](docs/RUNTIME_BUDGET.md)）。探测采用连通预探测与三跳并行，返回体附带每跳耗时；不可达结论 15 秒内复用，第二次点击自动强制重测。
 
 模型请求使用最近 8 条历史（每条最多 2,000 字符）、订单摘要/工具结果各最多 12KB，并限制嵌套和集合规模。模型最多进行 3 轮有界工具规划，工具统一经过 `Agent.call_tool()`；参数不能携带任意完整订单取代本地状态。原生 `tools[].function` 不可用时回退 JSON envelope；模型未发工具调用时，规则按意图补齐必要校验、估价、术语解释或推荐。
 

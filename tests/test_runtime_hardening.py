@@ -257,6 +257,41 @@ class RequestLifecycleTest(unittest.TestCase):
         self.assertIn("durationMs=%.1f", warning.call_args.args[0])
 
 
+class ClientAbortTest(unittest.TestCase):
+    """A browser that closes the dialog mid-request is not a server failure."""
+
+    def handler(self, error):
+        instance = server.Handler.__new__(server.Handler)
+        instance.requestline = "POST /api/model/test HTTP/1.1"
+        instance.command = "POST"
+        instance.path = "/api/model/test"
+        instance.request_version = "HTTP/1.1"
+        instance.client_address = ("127.0.0.1", 54321)
+        instance.server = mock.MagicMock()
+        instance.headers = {}
+        instance.request_id = "abort-test"
+        instance._bound_response_timeout = lambda **_kwargs: None
+        instance.send_response = mock.Mock()
+        instance.send_header = mock.Mock()
+        instance.end_headers = mock.Mock()
+        instance.wfile = mock.Mock()
+        instance.wfile.write = mock.Mock(side_effect=error)
+        return instance
+
+    def test_aborted_client_write_is_swallowed(self):
+        for error in (ConnectionAbortedError(10053, "aborted"),
+                      BrokenPipeError(32, "pipe"), ConnectionResetError(10054, "reset")):
+            handler = self.handler(error)
+            self.assertIsNone(handler.reply({"ok": True}))
+            self.assertIsNone(handler.error_response(server.RequestError("x", 500, "X")))
+        self.assertIn(ConnectionAbortedError, server.CLIENT_ABORTS)
+
+    def test_other_socket_errors_still_reach_the_generic_handler(self):
+        handler = self.handler(OSError(22, "invalid argument"))
+        with self.assertRaises(OSError):
+            handler.reply({"ok": True})
+
+
 class SignalHandlerTest(unittest.TestCase):
     def test_sigterm_triggers_shutdown_and_restores_the_previous_handler(self):
         calls: list[int] = []
