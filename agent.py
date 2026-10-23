@@ -37,7 +37,7 @@ from order_model import (DIMENSION_DEFAULTS, DIMENSION_SPEC_ALIASES, size_dimens
                          normalize_state, parse_quantity,
                          quote_idempotency_key, required_order_keys)
 from product_knowledge import (KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION,
-                               known_product_spec_keys, parameter_state)
+                               known_product_spec_keys, paper_spec_key, parameter_state)
 from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
                                get_adapter)
 from supplier_connectors import REGISTRY
@@ -1539,6 +1539,13 @@ class Agent:
             if current and equivalent_denial:
                 target[key] = ""
                 self.state.get("fieldMeta", {}).pop(prefix + key, None)
+                if key == "paper":
+                    # The profile parameter mirrors paper; clearing only one
+                    # would let normalization restore the removed material.
+                    linked = paper_spec_key(target.get("productType"))
+                    if linked:
+                        target.setdefault("productSpecs", {}).pop(linked, None)
+                        self.state.get("fieldMeta", {}).pop(prefix + f"productSpecs.{linked}", None)
                 if key == "size":
                     for dimension, prior in list(target.get("dimensions", {}).items()):
                         if prior == current:
@@ -2547,6 +2554,19 @@ class Agent:
             if not parsed or parsed[1] <= 0 or re.search(r"[-−]\s*\d", str(raw)):
                 raise ValueError("数量必须是大于零的有效数量")
             quantity_patch = {"quantity": parsed[0], "quantityValue": parsed[1], "quantityUnit": parsed[2]}
+        if action in {"set", "clear"}:
+            # The generic paper field and the profile's material parameter
+            # (for example 名片材质) are one concept in the UI. Editing either
+            # updates both, so the priced paper and the visible spec agree.
+            linked = paper_spec_key(requested_product or target.get("productType"))
+            if linked:
+                spec_path = f"productSpecs.{linked}"
+                present = {path for path, _ in normalized_paths}
+                for path, value in list(normalized_paths):
+                    other = spec_path if path == "paper" else "paper" if path == spec_path else ""
+                    if other and other not in present:
+                        normalized_paths.append((other, deepcopy(value)))
+                        present.add(other)
         # Validate the entire request before touching any field, making mixed requests atomic.
         before = {path: deepcopy(read(path)) for path, _ in normalized_paths}
         self._begin_run(f"fields:{action}")
@@ -2588,7 +2608,10 @@ class Agent:
                     for candidate in self.state.get("fieldCandidates", []):
                         if candidate.get("field") == prefix + alias and candidate.get("status") != "rejected":
                             candidate["status"] = "rejected"
-                normalize_order_dimensions(target)
+            # Normalize once after every alias is removed: normalizing between
+            # two linked fields (paper and its profile parameter) would let one
+            # of them resurrect the other mid-clear.
+            normalize_order_dimensions(target)
             if not item_id:
                 self.state["selectedOption"] = None
             else:
@@ -3816,7 +3839,11 @@ class Agent:
             if result.get("text"):
                 return str(result["text"])
             if result.get("assumptions"):
-                return str(result["assumptions"])
+                # A list rendered with str() leaks Python syntax ("['…']")
+                # into the chat; join it into one readable sentence.
+                assumptions = result["assumptions"]
+                items = assumptions if isinstance(assumptions, list) else [assumptions]
+                return "；".join(str(item) for item in items)
             if result.get("missing"):
                 return f"当前步骤暂不能完成，请先补充：{'、'.join(str(item) for item in result['missing'])}。"
             if result.get("reason") == "selection_required":

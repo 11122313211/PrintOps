@@ -232,6 +232,17 @@ def normalize_order_dimensions(order: dict[str, Any]) -> None:
     for key in ("paper", "finishing"):
         if key in order:
             order[key] = normalize_print_term(key, order[key])
+    # Chat and planner patches fill the generic ``paper`` field while the
+    # product form shows a profile parameter such as 名片材质. Mirror one into
+    # the other so the visible field never disagrees with the priced paper;
+    # the explicit field edit path also writes both, so the latest edit wins.
+    from product_knowledge import paper_spec_key
+    paper_spec = paper_spec_key(order.get("productType"))
+    if paper_spec:
+        if _legacy_text(order.get("paper")):
+            specs[paper_spec] = order["paper"]
+        elif _legacy_text(specs.get(paper_spec)):
+            order["paper"] = specs[paper_spec]
     # Capture aliases before the cleanup below. Legacy clients stored
     # finished/expanded/die-cut/package meanings under ``productSpecs``; once
     # removed from that map they must still be copied into canonical

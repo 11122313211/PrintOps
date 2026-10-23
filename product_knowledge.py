@@ -131,6 +131,9 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "category": "名片/卡片",
         "aliases": ["名片", "个人名片", "企业名片", "卡片"],
         "summary": "小尺寸高频商务物料，核心是成品尺寸、单双面、纸张厚度和圆角/特殊工艺。",
+        # The generic paper field is what chat and the planner fill; mirror it
+        # into this profile parameter so the visible "名片材质" field agrees.
+        "paperSpec": "cardStock",
         "parameters": [
             {"key": "cardStock", "label": "名片材质", "required": False, "question": "想用铜版纸、白卡纸还是特种纸？", "hint": "常见名片会用 250g-350g 卡纸；特殊纸需先打样。"},
             {"key": "cardCorners", "label": "圆角", "required": False, "question": "需要圆角吗？", "hint": "圆角属于额外模切/后道，需在文件和报价中标注。"},
@@ -301,6 +304,20 @@ PRODUCT_SPEC_EXTRAS: dict[str, set[str]] = {
     "喷画": {"displaySize"},
     "PVC": {"boardSize"},
 }
+
+
+def paper_spec_key(product: str | None = None) -> str:
+    """Return the profile parameter that mirrors the generic paper field.
+
+    Chat and planner patches fill ``paper``; the settings form shows the
+    profile parameter (for example 名片材质).  A category declares the mirror
+    with ``paperSpec``; categories without one have no linked field.
+    """
+    if not product:
+        return ""
+    canonical = alias_map().get(str(product), str(product))
+    profile = PRODUCT_CATALOG.get(canonical, GENERIC_PROFILE)
+    return str(profile.get("paperSpec") or "")
 
 
 def known_product_spec_keys(product: str | None = None) -> set[str]:

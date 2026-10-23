@@ -1014,6 +1014,39 @@ class AgentTest(unittest.TestCase):
         self.assertTrue(result["messages"])
         self.assertIn("模型回退：模型调用异常", result["toolTrace"])
 
+    def test_chat_filled_paper_reaches_the_card_material_parameter(self):
+        # The chat/planner fills the generic paper field; the card profile's
+        # visible "名片材质" parameter must agree instead of staying empty.
+        self.agent.chat("我要印1000张名片，成品9×5.4cm，双面四色")
+        result = self.agent.chat("铜版纸")
+        self.assertEqual(result["order"]["paper"], "铜版纸")
+        self.assertEqual(result["order"]["productSpecs"].get("cardStock"), "铜版纸")
+        parameter = next(item for item in result["productProfile"]["parameters"]
+                         if item["key"] == "cardStock")
+        self.assertEqual(parameter["value"], "铜版纸")
+        self.assertTrue(parameter["filled"])
+
+    def test_editing_card_material_updates_the_priced_paper_field(self):
+        self.agent.chat("我要印1000张名片")
+        result = self.agent.edit_fields("set", {"productSpecs.cardStock": "白卡纸"})
+        self.assertEqual(result["order"]["productSpecs"]["cardStock"], "白卡纸")
+        self.assertEqual(result["order"]["paper"], "白卡纸")
+
+    def test_clearing_card_material_clears_the_priced_paper_field(self):
+        self.agent.chat("我要印1000张名片，铜版纸")
+        result = self.agent.edit_fields("clear", None, ["productSpecs.cardStock"])
+        self.assertFalse(result["order"]["productSpecs"].get("cardStock"))
+        self.assertFalse(result["order"]["paper"])
+
+    def test_tool_fallback_joins_assumptions_instead_of_a_list_repr(self):
+        # A list stringified with str() reached the chat as "['…']".
+        text = self.agent._planner_tool_fallback("estimate_price", {
+            "status": "blocked",
+            "assumptions": ["印刷方式未指定，按合版模拟。", "材料待确认。"],
+        })
+        self.assertEqual(text, "印刷方式未指定，按合版模拟。；材料待确认。")
+        self.assertNotIn("[", text)
+
 
 if __name__ == "__main__":
     unittest.main()

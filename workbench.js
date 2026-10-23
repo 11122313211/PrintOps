@@ -43,26 +43,17 @@
     return icon;
   }
   function evidence(meta) {
+    // Provenance chips and "no traceable source" tooltips were noise beside
+    // each input: the field value is the answer, and the quote is the only
+    // part worth keeping behind a disclosure.
     const box = node("span", null, "field-evidence");
-    if (!meta) {
-      box.classList.add("field-evidence-empty");
-      box.append(tooltipIcon("暂未记录可追溯来源", "field-evidence-icon", "暂未记录可追溯来源"));
-      return box;
-    }
-    const pending = meta.status === "pending_confirmation" || Number(meta.confidence) < .75;
-    const sourceLabel = `${pending ? "待确认" : meta.status === "confirmed" ? "已确认" : "已填写"} · ${meta.sourceLabel || meta.source || "已记录"}`;
-    const source = node("small", sourceLabel, `field-source ${pending ? "low-confidence" : ""}`);
-    const confidence = Math.round(Number(meta.confidence || 0) * 100);
-    const sourceBasis = `来源：${meta.sourceLabel || meta.source || "已记录"}；规则置信度 ${confidence}%`;
-    source.title = sourceBasis;
-    source.dataset.tooltip = sourceBasis;
-    source.setAttribute("tabindex", "0");
-    source.setAttribute("aria-label", sourceBasis);
-    source.setAttribute("role", "img");
-    box.append(source);
+    box.hidden = true;
+    const quote = meta?.evidence?.quote;
+    if (!quote) return box;
     const details = node("details");
-    details.append(node("summary", "依据"), node("p", meta.evidence?.quote || "无原文摘录"));
+    details.append(node("summary", "依据"), node("p", quote));
     box.append(details);
+    box.hidden = false;
     return box;
   }
   function manualDimension(value) {
