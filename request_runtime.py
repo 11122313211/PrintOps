@@ -44,6 +44,18 @@ def check_deadline() -> None:
     remaining()
 
 
+def replace_deadline(deadline: float) -> None:
+    """Raise the active request budget for a route that declared more work.
+
+    Only the HTTP handler calls this, for routes whose bounded network
+    budget is announced up front (capability probe). The new deadline is
+    capped by the caller; an absent deadline is never invented here.
+    """
+    current = _DEADLINE.get()
+    if current is not None and deadline > current:
+        _DEADLINE.set(deadline)
+
+
 def operation_deadline(seconds: float, deadline: float | None = None) -> float:
     """A local operation may shorten the request budget, never extend it."""
     seconds = float(seconds)

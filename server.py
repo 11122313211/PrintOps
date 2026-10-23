@@ -32,8 +32,9 @@ from order_model import normalize_state
 from storage_contract import StoreConflictError, summary
 from supplier_adapters import list_platforms
 from tools import validate_order
-from request_runtime import (DeadlineExceeded, bounded_io, check_deadline, deadline_lock,
-                             deadline_scope, operation_deadline, remaining)
+from request_runtime import (DeadlineExceeded, bounded_io, check_deadline, current_deadline,
+                             deadline_lock, deadline_scope, operation_deadline,
+                             remaining, replace_deadline)
 import stdio_utf8
 
 
@@ -54,6 +55,7 @@ PLANNER = OpenAICompatiblePlanner(
     SAVED_LLM_CONFIG.get("url", os.getenv("PRINTOPS_LLM_URL", "")),
     SAVED_LLM_CONFIG.get("key", os.getenv("PRINTOPS_LLM_KEY", "")),
     SAVED_LLM_CONFIG.get("model", os.getenv("PRINTOPS_LLM_MODEL", "")),
+    timeout=OpenAICompatiblePlanner._timeout_from_env(),
     allow_private_hosts=ALLOW_PRIVATE_LLM_HOSTS,
 )
 LLM_LOCK = threading.Lock()
@@ -103,6 +105,14 @@ MAX_CONNECTIONS = max(
 REQUEST_TIMEOUT_SECONDS = float(
     _env_number("PRINTOPS_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT_SECONDS, float)
 )
+# dsh clampTimeout pattern: routes that declare bounded network work get
+# their own capped budget instead of silently colliding with the global
+# request deadline mid-probe. MIN_ROUTE_EXTENSION_BASE_SECONDS keeps
+# deliberately tiny handler budgets (tests, hardened deployments) intact.
+DNS_CHECK_SECONDS = 6.0
+MODEL_TEST_BUDGET_SECONDS = 40.0
+ROUTE_DEADLINE_CAP_SECONDS = 120.0
+MIN_ROUTE_EXTENSION_BASE_SECONDS = 5.0
 SLOW_REQUEST_MS = float(_env_number("PRINTOPS_SLOW_REQUEST_MS", DEFAULT_SLOW_REQUEST_MS, float))
 SHUTDOWN_GRACE_SECONDS = float(
     _env_number("PRINTOPS_SHUTDOWN_GRACE_SECONDS", DEFAULT_SHUTDOWN_GRACE_SECONDS, float)
@@ -159,6 +169,24 @@ def llm_settings() -> dict[str, object]:
     return payload
 
 
+def _configure_bounded(candidate, url: str, model: str, api_key: str) -> None:
+    """Validate and apply an endpoint config in a short bounded worker.
+
+    URL validation may hit the OS resolver, which Python cannot cancel; the
+    wait is capped at DNS_CHECK_SECONDS so a dead DNS turns into a specific,
+    actionable error instead of eating the whole request budget and surfacing
+    as a generic 408 while the user is only saving their API key.
+    """
+    budget = min(DNS_CHECK_SECONDS, max(1.0, float(candidate.timeout)))
+    try:
+        bounded_io(lambda: candidate.configure(url, model, api_key), operation_deadline(budget))
+    except DeadlineExceeded as error:
+        raise RequestError(
+            f"接口地址校验超时（{DNS_CHECK_SECONDS:.0f} 秒）：主机名解析或出站等待未完成，"
+            "请检查本机 DNS/代理，或确认端点可达后重试",
+            504, "ADDRESS_VALIDATION_TIMEOUT") from error
+
+
 def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
     global PLANNER
     url = str(body.get("url", "")).strip()
@@ -173,7 +201,7 @@ def update_llm_settings(body: dict[str, object]) -> dict[str, object]:
         api_key = str(body.get("key", "")).strip() or candidate.api_key
         # URL validation can resolve DNS. Keep it outside the config lock,
         # bounded, and confined to a candidate that is never published late.
-        bounded_io(lambda: candidate.configure(url, model, api_key), operation_deadline(candidate.timeout))
+        _configure_bounded(candidate, url, model, api_key)
     with deadline_lock(LLM_LOCK):
         write_saved_config(LLM_CONFIG_PATH, {"url": candidate.base_url, "model": candidate.model, "key": candidate.api_key})
         PLANNER = candidate
@@ -210,7 +238,7 @@ def test_llm_capabilities(body: dict[str, object]) -> dict[str, object]:
         test_key = str(body.get("key", "")).strip()
         if not test_key and test_url == saved.base_url and test_model == saved.model:
             test_key = saved.api_key
-        bounded_io(lambda: tester.configure(test_url, test_model, test_key), operation_deadline(tester.timeout))
+        _configure_bounded(tester, test_url, test_model, test_key)
     result = tester.test_capabilities()
     return {"llm": tester.public_config(), "test": result}
 
@@ -914,6 +942,47 @@ class Handler(BaseHTTPRequestHandler):
     # read must not hold a slot (and a SQLite connection) forever.
     timeout = REQUEST_TIMEOUT_SECONDS if REQUEST_TIMEOUT_SECONDS > 0 else None
 
+    def _expire_request_read(self) -> None:
+        self.close_connection = True
+        try:
+            # Interrupt an in-progress buffered header/body read while
+            # leaving a brief opportunity for a structured 408 response.
+            self.connection.shutdown(socket.SHUT_RD)
+        except OSError:
+            pass
+
+    def _arm_deadline_timer(self, deadline: float) -> None:
+        self._cancel_deadline_timer()
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._expire_request_read)
+        timer.daemon = True
+        timer.start()
+        self._deadline_timer = timer
+
+    def _cancel_deadline_timer(self) -> None:
+        timer = getattr(self, "_deadline_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._deadline_timer = None
+
+    def _extend_request_deadline(self, total_seconds: float) -> None:
+        """Give a route with declared network work its own capped budget.
+
+        Mirrors the dsh clampTimeout rule: the route budget may exceed the
+        global request timeout but never the hard cap, and handlers with a
+        deliberately tiny budget (tests, hardened deployments) keep it.
+        """
+        current = current_deadline()
+        received = getattr(self, "_request_received", None)
+        if current is None or received is None:
+            return
+        if not self.timeout or self.timeout < MIN_ROUTE_EXTENSION_BASE_SECONDS:
+            return
+        target = received + min(max(float(self.timeout), total_seconds), ROUTE_DEADLINE_CAP_SECONDS)
+        if target <= current:
+            return
+        replace_deadline(target)
+        self._arm_deadline_timer(target)
+
     def handle_one_request(self):
         # Start before request-line/header parsing. Per-read socket timeouts
         # alone let a client send one byte before every timeout indefinitely.
@@ -921,22 +990,9 @@ class Handler(BaseHTTPRequestHandler):
         seconds = self.timeout
         deadline = (self._request_received + seconds
                     if seconds is not None and math.isfinite(seconds) and seconds > 0 else None)
-        timer = None
-
-        def expire_read():
-            self.close_connection = True
-            try:
-                # Interrupt an in-progress buffered header/body read while
-                # leaving a brief opportunity for a structured 408 response.
-                self.connection.shutdown(socket.SHUT_RD)
-            except OSError:
-                pass
-
         with deadline_scope(deadline):
             if deadline is not None:
-                timer = threading.Timer(max(0.0, deadline - time.monotonic()), expire_read)
-                timer.daemon = True
-                timer.start()
+                self._arm_deadline_timer(deadline)
             try:
                 return super().handle_one_request()
             except DeadlineExceeded:
@@ -945,7 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.error_response(RequestError("请求总时限已到，请核对订单状态后重试", 408, "REQUEST_DEADLINE"))
             except OSError:
                 self.close_connection = True
-                # expire_read's shutdown(SHUT_RD) surfaces as an OSError here
+                # _expire_request_read's shutdown(SHUT_RD) surfaces as an OSError here
                 # (WSAECONNABORTED on Windows) before any read-level check can
                 # raise DeadlineExceeded.  Clients that already sent a request
                 # line still get the structured 408 they would see on POSIX
@@ -956,8 +1012,7 @@ class Handler(BaseHTTPRequestHandler):
                     except OSError:
                         pass
             finally:
-                if timer is not None:
-                    timer.cancel()
+                self._cancel_deadline_timer()
 
     def finish(self):
         """Close the connection without provoking a Windows RST.
@@ -1074,6 +1129,12 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as error:
                     raise RequestError(str(error), 400, "INVALID_SETTINGS")
             if path == "/api/model/test":
+                if str(body.get("url", "")).strip() or bool(getattr(PLANNER, "enabled", False)):
+                    # The probe announces its own bounded workload (one DNS
+                    # check + up to four 6s probes); give the route the
+                    # matching capped budget instead of letting the global
+                    # deadline abort a legitimate slow-endpoint test.
+                    self._extend_request_deadline(MODEL_TEST_BUDGET_SECONDS)
                 try:
                     return self.reply(test_llm_capabilities(body))
                 except ValueError as error:

@@ -12,6 +12,9 @@ import math
 import os
 import re
 import socket
+import ssl
+import subprocess
+import tempfile
 import time
 import urllib.request
 from urllib.error import HTTPError, URLError
@@ -87,6 +90,17 @@ def read_saved_config(path: str | Path) -> dict[str, str]:
     config_path = Path(path)
     if not config_path.is_file():
         return {}
+    if os.name != "nt":
+        # dsh credentials-local fails closed on world-readable secrets.
+        # Self-heal the mode first (a hand-edited file may carry the
+        # creator's umask); only refuse to load when it stays exposed.
+        try:
+            if config_path.stat().st_mode & 0o077:
+                os.chmod(config_path, 0o600)
+                if config_path.stat().st_mode & 0o077:
+                    return {}
+        except OSError:
+            return {}
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -96,14 +110,53 @@ def read_saved_config(path: str | Path) -> dict[str, str]:
     return {key: str(data.get(key, "")) for key in ("url", "model", "key") if data.get(key) is not None}
 
 
+def _restrict_key_file(path: Path) -> None:
+    """Best-effort owner-only permissions for the plaintext key file.
+
+    mkstemp already creates 0600 on POSIX; Windows chmod is a no-op, so
+    drop inherited ACL entries and grant the current user read/write via
+    icacls. Failures are never fatal here: the file stays local and the
+    UI keeps showing the storage warning.
+    """
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if not user:
+        return
+    try:
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
+            capture_output=True, timeout=5, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def write_saved_config(path: str | Path, config: dict[str, str]) -> None:
+    # dsh atomic-write pattern: a crash can never leave a half-written
+    # config behind, and the key is only ever visible at its final path
+    # with owner-only permissions already applied.
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(prefix=".llm-config-", dir=str(config_path.parent))
     try:
-        os.chmod(config_path, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _restrict_key_file(Path(tmp_name))
+        os.replace(tmp_name, str(config_path))
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 class OpenAICompatiblePlanner:
@@ -137,7 +190,7 @@ class OpenAICompatiblePlanner:
     MAX_CONTEXT_LEDGER_ENTRIES = 8
     MAX_CONTEXT_LEDGER_BYTES = 32 * 1024
     MAX_TOOL_DESCRIPTION = 512
-    CAPABILITY_PROBE_TOTAL_SECONDS = 20.0
+    CAPABILITY_PROBE_TOTAL_SECONDS = 26.0
     CAPABILITY_PROBE_REQUEST_SECONDS = 6.0
     MAX_CAPABILITY_RESPONSE_BYTES = 256 * 1024
     MAX_PLAN_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -206,11 +259,28 @@ class OpenAICompatiblePlanner:
 
         return bounded_io(read_response, deadline)
 
+    @staticmethod
+    def _timeout_from_env() -> float:
+        """Per-request model budget in seconds, clamped to 5..120.
+
+        Slow reasoning models need more than the 20-second default; the
+        HTTP total budget (PRINTOPS_REQUEST_TIMEOUT) must be raised in
+        step, because a plan never outlives its request. See
+        docs/RUNTIME_BUDGET.md.
+        """
+        raw = os.getenv("PRINTOPS_LLM_TIMEOUT", "").strip()
+        try:
+            value = float(raw) if raw else 20.0
+        except ValueError:
+            value = 20.0
+        return max(5.0, min(120.0, value))
+
     @classmethod
     def from_env(cls) -> "OpenAICompatiblePlanner":
         allow_private = os.getenv("PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS", "").strip().lower() in {"1", "true", "yes", "on"}
         return cls(os.getenv("PRINTOPS_LLM_URL", ""), os.getenv("PRINTOPS_LLM_KEY", ""),
-                   os.getenv("PRINTOPS_LLM_MODEL", ""), allow_private_hosts=allow_private)
+                   os.getenv("PRINTOPS_LLM_MODEL", ""), timeout=cls._timeout_from_env(),
+                   allow_private_hosts=allow_private)
 
     def configure(self, base_url: str, model: str, api_key: str = "") -> None:
         self.base_url = normalize_base_url(base_url, allow_private_hosts=self.allow_private_hosts)
@@ -1209,12 +1279,49 @@ class OpenAICompatiblePlanner:
             return None
         return value if isinstance(value, dict) else None
 
+    @staticmethod
+    def _classify_probe_error(error: Exception) -> tuple[str, str]:
+        """Map a probe failure to (user-facing cause, kind).
+
+        dsh's timeout library keeps capability-owned reason codes instead
+        of one generic error; kind drives fail-fast: network/auth stop
+        the probe (the endpoint or key will not heal mid-probe), protocol
+        errors continue (payload-specific 4xx/5xx are still informative).
+        """
+        reason = getattr(error, "reason", None)
+        if isinstance(error, HTTPError):
+            if error.code in (401, 403):
+                return f"HTTP {error.code}：API Key 被拒绝或无权访问该模型", "auth"
+            if error.code == 404:
+                return "HTTP 404：接口路径或模型名不存在（URL 通常应以 /v1 结尾）", "protocol"
+            if error.code == 429:
+                return "HTTP 429：供应商限流，请稍后重试", "protocol"
+            return f"HTTP {error.code}", "protocol"
+        if isinstance(error, DeadlineExceeded):
+            # The probe's own bounded wait expired (urlopen reads can outlast
+            # the caller budget); from the user's side this is indistinguish-
+            # able from a socket read timeout, so report the same actionable
+            # cause instead of an internal deadline name.
+            return "连接或响应超时，端点未在时限内返回数据", "network"
+        if isinstance(error, (TimeoutError, socket.timeout)) \
+                or isinstance(reason, (TimeoutError, socket.timeout)):
+            return "连接或响应超时，端点未在时限内返回数据", "network"
+        if isinstance(error, socket.gaierror) or isinstance(reason, socket.gaierror):
+            return "无法解析主机名，请检查域名拼写或本机 DNS/代理", "network"
+        if isinstance(error, ConnectionRefusedError) or isinstance(reason, ConnectionRefusedError):
+            return "连接被拒绝，目标端口未监听或地址错误", "network"
+        if isinstance(error, ssl.SSLError) or isinstance(reason, ssl.SSLError):
+            return "TLS 握手失败，请检查 HTTPS 证书或代理设置", "network"
+        if isinstance(error, URLError):
+            return "网络错误：" + str(reason or error), "network"
+        return "模型接口连接失败", "network"
+
     def _capability_post(self, target_url: str, target_model: str, target_key: str,
-                         payload: dict[str, Any], deadline: float) -> tuple[dict[str, Any] | None, str]:
+                         payload: dict[str, Any], deadline: float) -> tuple[dict[str, Any] | None, str, str]:
         """Send one bounded, non-retrying capability request."""
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return None, "能力探测已超时"
+            return None, "能力探测已超时", "network"
         try:
             configured_timeout = float(self.timeout)
         except (TypeError, ValueError, OverflowError):
@@ -1233,14 +1340,16 @@ class OpenAICompatiblePlanner:
             request_deadline = operation_deadline(request_timeout, deadline)
             decoded = self._request_json(request, request_deadline, self.MAX_CAPABILITY_RESPONSE_BYTES)
             if not isinstance(decoded, dict):
-                return None, "模型接口响应不是 JSON 对象"
-            return decoded, ""
+                return None, "模型接口响应不是 JSON 对象", "protocol"
+            return decoded, "", ""
         except HTTPError as error:
-            return None, f"HTTP {error.code}"
-        except (URLError, TimeoutError, OSError):
-            return None, "模型接口连接失败或超时"
+            message, kind = self._classify_probe_error(error)
+            return None, message, kind
+        except (URLError, TimeoutError, OSError) as error:
+            message, kind = self._classify_probe_error(error)
+            return None, message, kind
         except (UnicodeError, TypeError, ValueError, json.JSONDecodeError):
-            return None, "模型接口返回格式异常"
+            return None, "模型接口返回格式异常", "protocol"
 
     def test_capabilities(self, base_url: str | None = None, model: str | None = None,
                           api_key: str | None = None) -> dict[str, Any]:
@@ -1288,8 +1397,20 @@ class OpenAICompatiblePlanner:
             ],
             "max_tokens": 32,
         }
-        chat_response, error = self._capability_post(
+        chat_response, error, kind = self._capability_post(
             target_url, target_model, target_key, chat_payload, deadline)
+        if chat_response is None and kind in {"network", "auth"}:
+            # The remaining probes hit the same endpoint with the same
+            # key; burning up to 3x6 more seconds only produced the
+            # ambiguous "接口不可用" users could not act on. Report the
+            # single root cause now.
+            errors["chat"] = error
+            prefix = "鉴权失败：" if kind == "auth" else "模型接口不可达："
+            result["message"] = f"{prefix}{error}，已跳过后续检查"
+            result["chosenProtocol"] = "unavailable" if kind == "auth" else "unreachable"
+            result["latencyMs"] = self._latency(started)
+            self.last_error, self.last_protocol = result["message"], ""
+            return result
         if chat_response is not None and self._response_text(chat_response).strip():
             result["chat"] = True
         else:
@@ -1307,7 +1428,7 @@ class OpenAICompatiblePlanner:
             ],
             "max_tokens": 96,
         }
-        json_response, error = self._capability_post(
+        json_response, error, _kind = self._capability_post(
             target_url, target_model, target_key, json_payload, deadline)
         if json_response is not None:
             value = self._strict_json_object(self._response_text(json_response))
@@ -1346,7 +1467,7 @@ class OpenAICompatiblePlanner:
             "tool_choice": "auto",
             "max_tokens": 96,
         }
-        native_response, error = self._capability_post(
+        native_response, error, _kind = self._capability_post(
             target_url, target_model, target_key, native_payload, deadline)
         matching_call: dict[str, Any] | None = None
         native_protocol = ""
@@ -1403,7 +1524,7 @@ class OpenAICompatiblePlanner:
                     "tool_choice": "auto",
                     "max_tokens": 64,
                 }
-            continuation_response, error = self._capability_post(
+            continuation_response, error, _kind = self._capability_post(
                 target_url, target_model, target_key, continuation_payload, deadline)
             result["toolContinuation"] = bool(
                 continuation_response is not None
