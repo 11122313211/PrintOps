@@ -10,6 +10,7 @@ from agent import (Agent, Memory, ORDER_DEFAULTS, estimate_price, match_supplier
                     preflight_file, prepare_handoff, recommend_processes, request_supplier_quote,
                     validate_order)
 from llm_adapter import OpenAICompatiblePlanner, normalize_base_url, read_saved_config, write_saved_config
+from order_model import _normalize_state_item_options
 from product_knowledge import KNOWLEDGE_VERSION, parameter_state
 
 
@@ -357,6 +358,72 @@ class AgentTest(unittest.TestCase):
         fallback = self.agent._quote_request()
         self.assertIsNotNone(fallback)
         self.assertEqual(fallback["requestId"], renewed_id)
+
+    def test_choose_tolerates_malformed_cached_options(self):
+        self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
+        self.agent.choose("balanced")
+        options = self.agent.state["processOptions"]
+        options.append("corrupt-entry")
+        options.append({"title": "缺少编号的方案"})
+        # Well-formed options stay selectable next to corrupt cache entries.
+        result = self.agent.choose("premium")
+        self.assertEqual(result["workflowStage"], "confirm")
+        self.assertEqual(self.agent.state["selectedOption"], "premium")
+        self.assertIn("已选择", result["messages"][0])
+        # A matched option with a missing required field degrades to a readable error.
+        premium = next(item for item in self.agent.state["processOptions"]
+                       if isinstance(item, dict) and item.get("id") == "premium")
+        del premium["finishing"]
+        broken = self.agent.choose("premium")
+        self.assertEqual(broken["toolResult"]["status"], "invalid_option")
+        self.assertIn("finishing", broken["toolResult"]["missingFields"])
+        self.assertIn("数据不完整", broken["messages"][0])
+
+    def test_choose_reports_missing_option_paper(self):
+        self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
+        self.agent.choose("balanced")
+        premium = next(item for item in self.agent.state["processOptions"]
+                       if isinstance(item, dict) and item.get("id") == "premium")
+        del premium["paper"]
+        broken = self.agent.choose("premium")
+        self.assertEqual(broken["toolResult"]["status"], "invalid_option")
+        self.assertIn("paper", broken["toolResult"]["missingFields"])
+        self.assertIn("数据不完整", broken["messages"][0])
+
+    def test_choose_item_tolerates_malformed_item_options(self):
+        self.agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
+        self.agent.chat("处理第 2 项：折页")
+        self.agent.chat("数量改为 1200 张，尺寸改为 210*267mm，三折")
+        self.assertTrue(self.agent._recommend_item(1))
+        cache = self.agent.state["processOptions"].setdefault("item-2", [])
+        cache.insert(0, "corrupt-entry")
+        cache.append({"title": "缺少编号的方案"})
+        result = self.agent.choose("balanced", item_index=1)
+        self.assertEqual(result["toolResult"]["status"], "selected")
+        balanced = next(item for item in self.agent.state["processOptions"]["item-2"]
+                        if isinstance(item, dict) and item.get("id") == "balanced")
+        del balanced["finishing"]
+        broken = self.agent.choose("balanced", item_index=1)
+        self.assertEqual(broken["toolResult"]["status"], "invalid_option")
+        self.assertIn("finishing", broken["toolResult"]["missingFields"])
+        self.assertIn("数据不完整", broken["messages"][0])
+
+    def test_state_item_options_normalizer_drops_or_repairs_malformed_entries(self):
+        normalized = _normalize_state_item_options({
+            "item-1": [
+                {"id": "ok", "finishing": "哑膜", "paper": "250g 铜版纸", "title": "平衡方案"},
+                "corrupt",
+                {"finishing": "哑膜"},
+                {"id": "no-finishing", "paper": "纸"},
+                {"id": "repaired", "finishing": "覆膜"},
+            ],
+            7: [{"id": "x", "finishing": "哑膜"}],
+        })
+        self.assertEqual([item["id"] for item in normalized["item-1"]], ["ok", "repaired"])
+        repaired = normalized["item-1"][1]
+        self.assertEqual(repaired["paper"], "")
+        self.assertEqual(repaired["title"], "repaired")
+        self.assertNotIn(7, normalized)
 
     def test_unconfigured_supplier_dimensions_and_material_require_review(self):
         supported = match_supplier_capability({**ORDER_DEFAULTS, "platform": "shengda", "productType": "名片",

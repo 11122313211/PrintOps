@@ -2165,6 +2165,38 @@ class Agent:
         self._event("tool", "rejected", f"工具 {name} 不在白名单中", tool=name)
         return self._tool_reply(f"工具 {name} 不在白名单中，未执行。", remember=remember)
 
+    @staticmethod
+    def _select_option(options: Any, option_id: Any) -> dict[str, Any] | None:
+        """Find a cached option by id without trusting the persisted shape."""
+        if not isinstance(options, list) or not isinstance(option_id, str):
+            return None
+        for item in options:
+            if isinstance(item, dict) and item.get("id") == option_id:
+                return item
+        return None
+
+    @staticmethod
+    def _option_shape_errors(option: dict[str, Any], need_paper: bool) -> list[str]:
+        """Return required option fields that are missing or malformed."""
+        errors: list[str] = []
+        finishing = option.get("finishing")
+        if not isinstance(finishing, str) or not finishing.strip():
+            errors.append("finishing")
+        if need_paper:
+            paper = option.get("paper")
+            if not isinstance(paper, str) or not paper.strip():
+                errors.append("paper")
+        return errors
+
+    @staticmethod
+    def _option_title(option: dict[str, Any]) -> str:
+        """Degrade a missing or malformed option title to a safe label."""
+        title = option.get("title")
+        if isinstance(title, str) and title.strip():
+            return title
+        option_id = option.get("id")
+        return option_id if isinstance(option_id, str) and option_id.strip() else "所选方案"
+
     def choose(self, option_id: str, item_index: int | None = None) -> dict[str, Any]:
         self._begin_run("choose")
         self.trace = []
@@ -2181,18 +2213,26 @@ class Agent:
             options = self._context_options(self.state, item_order)
             if not options:
                 options = self._recommend_item(index)
-            option = next((item for item in options if item["id"] == option_id), None)
+            option = self._select_option(options, option_id)
             if not option:
                 return self._result(["没有找到这个产品项的方案。"], [], options)
+            need_paper = item_order.get("productType") not in MATERIAL_SPEC_PRODUCTS
+            missing_fields = self._option_shape_errors(option, need_paper)
+            if missing_fields:
+                message = "该方案的数据不完整，无法直接应用。请重新获取推荐方案后再选择。"
+                return self._result([message], [], options,
+                                    tool_result={"status": "invalid_option", "itemId": item_id,
+                                                 "itemIndex": index, "optionId": option_id,
+                                                 "missingFields": missing_fields})
             updates = {"finishing": option["finishing"], "binding": option.get("binding", item_order.get("binding", ""))}
-            if item_order.get("productType") not in MATERIAL_SPEC_PRODUCTS:
+            if need_paper:
                 updates["paper"] = option["paper"]
             self._update_item(index, updates, source="recommendation", confidence=0.9)
             self.state["order"]["items"][index]["selectedOption"] = option_id
             self._store_process_options(options, index)
             all_selected = all(item.get("selectedOption") for item in self.state["order"].get("items", []) if isinstance(item, dict))
             self.state["workflowStage"] = "confirm" if all_selected else "clarify"
-            message = f"已为第 {index + 1} 项选择{option['title']}，该项参数已更新。"
+            message = f"已为第 {index + 1} 项选择{self._option_title(option)}，该项参数已更新。"
             self._remember("assistant", message)
             self._save()
             return self._result([message], [], options, tool_result={"status": "selected", "itemId": item_id,
@@ -2203,17 +2243,24 @@ class Agent:
         if not options:
             options = self._call("recommend_processes", self.state["order"])
             self._store_process_options(options)
-        option = next((item for item in options if item["id"] == option_id), None)
+        option = self._select_option(options, option_id)
         if not option:
             return self._result(["没有找到这个方案。"], [], options)
+        need_paper = self.state["order"].get("productType") not in MATERIAL_SPEC_PRODUCTS
+        missing_fields = self._option_shape_errors(option, need_paper)
+        if missing_fields:
+            message = "该方案的数据不完整，无法直接应用。请重新获取推荐方案后再选择。"
+            return self._result([message], [], options,
+                                tool_result={"status": "invalid_option", "optionId": option_id,
+                                             "missingFields": missing_fields})
         updates = {"finishing": option["finishing"], "binding": option.get("binding", self.state["order"]["binding"])}
-        if self.state["order"].get("productType") not in MATERIAL_SPEC_PRODUCTS:
+        if need_paper:
             updates["paper"] = option["paper"]
         self._update_order(updates, source="recommendation", confidence=0.9)
         self.state["selectedOption"] = option_id
         self._store_process_options(options)
         self.state["workflowStage"] = "confirm"
-        message = f"已选择{option['title']}，订单参数已更新。"
+        message = f"已选择{self._option_title(option)}，订单参数已更新。"
         self._remember("assistant", message)
         self._save()
         return self._result([message], [], options)

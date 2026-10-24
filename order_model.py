@@ -1093,8 +1093,19 @@ def _normalize_state_item_options(value: Any) -> dict[str, list[dict[str, Any]]]
                 safe = _safe_state_scalar(item)
                 if safe is not _STATE_MISSING:
                     option[key[:128]] = safe
-            if isinstance(option.get("id"), str) and option["id"].strip():
-                options.append(option)
+            if not (isinstance(option.get("id"), str) and option["id"].strip()):
+                continue
+            # An option without a usable finishing can never be applied later;
+            # drop the entry so the next recommendation regenerates fresh data
+            # instead of letting one malformed item break the whole state load.
+            finishing = option.get("finishing")
+            if not isinstance(finishing, str) or not finishing.strip():
+                continue
+            if not isinstance(option.get("paper"), str):
+                option["paper"] = ""
+            if not isinstance(option.get("title"), str) or not option["title"].strip():
+                option["title"] = option["id"]
+            options.append(option)
         result[raw_item_id[:128]] = options
     return result
 
