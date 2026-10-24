@@ -626,7 +626,10 @@ class LoopbackRuntimeTest(unittest.TestCase):
         finally:
             connection.close()
         self.assertTrue(request_id)
-        lines = [line for line in logs.output if "requestId=" in line]
+        # Filter by this request's id: the shared logger also carries other
+        # tests' background traffic when the whole suite runs at once, and
+        # the subject here is that this request is logged exactly once.
+        lines = [line for line in logs.output if f"requestId={request_id}" in line]
         self.assertEqual(len(lines), 1, logs.output)
         self.assertIn(f"requestId={request_id}", lines[0])
         self.assertIn("status=200", lines[0])
