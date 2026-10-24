@@ -50,6 +50,14 @@
 - **缺元素不再静默吞掉整页交互（TD-06）**：页面引导接线前对绑定段引用的全部元素 ID 做一次性存在性断言；缺失项以一条 console.error 汇总并在页面顶部显示可读横幅，仅跳过缺失元素的绑定，其余照常生效——一个缺失元素不再借第一个 TypeError 让后续全部绑定失联。
 - **错误文案单一来源（TD-19）**：持续错误卡与设置页的用户可见失败文案收敛到 `PrintOpsJourney.ERROR_TEXTS`（状态桶 + 已映射 code → {title, hint}），各 catch 兜底改查表、未知 code 回落服务端消息；已有文案一字未变，仅收敛来源。
 
+**工具调用检测（WS-C）**
+
+- 工具调用统计：所有工具调用在网关处计时并落库，覆盖 ok / failed / blocked / rejected 全部终态，拒绝与阻断的运行轨迹事件同步补充耗时（durationMs）；统计写入失败绝不影响对话主流程。
+- 新增 `GET /api/tools/stats?window=30d`（支持 7/30/90 天，非法取值返回 400）：按工具聚合调用量、四态计数、成功率与平均/p95 耗时，并附 blocked 原因分布；数据仅来自本机数据库（scope: local-only），不上传不共享。令牌守卫与其他接口一致。
+- 设置弹窗「工具箱」面板新增「调用统计（近 30 天）」视图：打开设置时自动刷新，展示总量、成功率、耗时与阻断原因，空数据显示"暂无记录"；渲染全程 textContent，不引入新的 HTML 插值。
+- 知识库复核到期提示：距上次复核达到 90 天周期（due/overdue）时，订单响应以提示级风险 `knowledge_review_due` 注入距上次复核天数与复核建议；获取失败不影响响应。
+- 存储层新增 `tool_call_log` 表（含 (tool_name, created_at) 索引，create-if-not-exists 无迁移）与可选 `ToolCallRecorder` 契约：SQLite 持久保留，内存后端以 1000 条有界环实现；评测脚本 JSON 报告新增按工具聚合的 `toolReport`。
+
 （`VERSION` 在发布收口时再 bump 至 1.3.0。）
 
 ## Unreleased - 2026-10-23（名片材质同步、字段来源标签清理、聊天列表文本修复）
