@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import math
 import re
 import time
@@ -2040,14 +2041,86 @@ class Agent:
 
     def call_tool(self, name: str, payload: dict[str, Any] | None = None, preserve_trace: bool = False,
                   remember: bool = True) -> dict[str, Any]:
-        """Public tool gateway used by a UI, MCP bridge, or an LLM planner."""
+        """Public tool gateway used by a UI, MCP bridge, or an LLM planner.
+
+        Every terminal state (ok, failed, blocked, rejected, or a raised tool
+        error) is timed at this boundary and written to the optional store
+        telemetry ring.  Recording is wrapped defensively: a statistics
+        backend failure must never change the workflow outcome, so it is
+        swallowed with a debug log.
+        """
+        started = time.monotonic()
+        try:
+            response = self._call_tool_impl(name, payload, preserve_trace, remember, started)
+        except Exception as error:
+            self._record_tool_call_telemetry(name, "failed", str(error) or error.__class__.__name__,
+                                             started, payload)
+            raise
+        status, reason = self._tool_call_outcome(response)
+        run_id = response.get("runId") if isinstance(response, dict) else None
+        self._record_tool_call_telemetry(name, status, reason, started, payload,
+                                         run_id=run_id if isinstance(run_id, str) else "")
+        return response
+
+    def _tool_call_outcome(self, response: Any) -> tuple[str, str]:
+        """Map a gateway response to the four terminal telemetry states."""
+        result = response.get("toolResult") if isinstance(response, dict) else None
+        if isinstance(result, dict):
+            status = result.get("status")
+            if status == "blocked":
+                return "blocked", str(result.get("reason") or "")
+            if status == "error":
+                return "failed", str(result.get("reason") or result.get("errorType") or "tool_error")
+            if status == "invalid_arguments":
+                return "rejected", str(result.get("reason") or "")
+            return "ok", ""
+        # Rejections without a tool payload record their terminal event in the
+        # response run trace; the gateway appends it last, so scan from the end.
+        for event in reversed(response.get("runTrace") or [] if isinstance(response, dict) else []):
+            if isinstance(event, dict) and event.get("step") == "tool":
+                status = event.get("status")
+                if status in ("rejected", "blocked", "failed"):
+                    return status, str(event.get("detail") or "")
+                break
+        return "rejected", ""
+
+    def _record_tool_call_telemetry(self, name: Any, status: str, reason: Any, started: float,
+                                    payload: Any = None, item_index: Any = None,
+                                    run_id: Any = None) -> None:
+        """Write one tool_call_log row; failures never propagate (v1.3.0)."""
+        try:
+            record = getattr(getattr(self.memory, "store", None), "record_tool_call", None)
+            if not callable(record):
+                return
+            if isinstance(item_index, bool) or not isinstance(item_index, int):
+                candidate = payload.get("itemIndex") if isinstance(payload, dict) else None
+                if isinstance(candidate, int) and not isinstance(candidate, bool):
+                    item_index = candidate
+                else:
+                    active = self.state.get("activeItemIndex")
+                    item_index = active if isinstance(active, int) else None
+            record({"tool_name": name if isinstance(name, str) and name.strip() else "unknown",
+                    "status": status,
+                    "reason": str(reason or ""),
+                    "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+                    "session_id": self.id,
+                    "run_id": run_id if isinstance(run_id, str) else self.run_id,
+                    "item_index": item_index})
+        except Exception as error:  # telemetry must never fail a tool call
+            logging.getLogger(__name__).debug("tool call stats write skipped: %s",
+                                              error.__class__.__name__)
+
+    def _call_tool_impl(self, name: str, payload: dict[str, Any] | None, preserve_trace: bool,
+                        remember: bool, started: float) -> dict[str, Any]:
+        """Gateway body; ``started`` timestamps the rejected/blocked events."""
         valid_name = isinstance(name, str) and bool(name.strip()) and len(name.strip()) <= MAX_TOOL_NAME_LENGTH
         if not valid_name:
             if not preserve_trace:
                 self._begin_run("tool:invalid")
                 self.trace = []
             self.trace.append("工具名无效")
-            self._event("tool", "rejected", "工具名必须是有限长度的非空字符串", tool="invalid")
+            self._event("tool", "rejected", "工具名必须是有限长度的非空字符串", tool="invalid",
+                        durationMs=round((time.monotonic() - started) * 1000))
             return self._tool_reply("工具名无效，未执行。", remember=remember,
                                     tool_result={"status": "invalid_arguments", "reason": "tool_name"})
         name = name.strip()
@@ -2058,13 +2131,15 @@ class Agent:
             payload = {}
         if not isinstance(payload, dict):
             self.trace.append(f"工具参数无效：{name}")
-            self._event("tool", "rejected", f"工具 {name} 参数不是 JSON 对象", tool=name)
+            self._event("tool", "rejected", f"工具 {name} 参数不是 JSON 对象", tool=name,
+                        durationMs=round((time.monotonic() - started) * 1000))
             return self._tool_reply("工具参数需要使用 JSON 对象，未执行。", remember=remember)
         payload = dict(payload)
         payload_error = self._validate_call_tool_payload(name, payload)
         if payload_error:
             self.trace.append(f"工具参数无效：{name}")
-            self._event("tool", "rejected", payload_error, tool=name)
+            self._event("tool", "rejected", payload_error, tool=name,
+                        durationMs=round((time.monotonic() - started) * 1000))
             return self._tool_reply(payload_error + "，未执行。", remember=remember,
                                     tool_result={"status": "invalid_arguments", "reason": payload_error})
         # Match MCP's normalization so a valid value padded by a transport
@@ -2115,7 +2190,8 @@ class Agent:
                                if missing else f"当前信息还不完整，暂不能{action}。")
                 self.trace.append(f"工具阻断：{name}")
                 self._event("tool", "blocked", message, tool=name,
-                            reason=str(reason or "precondition"))
+                            reason=str(reason or "precondition"),
+                            durationMs=round((time.monotonic() - started) * 1000))
                 response = self._tool_reply(message, remember=remember,
                                             tool_result=deepcopy(blocked_result))
                 # ``_result`` normally derives these fields from global state;
@@ -2233,7 +2309,8 @@ class Agent:
             if item_index is not None:
                 result = {**result, "itemId": item_order.get("itemId"), "itemIndex": item_index}
             return self._tool_reply(result["message"], tool_result=result, remember=remember)
-        self._event("tool", "rejected", f"工具 {name} 不在白名单中", tool=name)
+        self._event("tool", "rejected", f"工具 {name} 不在白名单中", tool=name,
+                    durationMs=round((time.monotonic() - started) * 1000))
         return self._tool_reply(f"工具 {name} 不在白名单中，未执行。", remember=remember)
 
     @staticmethod
