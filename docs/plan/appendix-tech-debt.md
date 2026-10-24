@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- |
 | TD-02 | agent.py 多产品拆分路径 | 单产品阶段积累的 fieldMeta（provenance）在拆分为 items 时不迁移到 `items.{itemId}.*` 键，只在顶层键留存 | 项级置信度展示与路径 10 的徽标体系在"首条多产品消息"场景下缺数据 | 路径 7（S7-04）实现时一并评估迁移方案 | 未开始 |
 | TD-07 | tools/secret_scan.py | 模式仍以"形态匹配"为主，无法识别无前缀的自定义凭据（如 `Bearer xxx` 变量拼接） | 理论漏报 | 待排期（增加 Bearer/Authorization 头形态） | 未开始 |
-| TD-20 | tests/test_dimension_alias_integrity.py | 尺寸别名归一涉及补丁键与集合/字典遍历顺序，报告存在 PYTHONHASHSEED 变化时的哈希顺序敏感偶发（flaky） | 偶发失败干扰回归结论 | 待排期（固定键遍历顺序后复跑验证；低优先级） | 未开始 |
+| TD-21 | agent.py `_set_field_meta` / paper 镜像 | 确认 `paper` 只解决 paper 冲突：镜像参数（如名片材质 `productSpecs.cardStock`）值同步但 fieldMeta/冲突不随确认升级，低置信替换后确认会留下一条未解决的镜像冲突 | 冲突面板残留一条"待确认"，需要用户再确认一次镜像字段 | 待排期（确认 paper 时对 linked spec 字段同步 `_set_field_meta`；1.4 候选） | 未开始 |
 
 ## B.2 行为一致性
 
@@ -53,6 +53,7 @@
 | TD-06 | 前端顶层绑定假设每个 ID 存在，缺失难排查 | 1.3.0 | bootstrap 绑定前一次性 ID 存在性断言：console.error 汇总 + 顶部横幅，只跳过缺失项 |
 | TD-11 | 全量重绘导致输入焦点丢失与选中态闪跳 | 1.3.0 | 四个重绘函数补 `data-field-key` 焦点/选区契约（order:/item: 键，展开状态跨重绘保留），`ui_focus` 新增保持用例 |
 | TD-19 | 前后端各自维护错误文案，无单一来源 | 1.3.0 | 持续错误卡与设置页文案收敛到 `PrintOpsJourney.ERROR_TEXTS`（状态桶 + 已映射 code，未知 code 回落），已有文案一字未变 |
+| TD-20 | 尺寸别名归一测试哈希顺序敏感偶发（PYTHONHASHSEED flaky） | 1.3.0 | `_update_order` 冲突记录循环改 `sorted(changed)` / `sorted(set(before)\|set(after))` 确定性顺序；测试按 `field == 'paper'` 定位目标冲突而非 `conflicts[-1]`；7 个 seed 复跑全绿。镜像确认残留另立 TD-21 |
 
 ## B.6 登记流程
 

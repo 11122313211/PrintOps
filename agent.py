@@ -3612,11 +3612,13 @@ class Agent:
                     self.state["fieldMeta"].pop(field, None)
         if settle is not None:
             settle()
-        for key in changed:
+        # Deterministic conflict ordering: ``changed`` is a set, and hashing
+        # varies per process, which would otherwise reorder the conflict log.
+        for key in sorted(changed):
             if key == "productSpecs":
                 before = previous.get("productSpecs") or {}
                 after = target.get("productSpecs") or {}
-                for name in set(before) | set(after):
+                for name in sorted(set(before) | set(after)):
                     field = f"{meta_prefix}productSpecs.{name}"
                     old_value, new_value = before.get(name, ""), after.get(name, "")
                     if old_value == new_value and name not in (changes.get("productSpecs") or {}):

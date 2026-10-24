@@ -60,7 +60,10 @@
 - 知识库复核到期提示：距上次复核达到 90 天周期（due/overdue）时，订单响应以提示级风险 `knowledge_review_due` 注入距上次复核天数与复核建议；获取失败不影响响应。
 - 存储层新增 `tool_call_log` 表（含 (tool_name, created_at) 索引，create-if-not-exists 无迁移）与可选 `ToolCallRecorder` 契约：SQLite 持久保留，内存后端以 1000 条有界环实现；评测脚本 JSON 报告新增按工具聚合的 `toolReport`。
 
-（`VERSION` 在发布收口时再 bump 至 1.3.0。）
+**发布收口**
+
+- **回归门禁去随机化（TD-20）**：`_update_order` 的冲突记录循环改按字段名排序遍历，冲突列表顺序不再随进程哈希随机化漂移（此前 `PYTHONHASHSEED` 变化会让 `test_dimension_alias_integrity` 偶发失败，7 个 seed 复跑验证全绿）；相关测试改为按字段定位目标冲突。确认 paper 后镜像参数（名片材质）的冲突仍会残留一次待确认，登记为 TD-21 顺延处理。
+- `VERSION` bump 至 1.3.0（候选版），README 双语、ROADMAP、ARCHITECTURE、RELEASE_CHECKLIST 与技术债登记册同步（1.3 门槛：knowledge_review 通过、/api/tools/stats 契约、浏览器四套件、意图分发回归）。
 
 ## Unreleased - 2026-10-23（名片材质同步、字段来源标签清理、聊天列表文本修复）
 

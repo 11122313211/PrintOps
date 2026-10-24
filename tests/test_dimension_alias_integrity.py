@@ -71,9 +71,13 @@ class DimensionAliasIntegrityTest(unittest.TestCase):
     def test_uncertain_replacement_does_not_mark_conflict_resolved(self):
         self.agent.chat('名片用300g铜版纸')
         self.agent._update_order({'paper': '白卡纸'}, source='model', confidence=.4)
-        self.assertFalse(self.agent.state['conflicts'][-1]['resolved'])
+        # Address the paper conflict directly: the mirrored 名片材质 conflict
+        # may sit after it, and confirming paper does not settle that mirror.
+        conflict = next(c for c in self.agent.state['conflicts'] if c['field'] == 'paper')
+        self.assertFalse(conflict['resolved'])
         self.agent.chat('确认用白卡纸', {'paper': '白卡纸'})
-        self.assertTrue(self.agent.state['conflicts'][-1]['resolved'])
+        conflict = next(c for c in self.agent.state['conflicts'] if c['field'] == 'paper')
+        self.assertTrue(conflict['resolved'])
 
     def test_legacy_jis_b_sizes_keep_physical_dimensions_and_original_evidence(self):
         old = {'schemaVersion': 2, 'order': {'productType': '名片', 'size': 'B5',
