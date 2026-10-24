@@ -1098,12 +1098,11 @@ def _normalize_state_item_options(value: Any) -> dict[str, list[dict[str, Any]]]
                     option[key[:128]] = safe
             if not (isinstance(option.get("id"), str) and option["id"].strip()):
                 continue
-            # An option without a usable finishing can never be applied later;
-            # drop the entry so the next recommendation regenerates fresh data
-            # instead of letting one malformed item break the whole state load.
-            finishing = option.get("finishing")
-            if not isinstance(finishing, str) or not finishing.strip():
-                continue
+            # Missing option fields degrade to safe defaults instead of letting
+            # one malformed entry break the whole state load; consumption sites
+            # re-validate before applying an option to the order.
+            if not isinstance(option.get("finishing"), str):
+                option["finishing"] = ""
             if not isinstance(option.get("paper"), str):
                 option["paper"] = ""
             if not isinstance(option.get("title"), str) or not option["title"].strip():

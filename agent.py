@@ -3079,6 +3079,14 @@ class Agent:
         active_item = self.state["order"].get("items", [])[active_index] if isinstance(active_index, int) else None
         handoff_value = handoff if handoff is not None else self.state.get("handoff")
         quote_request = self._quote_request()
+        if quote_request is None:
+            # The singular response field is a display contract: when no active
+            # request exists it still surfaces the newest entry of any status
+            # (cancelled/stale included) so the UI can explain what happened.
+            requests = self.state.get("quoteRequests")
+            if isinstance(requests, list):
+                quote_request = next((item for item in reversed(requests)
+                                      if isinstance(item, dict)), None)
         receipts = self._planner_tool_receipts or self.state.get("toolReceipts") or []
         review = self.review()
         return {"sessionId": self.id, "messages": messages, "quickReplies": quick or [], "options": options or [],

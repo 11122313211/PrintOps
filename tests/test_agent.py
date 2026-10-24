@@ -336,12 +336,13 @@ class AgentTest(unittest.TestCase):
         self.agent.call_tool("request_supplier_quote", {"platformId": "shengda"})
         request_id = self.agent.state["activeQuoteRequestId"]
         cancelled = self.agent.cancel_quote(request_id, "不再询价")
-        # quoteRequest now tracks active requests only; the cancelled entry stays visible in quoteRequests.
-        self.assertIsNone(cancelled["quoteRequest"])
+        # The response quoteRequest field keeps the display contract (newest
+        # entry of any status); only the internal fallback is active-only.
+        self.assertEqual(cancelled["quoteRequest"]["status"], "cancelled")
         self.assertEqual(cancelled["quoteRequests"][-1]["status"], "cancelled")
         repeated = self.agent.cancel_quote(request_id)
         self.assertTrue(repeated["toolResult"]["idempotent"])
-        self.assertEqual(repeated["quoteRequests"][-1]["status"], "cancelled")
+        self.assertEqual(repeated["quoteRequest"]["status"], "cancelled")
 
     def test_quote_request_fallback_only_returns_active_statuses(self):
         self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
@@ -414,15 +415,18 @@ class AgentTest(unittest.TestCase):
                 {"id": "ok", "finishing": "哑膜", "paper": "250g 铜版纸", "title": "平衡方案"},
                 "corrupt",
                 {"finishing": "哑膜"},
-                {"id": "no-finishing", "paper": "纸"},
                 {"id": "repaired", "finishing": "覆膜"},
+                {"id": "no-finishing", "paper": "纸"},
             ],
             7: [{"id": "x", "finishing": "哑膜"}],
         })
-        self.assertEqual([item["id"] for item in normalized["item-1"]], ["ok", "repaired"])
+        self.assertEqual([item["id"] for item in normalized["item-1"]], ["ok", "repaired", "no-finishing"])
         repaired = normalized["item-1"][1]
         self.assertEqual(repaired["paper"], "")
         self.assertEqual(repaired["title"], "repaired")
+        degraded = normalized["item-1"][2]
+        self.assertEqual(degraded["finishing"], "")
+        self.assertEqual(degraded["title"], "no-finishing")
         self.assertNotIn(7, normalized)
 
     def test_newer_state_schema_version_loads_with_hint_risk(self):
