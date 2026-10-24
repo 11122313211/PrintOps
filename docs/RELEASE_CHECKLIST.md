@@ -1,8 +1,8 @@
-# 1.2 发布门槛与验收清单
+# 发布门槛与验收清单
 
-本文回答“什么时候可以正式发布 1.2”。`VERSION` 仍为 `1.2.0` 候选基线，当前未发布改造增加存储、mm 契约、参考计价和供应商协议；逐项实现证据见 [实施验收矩阵](IMPLEMENTATION_ACCEPTANCE.md) 与 [下一阶段开发验收](NEXT_STAGE_ACCEPTANCE.md)。本清单继承历史门槛，不能把代码合并或旧测试结果等同于稳定发布。
+本文回答"什么时候可以正式发布 1.3"。当前为 `1.3.0` 代码基线候选版：在 1.2 已交付的存储、mm 契约、参考计价与供应商协议之上，1.3.0 新增内核技术债清理、知识复核与计价重标定、工具调用观测和前端 UI 债四条主线；逐项实现证据见 [实施验收矩阵](IMPLEMENTATION_ACCEPTANCE.md) 与 [下一阶段开发验收](NEXT_STAGE_ACCEPTANCE.md)。本清单继承历史门槛，不能把代码合并或旧测试结果等同于稳定发布；本轮不声明稳定发布口径。
 
-用户已确认当前没有真实脱敏语料。本轮代码交付要求是严格门槛可执行且保持阻断；真实语料不能由测试 fixtures、示例报价或人工编写需求代替。正式发布必须运行 `--release-gate`。
+用户已确认当前没有真实脱敏语料。本轮代码交付要求是严格门槛可执行且保持阻断；真实语料不能由测试 fixtures、示例报价或人工编写需求代替。正式发布必须运行 `--release-gate`；真实语料为 0 例时它**按预期失败**（组织性阻断），不视为本轮阻塞项。
 
 ## v1.0.0 历史门槛（继承）
 
@@ -51,6 +51,17 @@
 | 26 | 严格真实语料发布检查 | `tests/test_real_corpus_eval.py`；`--release-gate` 必须拒绝空库、不足样本、无效语料和低准确率，目前按预期阻断 |
 
 当前代码的完整测试总数、合成指标与浏览器结果以最终运行记录为准，不引用旧版本数字作为本轮验收证据。
+
+## v1.3.0 新增门槛
+
+| # | 门槛 | 状态 |
+| --- | --- | --- |
+| 27 | 知识复核门禁：`python3 tools/knowledge_review.py` 结构性一致（退出码 0；复核到期/逾期仅警告不阻断），dev_check 非 `--quick` 路径挂载 | ✅ 已完成（`tools/knowledge_review.py`、`product_knowledge.knowledge_review_status()`，含覆盖差集与来源完整性校验） |
+| 28 | 工具调用统计契约：`GET /api/tools/stats` 输出四态计数（ok/failed/blocked/rejected）+ avg/p95（nearest-rank）+ blocked 原因分布，标注 scope: local-only，令牌守卫，7/30/90 天窗口（非法取值 400） | ✅ 已完成（`tests/test_tool_stats.py`、设置工具箱统计视图、评测 `toolReport`） |
+| 29 | 浏览器四套件（Chromium）：journey 34、ui_positions 16、ui_focus 15、browser_smoke 13 全绿 | ✅ 已完成（2026-10-24 运行记录；WebKit/Firefox 范围见 [BROWSER_JOURNEY](BROWSER_JOURNEY.md)） |
+| 30 | 意图分发回归：否定询价不触发报价工具、同一消息多意图时报价优先的顺序契约、焦点切换后意图归属 | ✅ 已完成（`tests/test_intent_dispatch.py`） |
+
+既有红线保持：`--release-gate` 在真实语料 0 例时按预期失败（组织性阻断，不属于候选版阻塞项）；真人走查、真实 dsh/模型端到端仍未闭合，转为稳定发布前必须逐项闭合（见门槛 4/7/12/13）。
 
 ## 1.2 集成门槛说明
 
@@ -109,7 +120,8 @@ python3 tools/printops_local_host.py --session-id release-smoke --smoke
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate
-python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py supplier_contract.py supplier_connectors.py order_model.py order_contract.py measurement_model.py unit_normalizer.py domain_vocab.py perception_candidates.py storage_contract.py storage_factory.py storage_sqlite.py storage_memory.py pricing_schema.py pricing_engine.py nlu.py tools.py mcp_server.py tools/calibrate_pricing.py tools/dsh_mcp_launcher.py tools/dsh_mcp_smoke.py tools/printops_local_host.py request_runtime.py storage_policy.py storage_backup.py examples/supplier_mock.py tools/order_backup.py
+python3 tools/knowledge_review.py
+python3 -m py_compile agent.py server.py llm_adapter.py product_knowledge.py supplier_adapters.py supplier_contract.py supplier_connectors.py order_model.py order_contract.py measurement_model.py unit_normalizer.py domain_vocab.py perception_candidates.py storage_contract.py storage_factory.py storage_sqlite.py storage_memory.py pricing_schema.py pricing_engine.py nlu.py tools.py mcp_server.py tools/calibrate_pricing.py tools/knowledge_review.py tools/dsh_mcp_launcher.py tools/dsh_mcp_smoke.py tools/printops_local_host.py request_runtime.py storage_policy.py storage_backup.py examples/supplier_mock.py tools/order_backup.py
 python3 tools/secret_scan.py
 python3 tools/dsh_mcp_smoke.py
 git diff --check
@@ -117,4 +129,4 @@ git diff --check
 
 浏览器命令与报告位置见 [BROWSER_SMOKE](BROWSER_SMOKE.md)，需要独立安装开发测试依赖；运行产品本身仍只需 Python 标准库。真人走查和真实 dsh/模型验收必须在相应环境记录，不由自动浏览器或 mock 结果替代。
 
-转为稳定 1.2 发布前还需：门槛 4 真实语料达标、门槛 7 真人走查、门槛 12 真实 dsh/模型、门槛 13 浏览器范围及未完成运行时门槛闭合，并核对 `README`/`VERSION`。真实供应商 live 不是当前本地候选版的发布条件；后续启用需独立取得授权、通过 sandbox 和字段契约、实现人工身份认证与服务器确认记录，完成幂等/对账/审计验收。
+转为稳定 1.3 发布前还需：门槛 4 真实语料达标、门槛 7 真人走查、门槛 12 真实 dsh/模型、门槛 13 浏览器范围及未完成运行时门槛闭合，并核对 `README`/`VERSION`。在上述门槛闭合前，1.3.0 只作为代码基线候选版存在。真实供应商 live 不是当前本地候选版的发布条件；后续启用需独立取得授权、通过 sandbox 和字段契约、实现人工身份认证与服务器确认记录，完成幂等/对账/审计验收。

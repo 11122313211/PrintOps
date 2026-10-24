@@ -6,7 +6,7 @@
 输入 -> 感知字段 -> 读取/更新记忆 -> 模型规划（可选） -> 调用白名单工具 -> 模型总结 -> 结构化响应 -> 运行记录
 ```
 
-实现布局：`order_model.py` 持有订单数据契约、规范化与 `schemaVersion` 迁移；`nlu.py` 持有规则感知与置信度分级；`tools.py` 持有工具注册表与契约；`agent.py` 保留会话记忆、工作流和工具网关并 re-export 公共符号；`llm_adapter.py` 负责模型协议与 planner；`mcp_server.py` 提供 stdio MCP 适配；前端由 `app.js` 与 `markdown.js` 组成。
+实现布局：`order_model.py` 持有订单数据契约、规范化与 `schemaVersion` 迁移；`nlu.py` 持有规则感知与置信度分级；`tools.py` 持有工具注册表与契约；`agent.py` 保留会话记忆、工作流和工具网关并 re-export 公共符号；`llm_adapter.py` 负责模型协议与 planner；`mcp_server.py` 提供 stdio MCP 适配。存储层由 `storage_contract.py`（OrderStore 协议与 `ToolCallRecorder` 可选契约）、`storage_sqlite.py` / `storage_memory.py` 双实现和 `storage_factory.py` 选择器组成，`storage_policy.py` / `storage_backup.py` 负责保留策略与备份恢复；知识复核时效由 `product_knowledge.py` 的 `knowledge_review_status()` 提供，离线检查入口为 `tools/knowledge_review.py`。前端由 `app.js`、`markdown.js` 与 `workbench.js` 组成。
 
 - `Agent`：维护任务状态；模型可提出字段补丁和受限工具调用，工具结果会回传模型总结，最多三轮，失败时回到确定性规则。每次运行生成 `runId` 与步骤事件，并保存字段来源、置信度和冲突。规则感知的置信度按证据强度分级（显式标签/单位 0.9+，裸数字与氛围词低于 0.75），生产字段低置信度时阻止生成交接单。
 - `Memory`：SQLite 会话记忆，保存订单、最近 80 条消息和当前阶段；刷新页面可恢复完整对话。
@@ -68,7 +68,7 @@
 
 静态资源由 `server.py` 的 `STATIC_FILES` 白名单控制（`/`、`/index.html`、`/app.js`、`/markdown.js`、`/styles.css`）。白名单保存在进程内存中，修改代码后必须重启服务，否则新增资源会返回 404。
 
-知识清单由 `product_knowledge.py` 的 `KNOWLEDGE_MANIFEST` 维护，包含版本、复核日期、来源范围、成品/展开/刀模/包装三维尺寸定义和人工确认策略。`/api/products` 返回完整清单，订单校验、估算、供应商能力匹配和 Agent 会话响应返回 `knowledgeVersion`；供应商静态能力另带 `supplierProfileVersion`。版本元数据用于追溯规则依据，不表示来源具有实时产能、价格或交期保证。
+知识清单由 `product_knowledge.py` 的 `KNOWLEDGE_MANIFEST` 维护，包含版本、复核日期、来源范围、成品/展开/刀模/包装三维尺寸定义和人工确认策略；1.3.0 起还声明 `reviewCadenceDays`（90 天）与 `nextReviewAt`，`knowledge_review_status()` 据此返回 ok/due/overdue（逾期宽限 30 天）与 rate card 有效期余量，日期可注入便于测试。距复核期达到 due/overdue 时，订单响应在 `validation.risks` 注入提示级 `knowledge_review_due`（距上次复核天数与复核建议），获取失败不影响响应。`tools/knowledge_review.py` 是纯离线复核 CLI：报告复核时效与 rate card 生效窗口、比对品类目录与 rate card 覆盖差集、校验来源描述完整性；结构性不一致退出码 1，仅到期/逾期只警告退出码 0，dev_check 非 `--quick` 路径挂载。`/api/products` 返回完整清单，订单校验、估算、供应商能力匹配和 Agent 会话响应返回 `knowledgeVersion`；供应商静态能力另带 `supplierProfileVersion`。版本元数据用于追溯规则依据，不表示来源具有实时产能、价格或交期保证。
 
 ## 订单数据契约
 
@@ -83,6 +83,20 @@
 ## Runtime 记录
 
 接口响应中的 `workflowStage`、`decision`、`runId`、`runTrace`、`fieldMeta`、`conflicts` 和 `quoteRequest` 是面向 UI、评测和后续 Agent 编排层的稳定数据。工作流阶段包括 `collect`（需求收集）、`clarify`（品类澄清）、`recommend`（方案选择）、`preflight`（文件预检）、`quote`（报价准备）、`confirm`（订单确认）和 `export`（导出交接）。`runTrace` 只记录步骤状态、工具名、耗时和安全摘要，不记录 API Key；工具输入/输出契约由 `TOOL_SCHEMAS` 提供。模型规划最多三轮，网络瞬态错误最多短重试一次；询价请求具备本地持久化、幂等、取消和失效状态，真实供应商提交仍需要后续受控适配器。
+
+## 工具观测层（1.3.0）
+
+工具调用统计是一条独立于业务结果的旁路，数据流为：
+
+```text
+call_tool 网关计时 -> ToolCallRecorder -> tool_call_log（SQLite）/ 有界环（memory）-> /api/tools/stats 聚合 -> 设置面板视图 + 评测 toolReport
+```
+
+- **网关计时**：所有工具调用在 `Agent.call_tool()` 统一计时，覆盖 ok / failed / blocked / rejected 全部终态；拒绝与阻断的 `runTrace` 事件同步补充耗时（`durationMs`），与成功路径口径一致。
+- **记录契约**：`ToolCallRecorder` 是存储层的可选契约；SQLite 实现落 `tool_call_log` 表（含 `(tool_name, created_at)` 索引，create-if-not-exists，无迁移），memory 实现以 1000 条有界环保存，进程退出即丢。
+- **聚合端点**：`GET /api/tools/stats?window=30d`（支持 7/30/90 天，非法取值 400）按工具聚合调用量、四态计数、成功率与平均/p95 耗时（p95 用 nearest-rank），并附 blocked 原因分布；令牌守卫与其他 API 一致。
+- **消费端**：设置弹窗「工具箱」面板的「调用统计」视图（渲染全程 textContent，无新增 HTML 插值）；评测脚本 JSON 报告新增按工具聚合的 `toolReport`。
+- **边界**：统计写入包在 try/except 中，记录失败只丢统计不影响对话主流程；数据仅来自本机数据库（scope: local-only），不上传不共享。
 
 ## Agent 决策边界
 

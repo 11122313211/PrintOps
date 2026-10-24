@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.0] - 未发布（候选版）
+## v1.3.0 - 2026-10-24（代码基线候选版）
 
 本版定位为**候选版（candidate）**，延续"代码交付 ≠ 稳定发布"的口径。四条主线：
 
@@ -10,6 +10,8 @@
 4. **工具调用检测**：`tool_call_log` 持久化、`/api/tools/stats`、设置页统计视图、评测 `toolReport`。
 
 **明确顺延至 1.4+（见 `docs/ROADMAP.md`）**：供应商 sandbox/live 接入（无授权）、计价引擎 schema 3.0（拼版大纸/批次开机费/设备阶梯/纸杯信封三维品类）、app.js 模块化拆分、真实语料/真人走查门槛（保持阻断并在发布检查按预期失败）。
+
+**定稿说明**：本版为代码基线候选版，发布门槛（真实脱敏语料、真人走查、真实 dsh/模型端到端等）仍未闭合，`--release-gate` 在真实语料 0 例时按预期失败（组织性阻断，不视为本轮阻塞项）；发布定位与逐项门槛见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) 与 [docs/NEXT_STAGE_ACCEPTANCE.md](docs/NEXT_STAGE_ACCEPTANCE.md)。四条主线一句话带过：内核技术债（TD-01/03/04/05）以行为保持方式拆分 `chat()` 并补齐内核守卫；知识复核机制（90 天周期、`tools/knowledge_review.py` 离线门禁、`knowledge_review_due` 提示）与 rate card `2026.11.01` 重标定（blocked 品类 7 → 3）落地；工具调用检测（`tool_call_log` 持久化、`/api/tools/stats`、设置面板统计视图、评测 `toolReport`）上线；前端 UI 债（TD-06/11/19）完成焦点保持、绑定断言与错误文案单一来源。
 
 ### 继承的 1.2.0 后改造（Unreleased 收口索引）
 

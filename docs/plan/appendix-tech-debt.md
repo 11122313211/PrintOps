@@ -8,13 +8,9 @@
 
 | 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| TD-01 | agent.py `chat()` | 约 185 行的对话主流程，混合焦点切换、多产品路由、规划循环与 4 处内联中文意图匹配 | 修改理解逻辑的回归面大；意图匹配散落难测 | 待排期（建议 v0.14 拆"意图识别→意图处理器"小状态机） | 未开始 |
 | TD-02 | agent.py 多产品拆分路径 | 单产品阶段积累的 fieldMeta（provenance）在拆分为 items 时不迁移到 `items.{itemId}.*` 键，只在顶层键留存 | 项级置信度展示与路径 10 的徽标体系在"首条多产品消息"场景下缺数据 | 路径 7（S7-04）实现时一并评估迁移方案 | 未开始 |
-| TD-03 | agent.py `_quote_request()` | 无 id 时返回最新一条询价请求而无论其状态（如已取消），UI 可能把 cancelled 当作 active 展示 | 边缘场景信息误导 | 路径 3（S3-10 状态页重做时顺带修复） | 未开始 |
-| TD-04 | agent.py itemOptions 消费点 | `option["id"]/["finishing"]` 直接索引持久化的 itemOptions，normalize_state 未对其做形状校验 | 损坏状态产生 500 而非 400（自愈路径已兜底，但体验差） | 待排期（normalize_state 增加 itemOptions 形状守卫） | 未开始 |
-| TD-05 | order_model.py `schemaVersion` | 只写不校验：来自未来的高版本状态加载无警告 | 跨版本降级运行时行为不可预期 | 路径 8（版本自述落地时加"状态版本高于服务端"提示） | 未开始 |
-| TD-06 | 前端 index.html ID 契约 | 顶层事件绑定假设每个 ID 存在，缺失在加载时抛错且无定位信息 | 模板改动后报错难排查 | 路径 2（main.js 初始化时做一次 ID 存在性断言，缺失列表一次性报出） | 未开始 |
 | TD-07 | tools/secret_scan.py | 模式仍以"形态匹配"为主，无法识别无前缀的自定义凭据（如 `Bearer xxx` 变量拼接） | 理论漏报 | 待排期（增加 Bearer/Authorization 头形态） | 未开始 |
+| TD-20 | tests/test_dimension_alias_integrity.py | 尺寸别名归一涉及补丁键与集合/字典遍历顺序，报告存在 PYTHONHASHSEED 变化时的哈希顺序敏感偶发（flaky） | 偶发失败干扰回归结论 | 待排期（固定键遍历顺序后复跑验证；低优先级） | 未开始 |
 
 ## B.2 行为一致性
 
@@ -23,7 +19,6 @@
 | TD-08 | nlu.py vs LLM 双轨 | 同一句话两轨行为差异未固化断言（换提示词/模型的影响不可知） | 模型变更风险不可见 | 路径 5（S5-07） | 计划内 |
 | TD-09 | product_knowledge.py | 行业风险规则缺口：折页压痕线、深色实底折痕爆裂、专色配置说明（ROADMAP v0.9.x 遗留） | 行业专业性不足 | 待排期（v0.14 知识专项；依赖可溯源来源） | 未开始 |
 | TD-10 | 评测语料 | 长尾品类（纸杯/喷画/PVC/联单/手提袋/异形标签）用例薄 | 品类回归盲区 | 路径 5（S5-06） | 计划内 |
-| TD-11 | 前端重绘 | 全量重绘导致输入焦点丢失与选中态闪跳 | 体验与正确性 | 路径 2（S2-09） | 计划内 |
 
 ## B.3 运行与安全
 
@@ -41,7 +36,6 @@
 | --- | --- | --- | --- | --- | --- |
 | TD-17 | README"GitHub 发布"章节 | 仍是手工 git 命令清单，未与 RELEASING.md 流程对齐 | 发布操作易出错 | 路径 8（S8-10 后统一改写指向） | 未开始 |
 | TD-18 | ARCHITECTURE.md | 未包含 v0.11.0 的令牌/白名单/SSRF 安全模型更新 | 架构文档滞后 | 随 v0.11.0 提交一并补 | 未开始 |
-| TD-19 | 前端错误码文案 | 前后端各自维护提示文案，无单一来源 | 文案漂移 | 路径 10（S10-04 错误码映射） | 计划内 |
 
 ## B.5 已偿还债务（趋势记录）
 
@@ -52,6 +46,13 @@
 | RD-03 | 本地 API 无鉴权 | v0.11.0 | 进程内令牌 + 同源校验 |
 | RD-04 | SQLite 无 WAL/损坏会话永久 500 | v0.11.0 | WAL + busy_timeout + 隔离自愈 |
 | RD-05 | secret_scan 仅识别 sk- 且跳过 data/ | v0.11.0 | 8 类模式 + data/ JSON 遮蔽扫描 |
+| TD-01 | chat() 约 185 行对话主流程，内联中文意图匹配散落难测 | 1.3.0 | 规划器编排段提为 `_planner_chat_turn()`，8 类意图收敛为有序 `INTENT_DISPATCH` 表（否定感知复用 `PLANNER_INTENT_PATTERNS`，失败状态集合收编为 `PLANNER_RETRYABLE_FAILURE_STATUSES`/`PLANNER_FAILURE_STATUSES`）；112 例单测全绿 + 评测 111 例字段准确率 100%，新增 `tests/test_intent_dispatch.py` 回归 |
+| TD-03 | `_quote_request()` 无 id 回退可能返回已取消请求 | 1.3.0 | 回退只认活跃状态 `QUOTE_ACTIVE_STATUSES`（awaiting_human_confirmation/confirmed），无活跃请求返回空 |
+| TD-04 | itemOptions 直接索引持久化数据，坏状态 500 | 1.3.0 | `choose()` 方案条目形状校验 + `_normalize_state_item_options` 键守卫，坏数据自愈返回可读错误 |
+| TD-05 | schemaVersion 只写不校验，高版本状态无警告 | 1.3.0 | 高版本加载记录 warning（`printops.order_model`）并注入提示级 `state_version_newer` 风险，不阻断 |
+| TD-06 | 前端顶层绑定假设每个 ID 存在，缺失难排查 | 1.3.0 | bootstrap 绑定前一次性 ID 存在性断言：console.error 汇总 + 顶部横幅，只跳过缺失项 |
+| TD-11 | 全量重绘导致输入焦点丢失与选中态闪跳 | 1.3.0 | 四个重绘函数补 `data-field-key` 焦点/选区契约（order:/item: 键，展开状态跨重绘保留），`ui_focus` 新增保持用例 |
+| TD-19 | 前后端各自维护错误文案，无单一来源 | 1.3.0 | 持续错误卡与设置页文案收敛到 `PrintOpsJourney.ERROR_TEXTS`（状态桶 + 已映射 code，未知 code 回落），已有文案一字未变 |
 
 ## B.6 登记流程
 

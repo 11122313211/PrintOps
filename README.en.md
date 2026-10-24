@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.2.0--candidate-blue)
+![Version](https://img.shields.io/badge/version-1.3.0--candidate-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python standard-library runtime · Local first · Optional models · Human review and confirmation**
@@ -26,7 +26,7 @@ The initial study assigns one primary task to each of 8 non-expert participants 
 
 ## Current capabilities and boundaries
 
-- `VERSION` remains the **1.2.0 candidate baseline**, with unreleased work in the workspace. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- `VERSION` is the **1.3.0 candidate baseline** (bumped at release finalization). See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
 - This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
 - Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
 - The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
@@ -91,13 +91,16 @@ The local confirmation note is `仅核对本地交接内容；文件待交付，
 | --- | --- | --- |
 | Product recognition and parameter intake | 17 catalog types, category questions, revisions/negations, independent product items | Catalog size does not imply complete pricing coverage. Accuracy on real customer language still needs a real corpus. |
 | Dimensions and evidence | mm normalization; cm/in and ISO 216 aliases; separate finished/expanded/die-cut/unspecified-package/inner/outer dimensions | Original text and candidates are retained. Low-confidence production parameters require confirmation. See the [order contract](docs/ORDER_CONTRACT.md). |
-| Conditional illustrative pricing | Business cards, flyers, digital printing, invitations; brochures/books, folded leaflets, and some packaging/labels/posters under category-specific conditions | Quantity units, material, sides, and pricing dimensions must be explicit. Folded leaflets need expanded size; books need pages/binding; box dimensions cannot replace a flat die-cut area. See [pricing coverage](docs/PRICING.md#当前覆盖范围). |
-| Uncalibrated categories | Parameters can be collected for PVC/PVC cards, hang tags, multipart forms, envelopes, bags, and paper cups | Pricing is blocked rather than using a generic category price. Unknown processes return known costs and unpriced items without a full range. |
+| Conditional illustrative pricing | Business cards, flyers, digital printing, invitations, hang tags, PVC cards, envelopes, paper bags; brochures/books, folded leaflets, and some packaging/labels/posters under category-specific conditions | Illustrative parameters were re-derived by hand for rate card `2026.11.01` from source `industry-standard-flow-2026-10` (engine logic unchanged; goldens and worked examples recalculated). Quantity units, material, sides, and pricing dimensions must be explicit. Folded leaflets need expanded size; books need pages/binding; box dimensions cannot replace a flat die-cut area. See [pricing coverage](docs/PRICING.md#当前覆盖范围). |
+| Uncalibrated categories | PVC boards, multipart forms, and paper cups can still collect parameters and state why they are blocked (blocked categories narrowed from 7 to 3 this round: hang tags, PVC cards, envelopes, and paper bags are now calibrated on the current family enum) | Pricing is blocked rather than using a generic category price, with the missing driver named (board thickness for PVC boards, form count for multipart forms, 3D structure for paper cups; the planned pricing engine schema 3.0 addresses these). Unknown processes return known costs and unpriced items without a full range. |
 | Explainable estimates | Decimal costs for material, setup, printing, finishing, binding, die-cutting, packaging, and minimum-charge adjustments | `ready` gives a full illustrative range, `partial` a known subtotal, and `blocked` actionable reasons. Basis is tax-exclusive and ex-works; sources, versions, and exclusions are inspectable. |
 | Basic file checks | Local browser PDF page count, page boxes, color-space and embedded-font clues; originals are not uploaded | Not professional prepress validation. An absent file must remain marked as pending. |
 | Memory and recovery | Authoritative backend OrderStore; SQLite/memory/custom, CAS, full history, archive, and backup | SQLite is the built-in default. Memory is temporary; enterprise databases require trusted registered implementations. |
 | Supplier connections | Generic local export, unconfigured suppliers, local mock, connector protocol and contract tests | No real supplier connection. Mock/sandbox results do not verify production capability. |
 | Handoff and confirmation | Authoritative handoff, local confirmation, JSON/CSV/Markdown, A4 printing, separate full history backup | Confirmation is not an authenticated corporate signature; export is not transmission. Exports recheck the current version; edits invalidate prior confirmation. |
+| Tool call statistics | Every tool call is timed at the gateway (ok/failed/blocked/rejected terminal states) and persisted locally in `tool_call_log`; `GET /api/tools/stats?window=30d` (7/30/90 days) plus a toolbox statistics view in settings | Data comes from this machine's database only (scope: local-only); nothing is uploaded or shared. Token guard matches other endpoints; stats write failures never affect the chat flow. |
+| Knowledge review cadence | The manifest declares a 90-day review cadence and next review date; `knowledge_review_status()` reports ok/due/overdue plus rate card headroom; `tools/knowledge_review.py` offline gate (mounted into dev_check without `--quick`) | When the review falls due, order responses carry an informational `knowledge_review_due` risk. Being due only warns; structural inconsistency fails with exit code 1. |
+| Draft editing and UI robustness | Draft field re-renders restore focus and selection via stable `data-field-key`, keeping expanded state across renders; one-time element-ID existence assertions before binding; a single source for error copy (`PrintOpsJourney.ERROR_TEXTS`) | A response arriving mid-edit no longer interrupts typing; missing elements are reported in a summary banner and only their bindings are skipped, instead of breaking every later binding with one TypeError. |
 
 ## Interface previews
 
@@ -114,10 +117,11 @@ This project intentionally does not use GitHub Actions; release checks run on th
 The Python runtime and unit/contract checks use the standard library. **Browser development tests additionally require Node.js 18+, npm, pinned Playwright, and Chromium**. These are not needed to start the product.
 
 ```bash
-python3 tools/dev_check.py                             # one-command local gate: compile, tests, evaluation, guards
+python3 tools/dev_check.py                             # one-command local gate: compile, tests, evaluation, knowledge review, guards (--quick runs compile and guards only)
 python3 -m unittest discover -s tests -p "test_*.py"
 PYTHONPATH=. python3 tests/evaluate_agent.py             # Development report
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
+python3 tools/knowledge_review.py                       # knowledge review gate; dev_check mounts it on the non---quick path
 python3 tools/secret_scan.py
 python3 tools/repo_guard.py
 python3 tools/dsh_mcp_smoke.py
@@ -136,7 +140,7 @@ PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.
 
 The strict release gate requires synthetic field accuracy ≥90%, completion ≥80% on completable cases, and at least 20 real desensitized orders with field accuracy ≥95%. A missing, empty, invalid, insufficient, or inaccurate real corpus blocks release with exit code 1. The real corpus is currently empty. Success without `--release-gate` is not a release approval.
 
-On 2026-10-16, all **463 Python tests passed**. Chromium and WebKit each passed **34 journey scenarios**, Chromium passed **12 smoke scenarios**, and the UI position and focus suites passed **16 and 14 scenarios**. The 111 synthetic cases achieved 100% field accuracy and 13/14 basic completion (93% rounded), which is not a human handoff success rate. The strict release check failed as expected with zero real cases. See [browser acceptance](docs/BROWSER_JOURNEY.md) and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Firefox could not launch in this host environment; real phones, human walkthroughs, and real dsh/models remain unverified.
+On 2026-10-24 (1.3.0 candidate baseline), **544 Python tests passed** and the six-step dev gate is green. Chromium passed all four browser suites: **34** journey, **16** UI-position, **15** UI-focus, and **13** smoke scenarios. The 111 synthetic cases achieved 100% field accuracy, which is not a human handoff success rate. The strict release check failed as expected with zero real cases (an organizational block, not a blocker for this round). See [browser acceptance](docs/BROWSER_JOURNEY.md) and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Firefox could not launch in this host environment; real phones, human walkthroughs, and real dsh/models remain unverified.
 
 ## Advanced: models, MCP, and runtime boundaries
 
@@ -184,7 +188,7 @@ APIs other than health require a process-local token; cross-origin requests carr
 | [File management](docs/FILE_MANAGEMENT.md) / [dsh integration](docs/plan/dsh-print-agent.md) | Commit boundaries and optional integration. |
 | [Historical development plan](docs/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
 
-v1.2.0 remains a candidate baseline. The next priority is the local order workflow and independent acceptance. Real supplier integration planned for v1.3+ separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
+v1.3.0 remains a candidate baseline. The next priority is the local order workflow and independent acceptance. Real supplier integration has been deferred to v1.4+ and separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
 
 ## Contributing and license
 

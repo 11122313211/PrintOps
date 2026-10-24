@@ -18,9 +18,16 @@
 
 模型负责理解和解释，规则负责约束，工具负责执行，人负责核对和确认。当前导出不会自动发送供应商。
 
-## 当前阶段：v1.2.0 候选基线上的未发布改造
+## 当前阶段：v1.3.0 代码基线候选版
 
-`VERSION` 仍为 `1.2.0`。2026-10 的改造把订单、存储、计价与供应商协议分开：业务订单 2.0 视图统一 mm；SQLite/memory 实现统一 OrderStore；Decimal 计价引擎读取版本化 JSON；供应商通过 registry 扩展。完整实现证据和未完成验收见 [IMPLEMENTATION_ACCEPTANCE](IMPLEMENTATION_ACCEPTANCE.md)，历史版本测试数字不作为当前结果。
+`VERSION` 为 `1.3.0`（随发布收口 bump）。2026-10 共两轮改造：第一轮把订单、存储、计价与供应商协议分开——业务订单 2.0 视图统一 mm；SQLite/memory 实现统一 OrderStore；Decimal 计价引擎读取版本化 JSON；供应商通过 registry 扩展。第二轮即 1.3.0 四条主线，已全部落地。完整实现证据和未完成验收见 [IMPLEMENTATION_ACCEPTANCE](IMPLEMENTATION_ACCEPTANCE.md)，历史版本测试数字不作为当前结果。
+
+### 1.3.0 四条主线（已完成）
+
+- ✅ 内核技术债（TD-01/03/04/05）：`chat()` 拆为 `_planner_chat_turn()` + 有序 `INTENT_DISPATCH` 表驱动（7 路由意图 + 1 查询意图，`tests/test_intent_dispatch.py` 新增回归）；询价回退只认活跃状态（`QUOTE_ACTIVE_STATUSES`）；方案条目形状校验与状态项归一化守卫，坏数据自愈不再 500；高版本 state schema 加载 warning + 提示级 `state_version_newer`。
+- ✅ 知识复核与计价重标定：manifest 声明 90 天复核周期与下次复核日，`tools/knowledge_review.py` 离线门禁挂入 dev_check 非 `--quick` 路径；到期在订单响应注入提示级 `knowledge_review_due`；rate card 升版 `2026.11.01`（来源 `industry-standard-flow-2026-10` 全参数人工重推，golden 与算例手工重算），blocked 品类 7 → 3，`pricing_schema` confidence 收紧为枚举 `illustrative`。
+- ✅ 工具调用观测：`tool_call_log` 表持久化（memory 后端为 1000 条有界环）、`GET /api/tools/stats`（四态计数 + avg/p95 nearest-rank + blocked 原因分布，scope: local-only）、设置工具箱统计视图、评测 JSON 报告 `toolReport`。
+- ✅ 前端 UI 债（TD-06/11/19）：四个重绘函数补 `data-field-key` 焦点/选区保持；bootstrap 绑定前一次性元素 ID 存在性断言（缺失汇总 + 顶部横幅）；错误文案单一来源 `PrintOpsJourney.ERROR_TEXTS`。
 
 用户目前没有真实脱敏语料。本阶段要求发布门槛可执行且保持阻断，不能用人工合成案例替代真实订单。日常评测保持兼容；正式发布必须运行 `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`，真实样本不足 20 例或字段准确率不足 95% 都失败。
 
@@ -123,7 +130,16 @@ v1.0.0 汇集 v0.9.x–v0.11.x 的全部代码成果：自然语言建单、可�
 - `/api/chat` 文本无长度上限（仅整体 1MB body 限制），应加单条消息长度校验。
 - 无打包/发布产物：依赖零安装是特色，但缺少 `pipx`/zipapp 交付与版本清单。
 
-## v1.3+ 供应商授权接入与真实价格校准（规划）
+## v1.4+ 顺延项（规划）
+
+1.3.0 明确顺延的工作，全部保持既有边界：
+
+- **计价引擎 schema 3.0**：拼版大纸、批次开机费、设备阶梯，以及纸杯/信封等三维品类驱动；当前纸杯、联单、PVC 展板三条例外 blocked 的原因都引用该规划，落地后随新 rate card 标定解禁。
+- **app.js 模块化拆分**：按 [path-02 前端模块化](plan/path-02-frontend-modularization.md) 的任务卡推进。
+- **供应商 sandbox/live 接入**：当前无授权，沿用下述原边界。
+- **真实语料与真人走查门槛**：保持组织性阻断，不视为候选版阻塞项；发布检查按预期失败，见 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md)。
+
+### 供应商授权接入与真实价格校准
 
 - 在现有 `SupplierConnector` 协议上实现授权供应商的 sandbox transport，取得官方字段枚举、产品编码、单位、限流、报价有效期、回调与取消规则。
 - 用真实沙箱验证字段、健康检查、超时和对账；提交超时须保留 unknown 并核对，不能盲目重发。
