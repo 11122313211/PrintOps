@@ -10,7 +10,7 @@ from agent import (Agent, Memory, ORDER_DEFAULTS, estimate_price, match_supplier
                     preflight_file, prepare_handoff, recommend_processes, request_supplier_quote,
                     validate_order)
 from llm_adapter import OpenAICompatiblePlanner, normalize_base_url, read_saved_config, write_saved_config
-from order_model import _normalize_state_item_options
+from order_model import STATE_SCHEMA_VERSION, _normalize_state_item_options
 from product_knowledge import KNOWLEDGE_VERSION, parameter_state
 
 
@@ -424,6 +424,19 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(repaired["paper"], "")
         self.assertEqual(repaired["title"], "repaired")
         self.assertNotIn(7, normalized)
+
+    def test_newer_state_schema_version_loads_with_hint_risk(self):
+        self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
+        self.agent.state["schemaVersion"] = STATE_SCHEMA_VERSION + 1
+        self.agent._save()
+        with self.assertLogs("printops.order_model", level="WARNING") as captured:
+            restored = Agent(self.memory, self.agent.id)
+        self.assertIn("schemaVersion", " ".join(captured.output))
+        self.assertEqual(restored.state["schemaVersion"], STATE_SCHEMA_VERSION + 1)
+        result = restored.chat("数量改为 600 张")
+        hint = next(risk for risk in result["validation"]["risks"]
+                    if risk.get("code") == "state_version_newer")
+        self.assertEqual(hint["level"], "info")
 
     def test_unconfigured_supplier_dimensions_and_material_require_review(self):
         supported = match_supplier_capability({**ORDER_DEFAULTS, "platform": "shengda", "productType": "名片",

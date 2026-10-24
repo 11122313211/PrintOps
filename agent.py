@@ -2977,6 +2977,16 @@ class Agent:
                 options: list[dict[str, str]] | None = None, handoff: dict[str, Any] | None = None,
                 tool_result: Any = None, finish_run: bool = True) -> dict[str, Any]:
         validation = validate_order(self.state["order"])
+        stored_version = self.state.get("schemaVersion")
+        if isinstance(stored_version, int) and not isinstance(stored_version, bool) \
+                and stored_version > STATE_SCHEMA_VERSION:
+            # The session was written by a newer build.  Loading is deliberate
+            # and non-blocking, but every order response keeps the hint visible.
+            validation["risks"].append({
+                "level": "info", "code": "state_version_newer",
+                "message": f"会话状态版本 {stored_version} 高于当前支持的 {STATE_SCHEMA_VERSION}，已按兼容方式加载。",
+                "suggestion": "如出现字段或方案异常，请重新核对订单字段，或升级 PrintOps 后再继续。",
+            })
         if finish_run:
             run = self._finish_run()
         elif self.run_id:

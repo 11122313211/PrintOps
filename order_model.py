@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import unicodedata
@@ -16,6 +17,8 @@ from typing import Any
 from unit_normalizer import normalize_dimension, normalize_length, dimension_values
 from measurement_model import parse_measurement, SEMANTICS
 from domain_vocab import normalize_print_term
+
+LOGGER = logging.getLogger("printops.order_model")
 
 
 DIMENSION_DEFAULTS = {
@@ -1467,8 +1470,15 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
     active_quote_id = state.get("activeQuoteRequestId")
     state["activeQuoteRequestId"] = active_quote_id.strip() if isinstance(active_quote_id, str) and active_quote_id.strip() else None
     schema_version = state.get("schemaVersion")
-    state["schemaVersion"] = max(schema_version, STATE_SCHEMA_VERSION) if isinstance(schema_version, int) and not isinstance(schema_version, bool) \
-        and schema_version > 0 else STATE_SCHEMA_VERSION
+    if isinstance(schema_version, int) and not isinstance(schema_version, bool) and schema_version > 0:
+        state["schemaVersion"] = max(schema_version, STATE_SCHEMA_VERSION)
+        if schema_version > STATE_SCHEMA_VERSION:
+            # A newer client wrote this session.  Loading stays non-blocking;
+            # the hint surfaces in the order response so humans can decide.
+            LOGGER.warning("会话状态 schemaVersion=%s 高于当前支持的 %s，已按兼容方式加载",
+                           schema_version, STATE_SCHEMA_VERSION)
+    else:
+        state["schemaVersion"] = STATE_SCHEMA_VERSION
     raw_revision = state.get("revision")
     state["revision"] = (raw_revision if isinstance(raw_revision, int)
                           and not isinstance(raw_revision, bool)
