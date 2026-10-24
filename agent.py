@@ -38,7 +38,8 @@ from order_model import (DIMENSION_DEFAULTS, DIMENSION_SPEC_ALIASES, size_dimens
                          normalize_state, parse_quantity,
                          quote_idempotency_key, required_order_keys)
 from product_knowledge import (KNOWLEDGE_MANIFEST, KNOWLEDGE_VERSION,
-                               known_product_spec_keys, paper_spec_key, parameter_state)
+                               known_product_spec_keys, knowledge_review_status,
+                               paper_spec_key, parameter_state)
 from supplier_adapters import (ADAPTERS, PLATFORMS, SUPPLIER_PROFILE_VERSION, SupplierAdapter,
                                get_adapter)
 from supplier_connectors import REGISTRY
@@ -3135,6 +3136,23 @@ class Agent:
                 "message": f"会话状态版本 {stored_version} 高于当前支持的 {STATE_SCHEMA_VERSION}，已按兼容方式加载。",
                 "suggestion": "如出现字段或方案异常，请重新核对订单字段，或升级 PrintOps 后再继续。",
             })
+        # Advisory knowledge freshness (v1.3.0): a due/overdue review surfaces
+        # once per order response as a hint-level risk; ok/unknown stay silent.
+        # The lookup is wrapped because a broken manifest or rate card must
+        # never change the response, and the hint is deliberately not deduped
+        # or persisted.
+        try:
+            knowledge_review = knowledge_review_status()
+            if knowledge_review.get("status") in ("due", "overdue"):
+                state_label = "已到复核期" if knowledge_review.get("status") == "due" else "已超过复核期"
+                validation["risks"].append({
+                    "level": "info", "code": "knowledge_review_due",
+                    "message": (f"知识库与费率表已 {knowledge_review.get('daysSinceReview')} 天未复核（{state_label}），"
+                                "工艺建议与费用估算可能基于过期参数。"),
+                    "suggestion": "请安排运行 python tools/knowledge_review.py，复核 rate card 与产品知识后更新清单。",
+                })
+        except Exception:
+            pass
         if finish_run:
             run = self._finish_run()
         elif self.run_id:
