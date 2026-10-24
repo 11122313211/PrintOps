@@ -368,3 +368,18 @@ test('390px layout does not overflow horizontally and navigation opens and close
   await send(page, syntheticCard);
   await assertFits();
 });
+
+test('settings toolbox shows local-only tool-call statistics', async ({page, appURL}) => {
+  await boot(page, appURL);
+  // The rule-mode chat path dispatches tools through the same gateway the
+  // telemetry records, so one synthetic order guarantees stats rows exist.
+  await send(page, syntheticCard);
+  await openTools(page);
+  await expect(page.locator('#tool-stats-panel')).toHaveAttribute('open', '');
+  await expect(page.locator('#tool-stats-scope')).toHaveText('仅本机数据');
+  await expect(page.locator('#tool-stats-list')).toContainText('全部工具');
+  await expect(page.locator('#tool-stats-list')).toContainText('validate_order');
+  const summary = page.locator('#tool-stats-list .run-event').first();
+  await expect(summary).toContainText('成功率');
+  await expect(summary).toContainText('平均');
+});
