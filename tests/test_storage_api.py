@@ -141,6 +141,43 @@ class OrderHistoryAPITest(unittest.TestCase):
             self.assertFalse(server.dispatch_get("/api/storage")["persistent"])
             self.assertEqual(server.dispatch_get("/api/orders")["total"], 1)
 
+    def test_tool_stats_endpoint_aggregates_gateway_records(self):
+        agent = Agent(self.memory, "stats-session")
+        agent.call_tool("no_such_tool")
+        agent.call_tool("request_supplier_quote", {})
+        stats = server.dispatch_get("/api/tools/stats")
+        self.assertEqual(stats["windowDays"], 30)
+        self.assertEqual(stats["scope"], "local-only")
+        self.assertEqual(stats["totals"]["calls"], 2)
+        self.assertEqual(stats["totals"]["rejected"], 1)
+        self.assertEqual(stats["totals"]["blocked"], 1)
+        self.assertIn("order_not_ready", [item["reason"] for item in stats["blockedReasons"]])
+        self.assertTrue(stats["message"])
+        self.assertEqual(server.dispatch_get("/api/tools/stats?window=7d")["windowDays"], 7)
+        self.assertEqual(server.dispatch_get("/api/tools/stats?window=90")["windowDays"], 90)
+
+    def test_tool_stats_endpoint_rejects_unknown_windows(self):
+        for window in ("14d", "365d", "none"):
+            with self.assertRaises(server.RequestError) as bad:
+                server.dispatch_get(f"/api/tools/stats?window={window}")
+            self.assertEqual(bad.exception.code, "INVALID_WINDOW")
+            self.assertEqual(bad.exception.status, 400)
+        # A blank value is dropped by parse_qs and falls back to the default.
+        self.assertEqual(server.dispatch_get("/api/tools/stats?window=")["windowDays"], 30)
+
+    def test_tool_stats_endpoint_degrades_for_stores_without_telemetry(self):
+        class BareStore:
+            def metadata(self):
+                return {"mode": "bare"}
+
+        with patch.object(server, "MEMORY", Memory(store=BareStore())):
+            stats = server.dispatch_get("/api/tools/stats?window=30d")
+        self.assertEqual(stats["totals"]["calls"], 0)
+        self.assertEqual(stats["tools"], [])
+        self.assertEqual(stats["blockedReasons"], [])
+        self.assertIsNone(stats["totals"]["avgMs"])
+        self.assertTrue(stats["message"])
+
     def test_stale_agents_cannot_overwrite_the_same_revision(self):
         self.seed()
         first = Agent(self.memory, "synthetic-order")

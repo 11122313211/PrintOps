@@ -79,6 +79,18 @@ class HttpGateTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["products"])
 
+    def test_tool_stats_requires_token_and_reports_local_scope(self):
+        status, payload = self.request("/api/tools/stats", method="GET", token=None)
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["code"], "UNAUTHORIZED")
+        status, payload = self.request("/api/tools/stats", method="GET", token="wrong-token")
+        self.assertEqual(status, 401)
+        status, payload = self.request("/api/tools/stats", method="GET")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["scope"], "local-only")
+        self.assertEqual(payload["windowDays"], 30)
+        self.assertTrue(payload["message"])
+
     def test_page_carries_token_and_it_is_accepted(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as response:
             html = response.read().decode("utf-8")

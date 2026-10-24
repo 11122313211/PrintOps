@@ -31,7 +31,7 @@ from llm_adapter import (ConfigWriteError, OpenAICompatiblePlanner, read_saved_c
                          write_saved_config)
 from order_contract import canonical_order, handoff_document
 from order_model import normalize_state
-from storage_contract import StoreConflictError, summary
+from storage_contract import StoreConflictError, aggregate_tool_calls, summary
 from supplier_adapters import list_platforms
 from tools import validate_order
 from request_runtime import (CONTROL_SLOTS, DeadlineExceeded, OutboundBusy, bounded_io,
@@ -747,6 +747,20 @@ def dispatch_get(path: str) -> dict[str, object] | None:
     if path == "/api/tools":
         tools = [{**dict(meta), **dict(TOOL_SCHEMAS.get(name, {}))} for name, meta in TOOL_META.items()]
         return {"tools": tools}
+    if path == "/api/tools/stats":
+        # v1.3.0 tool-call telemetry. window accepts 7d/30d/90d (default 30d);
+        # the guard above already enforced the same token rule as every other
+        # /api/* route, and the numbers stay on this machine's database.
+        raw_window = str((query.get("window") or ["30d"])[0] or "").strip().lower()
+        match = re.fullmatch(r"(7|30|90)d?", raw_window)
+        if not match:
+            raise RequestError("window 参数仅支持 7d、30d 或 90d", code="INVALID_WINDOW")
+        store = session_memory().store
+        loader = getattr(store, "load_tool_stats", None)
+        stats = (loader(int(match.group(1))) if callable(loader)
+                 else aggregate_tool_calls([], int(match.group(1))))
+        stats["message"] = "仅统计本机数据库中的工具调用记录，不会上传或共享。"
+        return stats
     if path == "/api/products":
         return catalog_payload()
     return None
