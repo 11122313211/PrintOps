@@ -21,7 +21,7 @@ _calibration_spec.loader.exec_module(_calibration)
 calibrate, REQUIRED_COLUMNS = _calibration.calibrate, _calibration.REQUIRED_COLUMNS
 
 
-TODAY = date(2026, 10, 15)
+TODAY = date(2026, 11, 15)
 CARD_ORDER = {"productType": "名片", "quantity": "1200 张", "quantityValue": 1200,
               "quantityUnit": "张", "size": "90×54 mm", "paper": "250g 铜版纸",
               "printing": "双面四色", "finishing": "无特殊工艺", "binding": "无需装订"}
@@ -32,10 +32,15 @@ class PricingEngineTest(unittest.TestCase):
         return estimate_order({**CARD_ORDER, **(patch or {})}, as_of=TODAY, **kwargs)
 
     def test_decimal_golden_breakdown_and_provenance(self):
+        # Hand-derived against rate card 2026.11.01 (合版 50 + 0.5/m², 铜版纸
+        # 7.5 元/kg): area 0.00486 m², material 1.63296 kg -> 12.25, run
+        # 11.664 m²·面 -> 5.83, packing 24.00; subtotal 92.08 below the 100
+        # make-ready floor, so mid = 100 and the adjustment tops up 7.92;
+        # low bound = max(100, 100 × 0.85) = 100.
         value = self.estimate()
         self.assertEqual(value["status"], "ready")
-        self.assertEqual(value["range"], {"low": "100.00", "mid": "103.48", "high": "129.35"})
-        self.assertEqual([row["amount"] for row in value["lineItems"]], ["13.06", "60.00", "6.42", "24.00"])
+        self.assertEqual(value["range"], {"low": "100.00", "mid": "100.00", "high": "125.00"})
+        self.assertEqual([row["amount"] for row in value["lineItems"]], ["12.25", "50.00", "5.83", "24.00", "7.92"])
         self.assertEqual(sum(Decimal(row["amount"]) for row in value["lineItems"]), Decimal(value["range"]["mid"]))
         self.assertEqual(value["basis"]["confidence"], "illustrative")
         self.assertFalse(value["basis"]["isSupplierPrice"])
@@ -74,8 +79,11 @@ class PricingEngineTest(unittest.TestCase):
         self.assertIn("finishing:烫金", codes)
         self.assertIn("finishing:哑膜", codes)
         tiny = self.estimate({"quantity": "1 张", "quantityValue": 1})
+        # Hand check: material 0.01 + setup 50.00 + run 0.00 + packing 0.02
+        # = 50.03, topped up to the 100 make-ready floor by a 49.97 adjustment.
         self.assertEqual(tiny["range"]["mid"], "100.00")
         self.assertEqual(tiny["range"]["low"], "100.00")
+        self.assertEqual(tiny["range"]["high"], "125.00")
         self.assertEqual(sum(Decimal(row["amount"]) for row in tiny["lineItems"]), Decimal("100"))
         self.assertEqual(tiny["lineItems"][-1]["code"], "minimum_adjustment")
 
@@ -87,6 +95,36 @@ class PricingEngineTest(unittest.TestCase):
         self.assertIn("纳米覆膜", value["unpriced"][0])
         self.assertEqual(self.estimate({"paper": "特种纸"})["status"], "blocked")
         self.assertEqual(self.estimate({"printing": "四色印刷"})["status"], "blocked")
+
+    def test_newly_calibrated_categories_price_and_keep_unknowns_partial(self):
+        # 2026.11.01 narrowed blocked from 7 to 3 categories; the newly
+        # calibrated ones must price end-to-end while genuinely unsupported
+        # processes (打孔/穿绳 combos outside the card) stay partial.
+        tag = self.estimate({"productType": "吊牌", "quantity": "2000 个", "quantityUnit": "个",
+                             "size": "50×90 mm", "paper": "350g 白卡纸", "binding": "模切"})
+        self.assertEqual(tag["status"], "ready")
+        self.assertIn("binding:模切", [row["code"] for row in tag["lineItems"]])
+        punched = self.estimate({"productType": "吊牌", "quantity": "2000 个", "quantityUnit": "个",
+                                 "size": "50×90 mm", "paper": "350g 白卡纸", "binding": "打孔穿绳"})
+        self.assertEqual(punched["status"], "partial")
+        self.assertIsNone(punched["range"])
+        pvc = self.estimate({"productType": "PVC卡", "quantity": "500 张", "quantityUnit": "张",
+                             "size": "86×54 mm", "paper": "PVC卡基", "printing": "双面四色"})
+        self.assertEqual(pvc["status"], "ready")
+        envelope = self.estimate({"productType": "信封封套", "quantity": "500 个", "quantityUnit": "个",
+                                  "dimensions": {"dieCutSize": "220×160 mm"}, "paper": "250g 白卡纸",
+                                  "printing": "双面四色", "productSpecs": {"boxStructure": "信封"}})
+        self.assertEqual(envelope["status"], "ready")
+        self.assertTrue({"binding:模切", "binding:糊盒"}.issubset({row["code"] for row in envelope["lineItems"]}))
+        bag = self.estimate({"productType": "手提袋", "quantity": "500 个", "quantityUnit": "个",
+                             "dimensions": {"expandedSize": "600×450 mm"}, "paper": "250g 白卡纸",
+                             "printing": "双面四色", "binding": "穿绳",
+                             "productSpecs": {"boxStructure": "手提袋"}})
+        self.assertEqual(bag["status"], "ready")
+        self.assertIn("binding:穿绳", [row["code"] for row in bag["lineItems"]])
+        for blocked in ("联单", "PVC", "纸杯"):
+            value = self.estimate({"productType": blocked})
+            self.assertEqual(value["reason"], "category_uncalibrated")
 
     def test_category_coverage_is_independent_and_packaging_requires_flat_area(self):
         box = self.estimate({"productType": "包装盒", "quantity": "1200 个", "quantityUnit": "个", "size": "600×400×200 mm", "productSpecs": {"boxStructure": "折叠盒"}})
@@ -106,9 +144,12 @@ class PricingEngineTest(unittest.TestCase):
 
     def test_rate_card_expiration_and_validation_fail_closed(self):
         card = load_rate_card()
-        card["expiresAt"] = "2026-10-14"
+        card["expiresAt"] = "2026-11-14"
         self.assertEqual(self.estimate(rate_card=card)["reason"], "rate_card_out_of_date")
         card = load_rate_card(); card["printing"]["合版"]["setup"] = "-1"
+        with self.assertRaises(ValueError):
+            validate_rate_card(card)
+        card = load_rate_card(); card["confidence"] = "market_price"
         with self.assertRaises(ValueError):
             validate_rate_card(card)
 
@@ -225,8 +266,8 @@ class CalibrationTest(unittest.TestCase):
         self.assertFalse(result["published"])
 
     def test_expired_duplicate_bad_units_and_missing_source_are_excluded(self):
-        rows = [self.row(1), self.row(1), self.row(2, valid_until="2026-10-14"),
-                self.row(3, quantity_unit="kg"), self.row(4, source_id=""), self.row(5, quote_date="2026-10-16")]
+        rows = [self.row(1), self.row(1), self.row(2, valid_until="2026-11-14"),
+                self.row(3, quantity_unit="kg"), self.row(4, source_id=""), self.row(5, quote_date="2026-11-16")]
         result = self.run_calibration(rows)
         self.assertEqual(len(result["rejectedRows"]), 4)
         self.assertEqual(result["expiredQuoteIds"], ["q2"])

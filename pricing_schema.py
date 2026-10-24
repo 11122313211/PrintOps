@@ -12,6 +12,10 @@ from typing import Any
 PRICING_SCHEMA_VERSION = "2.0"
 CENT = Decimal("0.01")
 DISCLAIMER = "示例价格参数表仅用于本地参考估算，不构成供应商报价；实际以供应商回复为准。"
+# The engine only publishes illustrative, hand-maintained reference figures.
+# Tightening this to a closed enum keeps a future "market price" relabel from
+# sneaking in through the schema instead of through an explicit redesign.
+CONFIDENCE_LEVELS = ("illustrative",)
 
 
 def decimal_value(value: Any) -> Decimal:
@@ -49,6 +53,8 @@ def validate_rate_card(card: dict[str, Any]) -> None:
     for key in ("rateCardId", "version", "region", "sourceType", "sourceDescription", "confidence", "enteredBy"):
         if not isinstance(card[key], str) or not card[key].strip():
             raise ValueError(f"rate card {key} 不能为空")
+    if card["confidence"] not in CONFIDENCE_LEVELS:
+        raise ValueError("rate card confidence 仅支持 " + "/".join(CONFIDENCE_LEVELS))
     if card["sourceType"] != "local_reference" or card.get("isSupplierPrice") is not False:
         raise ValueError("本地估算引擎只接受明确非供应商实价的 local_reference 成本表")
     if card["taxBasis"] != "exclusive" or card["deliveryBasis"] != "ex_works":
@@ -64,6 +70,11 @@ def validate_rate_card(card: dict[str, Any]) -> None:
     sources = card.get("sources")
     if not isinstance(sources, dict) or not sources:
         raise ValueError("rate card 必须包含来源记录")
+    for source_id, source in sources.items():
+        if not isinstance(source, dict) or not str(source_id).strip() or not source.get("description") or not source.get("enteredBy"):
+            raise ValueError(f"来源记录 {source_id} 必须含 id、说明与录入人")
+        if "confidence" in source and source["confidence"] not in CONFIDENCE_LEVELS:
+            raise ValueError(f"来源 {source_id} 的 confidence 仅支持 " + "/".join(CONFIDENCE_LEVELS))
 
     def validate_source(rate, path):
         if not isinstance(rate, dict):
@@ -72,6 +83,8 @@ def validate_rate_card(card: dict[str, Any]) -> None:
         source = sources.get(source_id) if isinstance(source_id, str) else None
         if not isinstance(source, dict) or not source.get("description") or not source.get("enteredBy"):
             raise ValueError(f"{path} 必须引用含说明与录入人的有效来源")
+        if "confidence" in rate and rate["confidence"] not in CONFIDENCE_LEVELS:
+            raise ValueError(f"{path} 的 confidence 仅支持 " + "/".join(CONFIDENCE_LEVELS))
 
     if not isinstance(card["categories"], dict) or not card["categories"]:
         raise ValueError("rate card 必须按品类声明覆盖范围")
