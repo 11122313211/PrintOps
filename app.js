@@ -1206,8 +1206,36 @@ function renderFieldList(selector, keys, editable = false) {
   const list = $(selector);
   list.innerHTML = "";
   keys.forEach((key) => {
+// TD-11: order-pane re-renders rebuild these lists wholesale, so a snapshot
+// arriving while the user is typing would otherwise drop focus and caret.
+// Same contract as journey.js renderReview: record the focused input by its
+// stable data-field-key before clearing, then restore focus and selection
+// after the rebuild. A failed restore stays pending on the root because
+// renderDimensionRows appends to the list renderFieldList just cleared.
+const pendingFieldFocus = new WeakMap();
+function captureFieldFocus(root) {
+  const active = document.activeElement;
+  const focus = active instanceof HTMLInputElement && root?.contains(active) && active.dataset.fieldKey
+    ? {key: active.dataset.fieldKey, start: active.selectionStart, end: active.selectionEnd} : null;
+  if (root) pendingFieldFocus.set(root, focus);
+  return focus;
+}
+function restoreFieldFocus(root) {
+  const focus = root ? pendingFieldFocus.get(root) : null;
+  if (!focus) return false;
+  const input = root.querySelector(`[data-field-key="${CSS.escape(focus.key)}"]`);
+  if (!input || input.disabled || input.closest("details:not([open])") || input.closest("[hidden]")) return false;
+  pendingFieldFocus.delete(root);
+  input.focus({preventScroll: true});
+  if (focus.start != null && focus.end != null) {
+    try { input.setSelectionRange(focus.start, focus.end); } catch { /* input types without selectable text */ }
+  }
+  return true;
+}
+
     const current = getFieldValue(key);
     const perItem = key === "deadline" && (state.order?.items?.length || 0) > 1 && !hasValue(current);
+  captureFieldFocus(list);
     const missing = !perItem && !hasValue(current) && isRequiredField(key);
     const row = document.createElement("div");
     row.className = `field-row ${missing ? "required-missing" : ""} ${updatedOrderKeys.has(key) ? "updated" : ""}`;
@@ -1231,6 +1259,7 @@ function renderFieldList(selector, keys, editable = false) {
     } else {
       valueNode = document.createElement("span");
       valueNode.className = `field-value ${hasValue(current) ? "" : "empty"}`;
+      valueNode.dataset.fieldKey = `order:${key}`;
       valueNode.textContent = current || (perItem ? "按产品分别设置" : missing ? "待补充" : "未设置");
     }
     valueWrap.append(valueNode);
@@ -1249,6 +1278,7 @@ function renderFieldList(selector, keys, editable = false) {
 
 function commitFieldEdit(key, input) {
   let value = input.value.trim();
+  restoreFieldFocus(list);
   try { if (key === "size") value = PrintOpsWorkbench.manualDimension(value); }
   catch (error) { showToast(error.message, "error"); return; }
   const current = getFieldValue(key);
@@ -1279,6 +1309,7 @@ function renderDimensionRows(selector, order = state.order) {
     const meta = fieldProvenance(`dimensions.${key}`);
     const valueWrap = document.createElement("span");
     valueWrap.className = "field-value-wrap";
+    valueNode.dataset.fieldKey = `order:dimensions.${key}`;
     valueWrap.append(valueNode);
     if (meta?.status === "pending_confirmation" || Number(meta?.confidence) < .75) valueWrap.append(PrintOpsJourney.button("确认此值", () => changeField(reviewField(`dimensions.${key}`), "confirm"), "field-confirm"));
     row.append(labelNode, valueWrap);
@@ -1288,6 +1319,9 @@ function renderDimensionRows(selector, order = state.order) {
 
 async function updateMultiItemField(index, key, value, kind = "base") {
   const path = kind === "spec" ? `productSpecs.${key}` : kind === "dimension" ? `dimensions.${key}` : key;
+  // Completes a restore renderFieldList left pending: the focused dimension
+  // input only exists again once these rows are re-appended.
+  restoreFieldFocus(list);
   await changeField(reviewField(path, state.order.items[index]?.itemId), String(value || "").trim() ? "set" : "clear", String(value || "").trim());
 }
 
@@ -1301,7 +1335,14 @@ function renderMultiProductItems() {
   if (items.length < 2) return;
   $("#multi-product-count").textContent = `${items.length} 项`;
   const itemFields = [
+  // TD-11: same-order re-renders keep the user's expanded item/editor state
+  // and the focused editor input, mirroring journey.js renderReview.
+  const sameOrder = root.dataset.orderId === String(sessionId || "");
+  const itemOpenStates = new Map(sameOrder ? [...root.querySelectorAll(".multi-product-item")].map((node) => [node.dataset.itemId, node.open]) : []);
+  const editorOpenStates = new Map(sameOrder ? [...root.querySelectorAll(".multi-product-item")].map((node) => [node.dataset.itemId, node.querySelector(".multi-product-editor")?.open === true]) : []);
+  captureFieldFocus(root);
     ["quantity", "数量"], ["pages", "页数"], ["paper", "材料"],
+  root.dataset.orderId = String(sessionId || "");
     ["printing", "颜色"], ["finishing", "表面工艺"], ["binding", "后道/装订"], ["deadline", "交期"], ["uploadedFile", "文件"]
   ];
   const specLabels = {
@@ -1316,7 +1357,9 @@ function renderMultiProductItems() {
     const itemValidation = validationByIndex.get(index);
     const details = document.createElement("details");
     details.className = `multi-product-item ${state.activeItemIndex === index ? "active" : ""}`;
-    details.open = state.activeItemIndex === index || index === 0;
+    details.dataset.itemId = item.itemId ?? String(index);
+    details.open = state.activeItemIndex === index
+      || (itemOpenStates.has(details.dataset.itemId) ? itemOpenStates.get(details.dataset.itemId) : index === 0);
     const summary = document.createElement("summary");
     const heading = document.createElement("span");
     heading.className = "multi-product-item-heading";
@@ -1398,6 +1441,7 @@ function renderMultiProductItems() {
     editorSummary.textContent = "直接编辑本项";
     editor.appendChild(editorSummary);
     const editorGrid = document.createElement("div");
+    editor.open = editorOpenStates.get(details.dataset.itemId) === true;
     editorGrid.className = "multi-product-editor-grid";
     const baseFields = [
       ["quantity", "数量"], ["size", "成品尺寸"], ["pages", "页数"], ["paper", "纸张/材料"],
@@ -1422,6 +1466,7 @@ function renderMultiProductItems() {
       input.addEventListener("change", () => updateMultiItemField(index, key, input.value, kind));
       field.append(name, input);
       const review = reviewField(input.dataset.fieldPath, item.itemId);
+      input.dataset.fieldKey = `item:${item.itemId ?? index}:${input.dataset.fieldPath}`;
       if (review.provenance) field.append(PrintOpsWorkbench.evidence(review.provenance));
       if (review.status === "pending_confirmation") field.append(PrintOpsJourney.button("确认此值", () => changeField(review, "confirm"), "field-confirm"));
       editorGrid.appendChild(field);
@@ -1448,6 +1493,7 @@ function renderMultiProductItems() {
 
 function syncDraftGroups(hasProduct, hasProcessData) {
   const recommendations = (state.options || []).length > 0;
+  restoreFieldFocus(root);
   if (state.order.productType !== renderedProduct) {
     renderedProduct = state.order.productType || "";
     $("[data-draft-group='overview']").open = true;
@@ -1668,6 +1714,7 @@ function renderParameterForm(profile) {
   if (!state.order?.productType) return;
   const title = document.createElement("p");
   title.className = "parameter-form-title";
+  captureFieldFocus(root);
   title.textContent = `${profile.category || "产品"}参数`;
   root.appendChild(title);
   (profile.parameters || []).forEach((item) => {
@@ -1696,6 +1743,7 @@ function renderParameterForm(profile) {
     input.addEventListener("input", () => {
       if (!input.value.trim()) return;
       field.classList.remove("missing");
+    input.dataset.fieldKey = `order:productSpecs.${item.key}`;
       input.removeAttribute("aria-invalid");
     });
     const hint = document.createElement("small");
@@ -1711,6 +1759,7 @@ function renderParameterForm(profile) {
 
 function updateDraftToggle() {
   const groups = [...document.querySelectorAll(".draft-group")];
+  restoreFieldFocus(root);
   const allOpen = groups.every((group) => group.open);
   const button = $("#toggle-draft-groups");
   button.dataset.allOpen = String(allOpen);
