@@ -335,10 +335,28 @@ class AgentTest(unittest.TestCase):
         self.agent.call_tool("request_supplier_quote", {"platformId": "shengda"})
         request_id = self.agent.state["activeQuoteRequestId"]
         cancelled = self.agent.cancel_quote(request_id, "不再询价")
-        self.assertEqual(cancelled["quoteRequest"]["status"], "cancelled")
+        # quoteRequest now tracks active requests only; the cancelled entry stays visible in quoteRequests.
+        self.assertIsNone(cancelled["quoteRequest"])
+        self.assertEqual(cancelled["quoteRequests"][-1]["status"], "cancelled")
         repeated = self.agent.cancel_quote(request_id)
         self.assertTrue(repeated["toolResult"]["idempotent"])
-        self.assertEqual(repeated["quoteRequest"]["status"], "cancelled")
+        self.assertEqual(repeated["quoteRequests"][-1]["status"], "cancelled")
+
+    def test_quote_request_fallback_only_returns_active_statuses(self):
+        self.agent.chat("做 500 张 A4 名片，250g铜版纸，双面四色，下周内")
+        self.agent.choose("balanced")
+        self.agent.call_tool("request_supplier_quote", {"platformId": "shengda"})
+        active_id = self.agent.state["activeQuoteRequestId"]
+        self.agent.cancel_quote(active_id, "不再询价")
+        # No active request remains: the fallback must return None instead of the newest cancelled entry.
+        self.assertIsNone(self.agent._quote_request())
+        self.agent.call_tool("request_supplier_quote", {"platformId": "shengda"})
+        renewed_id = self.agent.state["activeQuoteRequestId"]
+        self.agent.state["quoteRequests"].append({"requestId": "quote-synthetic", "status": "stale"})
+        self.agent.state["activeQuoteRequestId"] = None
+        fallback = self.agent._quote_request()
+        self.assertIsNotNone(fallback)
+        self.assertEqual(fallback["requestId"], renewed_id)
 
     def test_unconfigured_supplier_dimensions_and_material_require_review(self):
         supported = match_supplier_capability({**ORDER_DEFAULTS, "platform": "shengda", "productType": "名片",

@@ -386,7 +386,8 @@ class Agent:
         target = request_id or self.state.get("activeQuoteRequestId")
         if target:
             return next((item for item in requests if isinstance(item, dict) and item.get("requestId") == target), None)
-        return next((item for item in reversed(requests) if isinstance(item, dict)), None)
+        return next((item for item in reversed(requests)
+                     if isinstance(item, dict) and item.get("status") in QUOTE_ACTIVE_STATUSES), None)
 
     def _persist_quote_request(self, result: dict[str, Any], order: dict[str, Any],
                                platform_id: str, item_index: int | None = None) -> dict[str, Any]:
