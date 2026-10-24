@@ -915,6 +915,56 @@ class Agent:
             for candidate in self.state.get("fieldCandidates", []):
                 if candidate.get("field") == key and candidate.get("status") == "pending_confirmation":
                     candidate["status"] = "confirmed" if self._equivalent_value(candidate.get("value"), value) else "rejected"
+        self._propagate_paper_meta(key, entry)
+
+    def _propagate_paper_meta(self, key: str, entry: dict[str, Any]) -> None:
+        """Mirror a ``paper`` provenance update onto the category paper spec.
+
+        TD-21: ``normalize_order_dimensions`` keeps the profile parameter (for
+        example 名片材质 ``cardStock``) in lockstep with the generic ``paper``
+        value, but re-confirming ``paper`` used to settle only the ``paper``
+        conflict, leaving an unresolved mirrored conflict and a stale
+        pending meta entry behind.  When the mirrored field exists and already
+        carries the mirrored (equivalent) value, it receives the same source,
+        grade and evidence as the ``paper`` write, so both fields upgrade
+        together.  The mirrored key always ends in ``productSpecs.*``, so this
+        branch cannot re-enter itself.  A missing or empty mirror — nothing
+        was mirrored yet — and non-equivalent values (an explicit later edit
+        of the spec owns that field) are left untouched.  Only provenance is
+        written here; the mirrored order value is already synchronized by the
+        state normalizer, so no value write and no revision churn occurs.
+        """
+        key = str(key)
+        items = self.state["order"].get("items")
+        prefix = ""
+        product: Any = ""
+        specs: Any = None
+        if key == "paper":
+            product = self.state["order"].get("productType")
+            specs = self.state["order"].get("productSpecs")
+        elif key.startswith("items.") and key.endswith(".paper") and isinstance(items, list):
+            for item in items:
+                # Item IDs may contain dots; match the full generated prefix
+                # instead of splitting on a fixed token count.
+                if isinstance(item, dict) and key.startswith(f"items.{item.get('itemId')}.paper"):
+                    prefix = key[:len(key) - len("paper")]
+                    product = item.get("productType")
+                    specs = item.get("productSpecs")
+                    break
+        else:
+            return
+        spec = paper_spec_key(product)
+        if not spec:
+            return
+        mirror_value = specs.get(spec) if isinstance(specs, dict) else None
+        if mirror_value in (None, "") or not self._equivalent_value(mirror_value, entry.get("value")):
+            return
+        mirror_key = f"{prefix}productSpecs.{spec}"
+        evidence = entry.get("evidence")
+        self._set_field_meta(mirror_key, mirror_value, str(entry.get("source") or ""),
+                             entry.get("confidence"),
+                             field_evidence={mirror_key: deepcopy(evidence)}
+                             if isinstance(evidence, dict) else None)
 
     def _record_rejected_fields(self, fields: list[str] | set[str] | tuple[str, ...] | None) -> None:
         """Keep a bounded, de-duplicated audit list of rejected patch paths."""

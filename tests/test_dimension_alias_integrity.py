@@ -71,13 +71,49 @@ class DimensionAliasIntegrityTest(unittest.TestCase):
     def test_uncertain_replacement_does_not_mark_conflict_resolved(self):
         self.agent.chat('名片用300g铜版纸')
         self.agent._update_order({'paper': '白卡纸'}, source='model', confidence=.4)
-        # Address the paper conflict directly: the mirrored 名片材质 conflict
-        # may sit after it, and confirming paper does not settle that mirror.
+        # Address the paper conflict directly: since TD-21 the mirrored 名片材质
+        # conflict settles together with paper (see the dedicated test below).
         conflict = next(c for c in self.agent.state['conflicts'] if c['field'] == 'paper')
         self.assertFalse(conflict['resolved'])
         self.agent.chat('确认用白卡纸', {'paper': '白卡纸'})
         conflict = next(c for c in self.agent.state['conflicts'] if c['field'] == 'paper')
         self.assertTrue(conflict['resolved'])
+
+    def test_confirming_paper_settles_mirrored_card_stock_conflict_and_meta(self):
+        self.agent.chat('名片用300g铜版纸')
+        self.agent._update_order({'paper': '白卡纸'}, source='model', confidence=.4)
+        for field in ('paper', 'productSpecs.cardStock'):
+            self.assertEqual(self.agent.state['fieldMeta'][field]['status'], 'pending_confirmation')
+            self.assertEqual(self.agent.state['fieldMeta'][field]['confidence'], .4)
+            self.assertFalse(next(c for c in self.agent.state['conflicts']
+                                  if c['field'] == field)['resolved'])
+        self.agent.chat('确认用白卡纸', {'paper': '白卡纸'})
+        paper_meta = self.agent.state['fieldMeta']['paper']
+        mirror_meta = self.agent.state['fieldMeta']['productSpecs.cardStock']
+        for field, meta in (('paper', paper_meta), ('productSpecs.cardStock', mirror_meta)):
+            self.assertEqual(meta['status'], 'confirmed', field)
+            self.assertEqual(meta['confidence'], 1, field)
+            self.assertTrue(next(c for c in self.agent.state['conflicts']
+                                 if c['field'] == field)['resolved'], field)
+        # The mirror inherits the same user evidence as the paper field.
+        self.assertEqual(mirror_meta.get('evidence'), paper_meta.get('evidence'))
+
+    def test_low_confidence_paper_write_keeps_mirror_meta_in_lockstep(self):
+        self.agent.chat('名片用300g铜版纸')
+        self.agent._update_order({'paper': '白卡纸'}, source='model', confidence=.4)
+        for field in ('paper', 'productSpecs.cardStock'):
+            meta = self.agent.state['fieldMeta'][field]
+            self.assertEqual(meta['value'], '白卡纸', field)
+            self.assertEqual(meta['status'], 'pending_confirmation', field)
+            self.assertEqual(meta['confidence'], .4, field)
+
+    def test_paper_negation_still_clears_paper_and_mirrored_spec(self):
+        self.agent.chat('做500张名片，300g铜版纸')
+        result = self.agent.chat('不要300g铜版纸')
+        self.assertEqual(result['order']['paper'], '')
+        self.assertEqual(result['order']['productSpecs'].get('cardStock', ''), '')
+        self.assertNotIn('paper', result['fieldMeta'])
+        self.assertNotIn('productSpecs.cardStock', result['fieldMeta'])
 
     def test_legacy_jis_b_sizes_keep_physical_dimensions_and_original_evidence(self):
         old = {'schemaVersion': 2, 'order': {'productType': '名片', 'size': 'B5',
