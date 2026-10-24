@@ -25,7 +25,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from agent import (Agent, Memory, RevisionConflictError, PLATFORMS, SUPPLIER_PROFILE_VERSION,
-                   TOOL_META, TOOL_SCHEMAS, WORKFLOW_LABELS)
+                   TOOL_META, TOOL_SCHEMAS, WORKFLOW_LABELS, MAX_PLANNER_TOOL_ROUNDS)
 from product_knowledge import catalog_payload, parameter_state, KNOWLEDGE_MANIFEST
 from llm_adapter import (ConfigWriteError, OpenAICompatiblePlanner, read_saved_config,
                          write_saved_config)
@@ -116,6 +116,11 @@ DNS_CHECK_SECONDS = 6.0
 MODEL_TEST_BUDGET_SECONDS = 40.0
 ROUTE_DEADLINE_CAP_SECONDS = 120.0
 MIN_ROUTE_EXTENSION_BASE_SECONDS = 5.0
+# The chat route's declared workload: one initial plan plus at most
+# MAX_PLANNER_TOOL_ROUNDS tool rounds and one tools-disabled synthesis, each
+# capped by the planner's per-call budget, plus local tool execution,
+# storage writes and the response write.
+PLANNER_ROUTE_MARGIN_SECONDS = 10.0
 # Capability probes are bounded by construction: one gated hop plus two
 # parallel hops in a single round trip.  Two more knobs keep the route itself
 # from becoming a way to spend the user's API quota or the shared outbound
@@ -281,6 +286,24 @@ def planner_for_request():
             if hasattr(planner, attribute):
                 setattr(planner, attribute, "")
         return planner
+
+
+def planner_chat_budget_seconds(planner: object) -> float:
+    """Route budget for one chat turn: bounded planner rounds plus local work.
+
+    Each planner call is capped by its own timeout (never by this route
+    budget), so the declared workload is (rounds + synthesis + initial plan) ×
+    per-call timeout; the margin covers tool execution, storage writes and the
+    response write. ROUTE_DEADLINE_CAP_SECONDS clamps the final deadline inside
+    Handler._extend_request_deadline.
+    """
+    try:
+        per_call = float(getattr(planner, "timeout", 0) or 0)
+    except (TypeError, ValueError):
+        per_call = 0.0
+    if not math.isfinite(per_call) or per_call <= 0:
+        per_call = 20.0  # OpenAICompatiblePlanner._timeout_from_env default.
+    return PLANNER_ROUTE_MARGIN_SECONDS + (MAX_PLANNER_TOOL_ROUNDS + 2) * per_call
 
 
 MODEL_TEST_CACHE: dict[str, tuple[float, dict[str, object]]] = {}
@@ -1326,14 +1349,21 @@ class Handler(BaseHTTPRequestHandler):
                 if history_result is not None:
                     return self.reply(history_result)
                 raise RequestError("接口不存在", 404, "NOT_FOUND")
+            # Snapshot the planner before the session lock so the chat route
+            # can announce its bounded model workload up front: a legitimate
+            # multi-round tool conversation must not be cut down by the global
+            # request deadline into 408 REQUEST_DEADLINE mid-turn.
+            planner = planner_for_request()
+            if path == "/api/chat" and getattr(planner, "enabled", False):
+                self._extend_request_deadline(planner_chat_budget_seconds(planner))
             session_id = _session_id(body.get("sessionId"))
             if session_id:
                 # Lock before loading state so concurrent requests cannot read
                 # the same snapshot and overwrite each other's changes.
                 with deadline_lock(_session_lock(session_id)):
-                    agent = Agent(session_memory(), session_id, planner=planner_for_request())
+                    agent = Agent(session_memory(), session_id, planner=planner)
                     return self.reply(dispatch_post(path, body, agent))
-            agent = Agent(session_memory(), planner=planner_for_request())
+            agent = Agent(session_memory(), planner=planner)
             with deadline_lock(_session_lock(agent.id)):
                 return self.reply(dispatch_post(path, body, agent))
         except RequestError as error:

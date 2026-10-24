@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased - 2026-10-24（对话路由声明式预算）
+
+- **接入模型 API 后长对话不再触发"请求总时限已到"**：`/api/chat` 在 planner 启用时按 dsh clampTimeout 语义声明自身有界工作量——首轮规划 + 至多 `MAX_PLANNER_TOOL_ROUNDS` 轮工具续问 + 一次禁用工具的最终总结，路由预算为 `10 秒余量 + (轮数 + 2) × PRINTOPS_LLM_TIMEOUT`（默认约 110 秒，仍受 `ROUTE_DEADLINE_CAP_SECONDS=120` 硬顶约束）。此前接入慢推理模型后，对话随历史变长、单轮延迟上升，多轮工具回合在全局 30 秒截止线上被切成 408 `REQUEST_DEADLINE`；单次模型调用仍被自身预算封顶、会话锁等待与存储提交继续共享同一剩余时间，规则模式与不经模型的路由保持全局预算不变。回归测试用 5 秒全局预算 + 5.6 秒慢 planner 复现旧代码 408、新代码 200。
+- **验收**：全量 555 项 Python 通过（新增 3 项：预算公式、慢 planner 路由扩容、规则模式不扩容）。
+
 ## Unreleased - 2026-10-24（多产品依据迁移与确认一致性）
 
 对应 [NEXT_STAGE_PRODUCT_DESIGN_PLAN](docs/NEXT_STAGE_PRODUCT_DESIGN_PLAN.md) 工作包 G03（统一复核、编辑和多产品作用范围）的两项登记册技术债，及复查中发现的一个拆分回归。

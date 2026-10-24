@@ -140,12 +140,12 @@ class SocketDeadlineTest(unittest.TestCase):
         self.memory_patch.start()
         self.addCleanup(self.memory_patch.stop)
 
-    def serve(self):
-        class ShortBudgetHandler(server.Handler):
-            timeout = 0.22
-
+    def serve(self, timeout=0.22):
+        # Class bodies do not close over the enclosing scope, so build the
+        # handler subclass explicitly.
+        handler_class = type("ShortBudgetHandler", (server.Handler,), {"timeout": timeout})
         try:
-            httpd = server.PrintOpsHTTPServer(("127.0.0.1", 0), ShortBudgetHandler, max_connections=1)
+            httpd = server.PrintOpsHTTPServer(("127.0.0.1", 0), handler_class, max_connections=1)
         except OSError as error:
             self.skipTest(f"loopback unavailable: {error}")
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -248,6 +248,93 @@ class SocketDeadlineTest(unittest.TestCase):
             connection.close()
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertEqual(server.MEMORY.store.load_order(agent.id), before)
+
+
+class ChatRouteBudgetTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.memory_patch = patch.object(server, "MEMORY", Memory(Path(self.temp.name) / "orders.sqlite3"))
+        self.memory_patch.start()
+        self.addCleanup(self.memory_patch.stop)
+
+    def test_planner_chat_budget_formula(self):
+        planner = OpenAICompatiblePlanner("https://example.test/v1", "", "test",
+                                          timeout=20, allow_private_hosts=True)
+        rounds = server.MAX_PLANNER_TOOL_ROUNDS + 2
+        self.assertEqual(server.planner_chat_budget_seconds(planner),
+                         server.PLANNER_ROUTE_MARGIN_SECONDS + rounds * 20)
+        # Invalid or missing per-call budgets fall back to the adapter default.
+        for broken in (None, 0, -3, float("nan"), "x"):
+            self.assertEqual(server.planner_chat_budget_seconds(type("P", (), {"timeout": broken})()),
+                             server.PLANNER_ROUTE_MARGIN_SECONDS + rounds * 20)
+
+    def test_chat_route_extends_deadline_for_slow_planner(self):
+        """A multi-round planner turn must outlive the global request deadline.
+
+        Regression for 408 REQUEST_DEADLINE mid-conversation once the model
+        (or its reasoning latency) exceeds the small default total budget:
+        the chat route announces its bounded workload like /api/model/test.
+        """
+        class SlowPlanner:
+            enabled = True
+            timeout = 6.0
+
+            def plan(self, text, order, tools, history=None, **_kwargs):
+                # Beyond the 5 s global handler budget, inside the declared
+                # 10 + (3 + 2) × 6 s route budget.
+                time.sleep(5.6)
+                return {"reply": "慢模型回复", "patch": {}, "confidence": {}, "evidence": [],
+                        "questions": [], "risks": []}
+
+        handler_class = type("RouteBudgetHandler", (server.Handler,), {"timeout": 5.0})
+        try:
+            served = server.PrintOpsHTTPServer(("127.0.0.1", 0), handler_class, max_connections=1)
+        except OSError as error:
+            self.skipTest(f"loopback unavailable: {error}")
+        threading.Thread(target=served.serve_forever, daemon=True).start()
+        self.addCleanup(served.server_close)
+        self.addCleanup(served.shutdown)
+
+        with patch.object(server, "PLANNER", SlowPlanner()):
+            client = http.client.HTTPConnection(*served.server_address, timeout=20)
+            try:
+                started = time.monotonic()
+                client.request("POST", "/api/chat", json.dumps({"text": "做500张名片"}),
+                               {server.TOKEN_HEADER: server.ACCESS_TOKEN,
+                                "Content-Type": "application/json"})
+                response = client.getresponse()
+                result = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertIn("messages", result)
+                self.assertGreater(time.monotonic() - started, 5.0)
+            finally:
+                client.close()
+
+    def test_chat_route_keeps_global_budget_without_planner(self):
+        """Without an enabled planner the chat route keeps the plain budget."""
+        handler_class = type("NoPlannerHandler", (server.Handler,), {"timeout": 5.0})
+        try:
+            served = server.PrintOpsHTTPServer(("127.0.0.1", 0), handler_class, max_connections=1)
+        except OSError as error:
+            self.skipTest(f"loopback unavailable: {error}")
+        threading.Thread(target=served.serve_forever, daemon=True).start()
+        self.addCleanup(served.server_close)
+        self.addCleanup(served.shutdown)
+
+        with patch.object(server, "PLANNER", type("DisabledPlanner", (), {"enabled": False})()):
+            client = http.client.HTTPConnection(*served.server_address, timeout=12)
+            try:
+                # The rule path answers quickly; assert it is not rejected.
+                client.request("POST", "/api/chat", json.dumps({"text": "做500张名片"}),
+                               {server.TOKEN_HEADER: server.ACCESS_TOKEN,
+                                "Content-Type": "application/json"})
+                response = client.getresponse()
+                result = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertIn("messages", result)
+            finally:
+                client.close()
 
 
 if __name__ == "__main__":
