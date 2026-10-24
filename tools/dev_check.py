@@ -59,6 +59,7 @@ def main():
                             [sys.executable, "-m", "unittest", "discover",
                              "-s", "tests", "-p", "test_*.py"]))
         results.append(_run("evaluation", [sys.executable, "tests/evaluate_agent.py"]))
+        results.append(_run("knowledge review", [sys.executable, "tools/knowledge_review.py"]))
     results.append(_run("secret scan", [sys.executable, "tools/secret_scan.py"]))
     results.append(_run("repo guard", [sys.executable, "tools/repo_guard.py"]))
     print("")
