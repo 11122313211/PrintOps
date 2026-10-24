@@ -7,7 +7,10 @@ shop terminology; supplier adapters can map these fields later.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 
@@ -25,12 +28,14 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
     "version": KNOWLEDGE_VERSION,
     "schemaVersion": "1.0",
     "lastReviewed": "2026-09-05",
+    "reviewCadenceDays": 90,
+    "nextReviewAt": "2026-12-04",
     "sources": [
         {
             "id": "sd2000-navigation",
             "title": "盛大印刷公开产品导航",
             "url": CATALOG_SOURCE,
-            "scope": "产品分类参考，不代表实时价格、产能或交期",
+            "scope": "仅品类导航参考：只引用其公开分类结构与品类命名，不代表页面展示的任何价格、产能或交期",
         },
         {
             "id": "common-print-practice",
@@ -40,7 +45,7 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
         {
             "id": "pricing-model-sample",
             "title": "示例价格参数表",
-            "scope": "estimate_price 的量级参考；基数为示例数据，不构成任何供应商实价",
+            "scope": "estimate_price 的量级参考（对应 rate card 来源 industry-standard-flow-2026-10）；基数为按通用工艺流程人工构造的示例数据，不构成任何供应商实价",
         },
     ],
     "dimensionDefinitions": {
@@ -78,6 +83,79 @@ from pricing_engine import load_rate_card
 
 PRICE_MODEL: dict[str, Any] = load_rate_card()
 PRICE_MODEL_VERSION = PRICE_MODEL["version"]
+
+# Review cadence for the knowledge base itself.  The manifest records when the
+# knowledge was last human-reviewed; ``knowledge_review_status`` turns that
+# static record into an injectable, testable freshness state.  Version checks
+# elsewhere compare reported strings for strict equality (see agent's plan-meta
+# normalization); staleness here is a schedule, so it is derived from dates.
+REVIEW_CADENCE_DAYS = 90
+REVIEW_OVERDUE_GRACE_DAYS = 30
+RATE_CARD_PATH = Path(__file__).resolve().parent / "rate_cards" / "cn-local-reference.json"
+
+
+def _rate_card_expiry(today: date) -> dict[str, Any]:
+    """Read the active rate card's validity window without raising.
+
+    Any read/parse/field error degrades to ``status="unknown"`` so freshness
+    reporting never blocks on a malformed file; structural card problems are
+    the knowledge review CLI's job, not this accessor's.
+    """
+    info: dict[str, Any] = {"path": RATE_CARD_PATH.name, "version": None,
+                            "effectiveFrom": None, "expiresAt": None,
+                            "daysUntilExpiry": None, "status": "unknown"}
+    try:
+        card = json.loads(RATE_CARD_PATH.read_text(encoding="utf-8"))
+        expires_at = date.fromisoformat(str(card["expiresAt"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return info
+    info.update({
+        "version": str(card.get("version") or "") or None,
+        "effectiveFrom": str(card.get("effectiveFrom") or "") or None,
+        "expiresAt": expires_at.isoformat(),
+        "daysUntilExpiry": (expires_at - today).days,
+        "status": "tracked",
+    })
+    return info
+
+
+def knowledge_review_status(today: date | None = None) -> dict[str, Any]:
+    """Return the review freshness of the knowledge base and active rate card.
+
+    ``status`` is "ok" while ``today`` is earlier than
+    ``lastReviewed + reviewCadenceDays`` (90 days), "due" once that cadence is
+    reached, and "overdue" after ``REVIEW_OVERDUE_GRACE_DAYS`` (30) extra days
+    beyond the cadence, so a missed review escalates instead of resting at
+    "due" indefinitely.  ``today`` is injectable for deterministic tests; a
+    ``today`` before ``lastReviewed`` (clock skew) simply counts as "ok".
+    ``nextReviewAt`` is derived from ``lastReviewed + cadence`` and the
+    manifest's declared value is returned alongside so the review CLI can flag
+    drift between the two.  The ``rateCard`` block reports the days remaining
+    before the card's ``expiresAt``; a missing or unreadable rate card file
+    degrades to ``status="unknown"`` instead of raising.
+    """
+    today = today or date.today()
+    cadence = int(KNOWLEDGE_MANIFEST.get("reviewCadenceDays") or REVIEW_CADENCE_DAYS)
+    last_reviewed = date.fromisoformat(str(KNOWLEDGE_MANIFEST["lastReviewed"]))
+    derived_next = last_reviewed + timedelta(days=cadence)
+    days_since = (today - last_reviewed).days
+    if days_since < cadence:
+        status = "ok"
+    elif days_since < cadence + REVIEW_OVERDUE_GRACE_DAYS:
+        status = "due"
+    else:
+        status = "overdue"
+    return {
+        "today": today.isoformat(),
+        "knowledgeVersion": KNOWLEDGE_VERSION,
+        "lastReviewed": last_reviewed.isoformat(),
+        "reviewCadenceDays": cadence,
+        "nextReviewAt": derived_next.isoformat(),
+        "declaredNextReviewAt": str(KNOWLEDGE_MANIFEST.get("nextReviewAt") or ""),
+        "status": status,
+        "daysSinceReview": days_since,
+        "rateCard": _rate_card_expiry(today),
+    }
 
 
 PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
@@ -140,6 +218,17 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         ],
         "defaultBinding": "无需装订",
         "recommendation": "优先确认单双面、卡纸克重和圆角，再决定是否加专色、烫金。",
+    },
+    "邀请函": {
+        "category": "名片/卡片",
+        "aliases": ["邀请函", "请柬", "请帖", "喜帖", "贺卡"],
+        "summary": "仪式感卡片类物料，纸张质感、折叠形态和烫金/击凸等工艺决定档次。",
+        "parameters": [
+            {"key": "folding", "label": "折叠方式", "required": False, "question": "邀请函需要折叠吗？", "hint": "折卡需同时确认成品尺寸与展开尺寸，折痕处避免重要内容。"},
+            {"key": "inserts", "label": "内页/内衬", "required": False, "question": "是否需要内页或内衬卡？", "hint": "内页单独用纸时需按独立物料确认数量与纸张，成本另计。"},
+        ],
+        "defaultBinding": "无需装订",
+        "recommendation": "先确认单张还是折卡与成品尺寸，再选纸张质感与烫金、击凸等表面工艺。",
     },
     "PVC卡": {
         "category": "名片/卡片",
@@ -299,7 +388,8 @@ GENERIC_PROFILE = {
 PRODUCT_SPEC_EXTRAS: dict[str, set[str]] = {
     "包装盒": {"boxSizeInner", "boxSizeOuter"},
     "名片": {"cardColor"},
-    "手提袋": {"loadBearing"},
+    "手提袋": {"loadBearing", "boxStructure"},
+    "信封封套": {"boxStructure"},
     "海报": {"displaySize"},
     "喷画": {"displaySize"},
     "PVC": {"boardSize"},
@@ -352,11 +442,11 @@ MIN_QUANTITY = {
     "名片": 100, "单页": 500, "折页": 500, "海报": 100, "宣传册": 100,
     "画册": 100, "标签": 500, "吊牌": 500, "包装盒": 200, "手提袋": 500,
     "纸杯": 10000, "联单": 20, "信封封套": 200, "PVC": 10, "喷画": 10,
-    "PVC卡": 100, "数码印刷": 50,
+    "PVC卡": 100, "数码印刷": 50, "邀请函": 500,
 }
 PRINT_MODE_HINT = {
     "名片": "合版优先", "单页": "合版优先", "折页": "合版优先", "海报": "合版优先",
-    "标签": "合版优先", "吊牌": "合版优先",
+    "标签": "合版优先", "吊牌": "合版优先", "邀请函": "合版优先",
     "画册": "专版常见", "宣传册": "专版常见", "包装盒": "专版常见", "手提袋": "专版常见",
     "信封封套": "专版常见", "PVC卡": "专版常见", "纸杯": "专版常见",
     "喷画": "两者均可", "PVC": "两者均可", "联单": "两者均可", "数码印刷": "两者均可",
