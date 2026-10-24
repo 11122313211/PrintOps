@@ -1,0 +1,80 @@
+[
+  {
+    "file": "direction-a.png",
+    "target": "C:\\Users\\30127\\Desktop\\PrintOps-main\\design\\candidates\\direction-a.html",
+    "name": "方向 A · 暖纸铅印 · 精修",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "direction-b.png",
+    "target": "C:\\Users\\30127\\Desktop\\PrintOps-main\\design\\candidates\\direction-b.html",
+    "name": "方向 B · 蓝晒制版",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "direction-c.png",
+    "target": "C:\\Users\\30127\\Desktop\\PrintOps-main\\design\\candidates\\direction-c.html",
+    "name": "方向 C · 校样批注台",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "sheet.png",
+    "width": 2000,
+    "height": 480,
+    "columns": 3,
+    "items": [
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "方向 A · 暖纸铅印 · 精修",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "方向 B · 蓝晒制版",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "方向 C · 校样批注台",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

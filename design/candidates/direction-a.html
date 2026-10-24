@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方向 A · 暖纸铅印 · 精修</title>
+<style>
+  :root{
+    --paper:#eee5d5; --paper-deep:#e7dcc8; --card:#faf5ea; --feed:#f3ecdd;
+    --ink:#262019; --ink-soft:#5f564a; --ink-mute:#8a7f6f;
+    --rule:#d8cbb4; --rule-strong:#b9a888;
+    --red:#a34a3e; --red-deep:#7e352b;
+    --brass:#8a6d3b; --gold:#c9a35a;
+    --serif:Georgia,"Songti SC","SimSun",serif;
+    --sans:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif;
+    --mono:ui-monospace,"SF Mono",Consolas,"Cascadia Mono",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1440px;height:1000px;overflow:hidden}
+  body{
+    font-family:var(--sans);color:var(--ink);background:var(--paper);
+    background-image:repeating-linear-gradient(0deg,rgba(120,100,70,.028) 0 1px,transparent 1px 3px);
+    font-size:13px;line-height:1.55;
+  }
+  .mono{font-family:var(--mono)}
+  .serif{font-family:var(--serif)}
+
+  /* ── 顶栏：一版活字的版头 ── */
+  .topbar{
+    height:56px;display:flex;align-items:center;gap:16px;padding:0 20px;
+    border-bottom:2px solid var(--ink);background:var(--paper);
+  }
+  .brandmark{
+    width:34px;height:34px;background:var(--ink);color:var(--card);
+    font-family:var(--serif);font-size:15px;font-weight:700;
+    display:grid;place-items:center;box-shadow:3px 3px 0 rgba(38,32,25,.18);
+  }
+  .brand h1{font-family:var(--serif);font-size:17px;font-weight:700;letter-spacing:.04em}
+  .brand small{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.22em;color:var(--ink-mute)}
+  .topbar .order-ref{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
+  .topbar .order-ref b{color:var(--ink)}
+  .agent-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft)}
+  .agent-status i{width:7px;height:7px;border-radius:50%;background:#4a7c59;display:inline-block}
+  .topbtn{
+    height:30px;padding:0 14px;border:1px solid var(--ink);background:transparent;
+    font-family:var(--sans);font-size:12px;color:var(--ink);border-radius:3px;
+  }
+  .topbtn.primary{background:var(--red);border-color:var(--red-deep);color:#fdf9f0;box-shadow:2px 2px 0 rgba(126,53,43,.35)}
+
+  /* ── 三栏 ── */
+  .workspace{display:grid;grid-template-columns:264px 1fr 372px;height:944px}
+
+  /* 侧栏 */
+  .sidebar{background:var(--paper-deep);border-right:1px solid var(--rule-strong);padding:14px 16px;display:flex;flex-direction:column;gap:14px}
+  .side-label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--ink-mute)}
+  .current-order h2{font-family:var(--serif);font-size:18px;font-weight:700;margin-top:4px}
+  .current-order .ref{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:2px}
+  .meter{margin-top:10px}
+  .meter .row{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-soft)}
+  .meter .track{height:4px;background:var(--rule);margin-top:5px}
+  .meter .fill{height:4px;width:92%;background:var(--brass)}
+  .journey{border-top:1px solid var(--rule-strong);padding-top:14px}
+  .journey ol{list-style:none;display:flex;flex-direction:column;gap:2px}
+  .journey li{display:flex;gap:10px;align-items:baseline;padding:6px 8px;border-left:2px solid transparent}
+  .journey li .no{font-family:var(--mono);font-size:11px;color:var(--ink-mute)}
+  .journey li .t{font-size:13px;color:var(--ink-soft)}
+  .journey li .d{display:block;font-size:11px;color:var(--ink-mute)}
+  .journey li.active{border-left-color:var(--brass);background:rgba(138,109,59,.08)}
+  .journey li.active .t{color:var(--ink);font-weight:600}
+  .journey li.done .no{color:var(--brass)}
+  .history{border-top:1px solid var(--rule-strong);padding-top:14px}
+  .history ul{list-style:none;margin-top:8px;display:flex;flex-direction:column}
+  .history li{padding:7px 8px;border-left:2px solid transparent;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .history li.active{border-left-color:var(--ink);background:var(--card)}
+  .history .name{font-size:13px;font-weight:600}
+  .history .meta{display:block;font-size:11px;color:var(--ink-mute);font-weight:400}
+  .history .tag{font-family:var(--mono);font-size:10px;color:var(--ink-mute)}
+  .presets{border-top:1px solid var(--rule-strong);padding-top:10px;margin-top:auto}
+  .preset{margin-top:6px;border:1px dashed var(--rule-strong);padding:7px 10px;font-size:12px;color:var(--ink-soft);border-radius:3px}
+
+  /* 中栏：对话 */
+  .chat{display:flex;flex-direction:column;border-right:1px solid var(--rule-strong);background:var(--feed)}
+  .chat-head{padding:14px 24px 12px;border-bottom:1px solid var(--rule);background:var(--paper)}
+  .chat-head .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-mute)}
+  .chat-head h2{font-family:var(--serif);font-size:22px;font-weight:700;letter-spacing:.02em}
+  .chat-head .sub{font-size:12px;color:var(--ink-soft);margin-top:2px}
+  .feed{flex:1;padding:20px 24px;display:flex;flex-direction:column;gap:14px}
+  .msg{display:flex;gap:10px;max-width:82%}
+  .msg .who{flex:0 0 26px;height:26px;display:grid;place-items:center;font-family:var(--mono);font-size:10px;border:1px solid var(--rule-strong);color:var(--ink-soft);background:var(--card);border-radius:3px}
+  .msg .bubble{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:10px 14px;box-shadow:2px 2px 0 rgba(38,32,25,.06)}
+  .msg .bubble p+p{margin-top:6px}
+  .msg .time{font-family:var(--mono);font-size:10px;color:var(--ink-mute);margin-top:4px}
+  .msg.me{align-self:flex-end;flex-direction:row-reverse}
+  .msg.me .bubble{background:var(--ink);color:#f2ead9;border-color:var(--ink);box-shadow:3px 3px 0 rgba(38,32,25,.22)}
+  .msg.me .who{background:var(--ink);color:var(--gold);border-color:var(--ink)}
+  .msg .v{font-family:var(--mono)}
+  .quick{display:flex;gap:8px;padding-left:36px}
+  .quick span{border:1px solid var(--rule-strong);background:var(--card);border-radius:999px;padding:5px 14px;font-size:12px;color:var(--ink-soft)}
+  .quick span.on{border-color:var(--brass);color:var(--brass);font-weight:600;background:rgba(138,109,59,.08)}
+  .composer{border-top:2px solid var(--ink);background:var(--paper);padding:14px 24px 16px}
+  .composer .box{border:1px solid var(--rule-strong);background:var(--card);border-radius:4px;box-shadow:2px 2px 0 rgba(38,32,25,.08)}
+  .composer textarea{width:100%;height:56px;border:0;background:transparent;resize:none;padding:10px 12px;font-family:var(--sans);font-size:13px;color:var(--ink);outline:none}
+  .composer textarea::placeholder{color:var(--ink-mute)}
+  .composer .bar{display:flex;align-items:center;gap:12px;padding:8px 12px;border-top:1px dashed var(--rule)}
+  .composer .hint{font-size:11px;color:var(--ink-mute)}
+  .composer .hint b{color:var(--red);font-weight:600}
+  .send{margin-left:auto;height:32px;padding:0 18px;background:var(--red);color:#fdf9f0;border:1px solid var(--red-deep);font-size:13px;font-weight:600;border-radius:3px;box-shadow:2px 2px 0 rgba(126,53,43,.4)}
+
+  /* 右栏：正在成形的工单（铅印主体） */
+  .draft{padding:20px 18px;background:var(--paper-deep)}
+  .sheet{
+    background:var(--card);border:1px solid var(--rule-strong);
+    box-shadow:7px 7px 0 rgba(38,32,25,.14);
+    border-radius:2px;height:100%;display:flex;flex-direction:column;overflow:hidden;
+  }
+  .sheet-head{padding:13px 18px 10px;border-bottom:2px solid var(--ink)}
+  .sheet-head .kicker{font-family:var(--mono);font-size:9px;letter-spacing:.24em;color:var(--ink-mute)}
+  .sheet-head .row{display:flex;align-items:baseline;justify-content:space-between;margin-top:2px}
+  .sheet-head h2{font-family:var(--serif);font-size:21px;font-weight:700}
+  .state-chip{font-family:var(--mono);font-size:10px;padding:3px 8px;border:1px solid var(--red);color:var(--red-deep);border-radius:2px;background:rgba(163,74,62,.06)}
+  .doc-links{display:flex;gap:8px;margin-top:8px}
+  .doc-links a{flex:1;text-align:center;font-size:12px;padding:6px 0;border:1px solid var(--rule-strong);color:var(--ink-soft);border-radius:3px;background:var(--paper)}
+  .drop{margin:10px 18px 0;border:1.5px dashed var(--rule-strong);border-radius:3px;padding:9px;text-align:center;color:var(--ink-mute);font-size:12px;background:var(--paper)}
+  .drop b{display:block;color:var(--ink-soft);font-weight:600;margin-bottom:2px}
+  .fields{flex:1;overflow:hidden;padding:4px 18px}
+  .group{margin-top:10px}
+  .group>h3{font-family:var(--serif);font-size:13px;letter-spacing:.08em;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .group>h3 .no{font-family:var(--mono);font-size:10px;color:var(--brass)}
+  .group>h3::after{content:"";flex:1;height:1px;background:var(--rule)}
+  .frow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--rule)}
+  .frow .k{font-size:12px;color:var(--ink-soft);flex:0 0 74px}
+  .frow .v{font-family:var(--mono);font-size:12.5px;color:var(--ink);text-align:right}
+  .frow .v.unset{color:var(--ink-mute);font-family:var(--sans)}
+  .frow .v.pending{color:var(--red-deep)}
+  .frow.pending-row{background:rgba(163,74,62,.05);border-bottom-color:rgba(163,74,62,.35)}
+  .estimate{margin:10px 18px 0;border-top:2px solid var(--ink);padding-top:10px;display:flex;align-items:baseline;justify-content:space-between}
+  .estimate .plan{font-size:11px;color:var(--ink-mute)}
+  .estimate .plan b{display:block;font-size:12px;color:var(--ink-soft);font-weight:600}
+  .estimate .num{font-family:var(--mono);font-size:24px;font-weight:700;letter-spacing:-.01em}
+  .estimate .num small{font-size:13px;color:var(--ink-soft)}
+  .actions{display:flex;gap:10px;padding:12px 18px 14px}
+  .actions .main{flex:1.4;height:38px;background:var(--red);border:1px solid var(--red-deep);color:#fdf9f0;font-size:14px;font-weight:700;letter-spacing:.06em;border-radius:3px;box-shadow:3px 3px 0 rgba(126,53,43,.4);font-family:var(--serif)}
+  .actions .ghost{flex:1;height:38px;background:transparent;border:1px solid var(--ink);color:var(--ink);font-size:13px;border-radius:3px}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brandmark serif">PO</div>
+    <div class="brand"><h1>印刷订单智能体</h1><small>PRINT OPERATIONS AGENT</small></div>
+    <div class="order-ref">订单 <b>b7fbc3d64e12</b> · 版本 13</div>
+    <div class="agent-status"><i></i>智能体在线</div>
+    <button class="topbtn">接口设置</button>
+    <button class="topbtn primary">新建订单</button>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar">
+      <div class="current-order">
+        <div class="side-label">当前订单</div>
+        <h2>名片 · 1,200 张</h2>
+        <div class="ref">b7fbc3d64e12</div>
+        <div class="meter">
+          <div class="row"><span>信息度</span><span class="mono">92%</span></div>
+          <div class="track"><div class="fill"></div></div>
+        </div>
+      </div>
+
+      <nav class="journey">
+        <ol>
+          <li class="done"><span class="no">01</span><span><span class="t">收集需求</span><span class="d">告诉智能体印什么</span></span></li>
+          <li class="active"><span class="no">02</span><span><span class="t">选择方案</span><span class="d">比较方案与成本</span></span></li>
+          <li><span class="no">03</span><span><span class="t">核对与交接</span><span class="d">确认规格与未决项</span></span></li>
+        </ol>
+      </nav>
+
+      <div class="history">
+        <div class="side-label">订单历史 · 2 单</div>
+        <ul>
+          <li class="active"><span><span class="name">名片 · 1,200 张<span class="meta">草稿 · 10月24日 20:24</span></span></span><span class="tag">编辑中</span></li>
+          <li><span><span class="name">宣传册 · 100 份<span class="meta">已确认 · 10月15日 14:51</span></span></span><span class="tag">归档</span></li>
+        </ul>
+      </div>
+
+      <div class="presets">
+        <div class="side-label">常用规格</div>
+        <div class="preset">名片 · 300 g/m² 白卡 · 500 张</div>
+      </div>
+    </aside>
+
+    <section class="chat">
+      <div class="chat-head">
+        <div class="kicker">02 · 比较方案</div>
+        <h2>比较方案与成本</h2>
+        <div class="sub">当前产品：名片 · 交期已记录：一周内</div>
+      </div>
+      <div class="feed">
+        <div class="msg me">
+          <span class="who">我</span>
+          <div class="bubble"><p>我要印1200张名片，成品尺寸9×5.4cm，250g铜版纸，双面四色，无特殊工艺，无需装订</p><div class="time">我 · 20:24</div></div>
+        </div>
+        <div class="msg">
+          <span class="who">AI</span>
+          <div class="bubble">
+            <p>已识别印刷品：<b>名片</b>。数量 <span class="v">1,200</span> 张；成品尺寸 <span class="v">90×54</span> mm；纸张/材料 <span class="v">250 g/m²</span> 铜版纸；印刷颜色 双面四色；表面工艺 无；装订/后道 无需装订。</p>
+            <p>还需要确认：什么时候需要拿到成品？</p>
+            <div class="time">印刷订单智能体 · 20:24</div>
+          </div>
+        </div>
+        <div class="quick"><span class="on">一周内</span><span>两周内</span><span>时间不限</span></div>
+        <div class="msg me">
+          <span class="who">我</span>
+          <div class="bubble"><p>一周内</p><div class="time">我 · 20:25</div></div>
+        </div>
+        <div class="msg">
+          <span class="who">AI</span>
+          <div class="bubble">
+            <p>交期已记录：<b>一周内</b>。方案比较已就绪：</p>
+            <p>经济方案 双面四色 250 g/m² 铜版纸，估算 <span class="v">¥168–214</span>；加急方案 三天出货，估算 <span class="v">¥232–286</span>。可以随时打开「比较方案」逐项核对。</p>
+            <div class="time">印刷订单智能体 · 20:25</div>
+          </div>
+        </div>
+      </div>
+      <form class="composer">
+        <div class="box">
+          <textarea placeholder="例如：门店开业发给路人，想印 500 张，下周要用……"></textarea>
+          <div class="bar">
+            <span class="hint"><b>上传文件</b> · 支持 PDF，单个文件不超过 20 MB</span>
+            <button class="send" type="button">发送 ↗</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <aside class="draft">
+      <div class="sheet">
+        <div class="sheet-head">
+          <div class="kicker">ORDER DRAFT</div>
+          <div class="row"><h2>订单草稿</h2><span class="state-chip">1 项待补充</span></div>
+          <div class="doc-links"><a>查看工艺方案</a><a>查看交接资料</a></div>
+        </div>
+        <div class="drop"><b>拖拽 PDF 到这里</b>或点击选择文件 · 背面文件</div>
+        <div class="fields">
+          <div class="group">
+            <h3><span class="no">01</span>订单概览</h3>
+            <div class="frow"><span class="k">印刷品</span><span class="v">名片</span></div>
+            <div class="frow"><span class="k">数量</span><span class="v">1,200 张</span></div>
+            <div class="frow"><span class="k">使用场景</span><span class="v unset">未设置</span></div>
+            <div class="frow pending-row"><span class="k">预算偏好</span><span class="v pending">待补充</span></div>
+          </div>
+          <div class="group">
+            <h3><span class="no">02</span>产品规格</h3>
+            <div class="frow"><span class="k">成品尺寸</span><span class="v">90×54 mm</span></div>
+            <div class="frow"><span class="k">纸张/材料</span><span class="v">250 g/m² 铜版纸</span></div>
+            <div class="frow"><span class="k">印刷颜色</span><span class="v">双面四色</span></div>
+            <div class="frow"><span class="k">表面工艺</span><span class="v">无特殊工艺</span></div>
+            <div class="frow"><span class="k">装订/后道</span><span class="v">无需装订</span></div>
+            <div class="frow"><span class="k">交期</span><span class="v">一周内</span></div>
+          </div>
+        </div>
+        <div class="estimate">
+          <span class="plan"><b>经济方案估算</b>双面四色 · 250 g/m² 铜版纸</span>
+          <span class="num">¥168<small>–214</small></span>
+        </div>
+        <div class="actions">
+          <button class="main" type="button">确认交接</button>
+          <button class="ghost" type="button">比较方案</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

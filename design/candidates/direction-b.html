@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方向 B · 蓝晒制版</title>
+<style>
+:root{
+  --paper:#f4f7f9;
+  --panel:#eaf0f4;
+  --card:#ffffff;
+  --ink:#1e3a5f;
+  --sub:#5b7a99;
+  --line:#c5d4df;
+  --amber:#b45309;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:1440px;height:1000px;overflow:hidden;}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:"PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;position:relative;
+}
+.mono{font-family:"JetBrains Mono","SF Mono",Consolas,monospace;}
+
+/* ---------- 页面四角裁切角标 ---------- */
+.crop{position:absolute;width:14px;height:14px;z-index:60;pointer-events:none;}
+.crop.tl{top:10px;left:10px;border-top:1px solid var(--ink);border-left:1px solid var(--ink);}
+.crop.tr{top:10px;right:10px;border-top:1px solid var(--ink);border-right:1px solid var(--ink);}
+.crop.bl{bottom:10px;left:10px;border-bottom:1px solid var(--ink);border-left:1px solid var(--ink);}
+.crop.br{bottom:10px;right:10px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink);}
+
+/* ---------- 图纸顶栏 ---------- */
+.topbar{
+  height:56px;flex:none;background:var(--panel);
+  border-bottom:1px solid var(--ink);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 42px;position:relative;z-index:5;
+}
+.brand{display:flex;align-items:center;gap:11px;}
+.po{
+  width:27px;height:27px;background:var(--ink);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10.5px;font-weight:600;letter-spacing:0.1em;flex:none;
+}
+.bt-cn{font-size:14.5px;font-weight:600;letter-spacing:0.14em;line-height:1;}
+.bt-en{font-size:8.5px;letter-spacing:0.3em;color:var(--sub);margin-top:5px;line-height:1;}
+.tb-mid{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  display:flex;align-items:center;gap:11px;
+}
+.reg{width:11px;height:11px;border:1px solid var(--ink);border-radius:50%;position:relative;flex:none;}
+.reg::after{content:"";position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;background:var(--ink);border-radius:50%;}
+.reg-line{width:150px;height:1px;background:var(--line);}
+.tb-right{display:flex;align-items:center;gap:14px;}
+.ord{font-size:10.5px;color:var(--sub);letter-spacing:0.05em;}
+.online{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:500;letter-spacing:0.08em;}
+.online i{width:7px;height:7px;border-radius:50%;background:var(--ink);box-shadow:0 0 0 3px rgba(30,58,95,0.14);}
+.tbtn{
+  height:30px;padding:0 14px;border:1px solid var(--ink);
+  display:flex;align-items:center;font-size:11.5px;letter-spacing:0.16em;
+  color:var(--ink);background:transparent;cursor:pointer;
+}
+.tbtn:hover{background:rgba(30,58,95,0.08);}
+
+/* ---------- 三栏骨架 ---------- */
+.main{flex:1;min-height:0;display:flex;}
+
+/* ---------- 左栏 ---------- */
+.left{
+  width:264px;flex:none;background:var(--panel);
+  border-right:1px solid var(--line);
+  padding:22px 16px 20px;display:flex;flex-direction:column;
+}
+.sec{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+.sec::before{content:"";width:5px;height:5px;background:var(--ink);flex:none;}
+.sec-t{
+  font-family:"JetBrains Mono","SF Mono",Consolas,monospace;
+  font-size:10.5px;letter-spacing:0.3em;color:var(--sub);white-space:nowrap;
+}
+.sec::after{content:"";flex:1;height:1px;background:var(--line);}
+
+.cur-card{background:var(--card);border:1px solid var(--line);padding:14px 14px 15px;margin-bottom:30px;}
+.cur-name{font-size:15px;font-weight:600;letter-spacing:0.02em;}
+.cur-name .mono{font-size:13.5px;}
+.cur-no{font-size:11px;color:var(--sub);letter-spacing:0.1em;margin-top:6px;}
+.cur-meter{display:flex;justify-content:space-between;align-items:baseline;margin-top:15px;font-size:10.5px;color:var(--sub);letter-spacing:0.14em;}
+.cur-meter .mono{font-size:11px;color:var(--ink);font-weight:600;letter-spacing:0.04em;}
+.cur-bar{height:3px;background:rgba(30,58,95,0.13);margin-top:7px;position:relative;}
+.cur-bar i{position:absolute;left:0;top:0;bottom:0;width:92%;background:var(--ink);}
+.cur-scale{height:5px;margin-top:5px;position:relative;}
+.cur-scale::before{content:"";position:absolute;left:0;right:0;top:0;bottom:0;
+  background:repeating-linear-gradient(to right,var(--line) 0,var(--line) 1px,transparent 1px,transparent 25%);}
+.cur-scale::after{content:"";position:absolute;right:0;top:0;bottom:0;width:1px;background:var(--line);}
+
+.journey{position:relative;margin-bottom:30px;}
+.journey::before{content:"";position:absolute;left:3px;top:14px;bottom:14px;width:1px;background:var(--line);}
+.j-item{position:relative;padding:12px 0 12px 18px;display:flex;gap:9px;}
+.j-item + .j-item{margin-top:4px;}
+.j-tick{position:absolute;left:0;top:23px;width:8px;height:1px;background:var(--ink);}
+.j-idx{font-size:10.5px;color:var(--sub);padding-top:3px;width:17px;flex:none;}
+.j-title{font-size:14px;font-weight:600;letter-spacing:0.05em;line-height:19px;}
+.j-note{font-size:11px;color:var(--sub);margin-top:4px;letter-spacing:0.03em;}
+.j-item.todo .j-tick{background:var(--line);}
+.j-item.todo .j-title{color:var(--sub);font-weight:500;}
+.j-item.cur{padding-left:31px;}
+.j-item.cur::before{content:"";position:absolute;left:20px;top:10px;bottom:10px;width:2px;background:var(--amber);}
+.j-item.cur .j-tick{width:12px;height:2px;top:22px;}
+.j-item.cur .j-idx{color:var(--ink);font-weight:600;}
+.j-item.cur .j-title{font-weight:700;}
+
+.arch-card{position:relative;background:var(--card);border:1px solid var(--line);padding:13px 12px 13px 17px;}
+.arch-card::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:3px;background:var(--ink);}
+.arch-card.is-archived::before{background:var(--line);}
+.arch-card + .arch-card{margin-top:10px;}
+.a-name{font-size:13px;font-weight:600;letter-spacing:0.02em;}
+.a-name .mono{font-size:12px;}
+.a-meta{display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;}
+.a-st{font-size:10.5px;color:var(--sub);letter-spacing:0.1em;}
+.a-meta .mono{font-size:10px;color:var(--sub);letter-spacing:0.03em;}
+
+.specs{margin-top:auto;border-top:1px solid var(--line);padding-top:15px;}
+.spec-box{border:1px dashed var(--sub);padding:11px 12px;font-size:12px;letter-spacing:0.02em;}
+.spec-box .mono{font-size:11px;}
+
+/* ---------- 中栏 · 对话区 ---------- */
+.center{flex:1;min-width:0;background:var(--paper);display:flex;flex-direction:column;}
+.c-head{padding:22px 40px 18px;border-bottom:1px solid var(--line);position:relative;}
+.c-head::after{content:"";position:absolute;left:40px;bottom:-2px;width:64px;height:3px;background:var(--ink);}
+.c-kicker{display:flex;align-items:center;gap:12px;font-size:10.5px;letter-spacing:0.34em;color:var(--sub);}
+.c-kicker::before{content:"";width:26px;height:1px;background:var(--sub);}
+.c-title{font-size:24px;font-weight:700;letter-spacing:0.06em;margin-top:9px;}
+.c-sub{font-size:12px;color:var(--sub);margin-top:8px;letter-spacing:0.06em;}
+
+.c-msgs{flex:1;display:flex;flex-direction:column;gap:15px;padding:20px 40px 10px;}
+.msg{display:flex;flex-direction:column;}
+.msg.ai{align-self:flex-start;align-items:flex-start;}
+.msg.me{align-self:flex-end;align-items:flex-end;}
+.meta{font-size:10px;color:var(--sub);letter-spacing:0.12em;margin-bottom:7px;}
+.meta .mono{font-size:9.5px;}
+.bubble-ai{
+  position:relative;background:var(--card);
+  border:1px solid var(--line);border-left:3px solid var(--ink);
+  padding:12px 18px;font-size:13.5px;line-height:1.78;letter-spacing:0.02em;
+  border-radius:2px;max-width:648px;
+}
+.bubble-ai::after{content:"";position:absolute;top:-4px;right:-4px;width:9px;height:9px;border-top:1px solid var(--ink);border-right:1px solid var(--ink);}
+.bubble-ai .mono{font-size:12.5px;}
+.bubble-ai b{font-weight:700;}
+.bubble-ai .ask{font-weight:600;}
+.bubble-me{
+  background:var(--ink);color:var(--paper);
+  padding:10px 16px;font-size:13px;line-height:1.72;letter-spacing:0.02em;
+  border-radius:2px;max-width:560px;
+}
+.bubble-me .mono{font-size:12px;}
+.quick{display:flex;gap:9px;margin-top:10px;padding-left:2px;}
+.pill{
+  border:1px solid var(--ink);color:var(--ink);background:var(--card);
+  border-radius:999px;padding:5px 15px;font-size:12px;letter-spacing:0.06em;
+}
+.pill.sel{border:1.5px solid var(--amber);color:var(--amber);font-weight:600;}
+.pill.sel::before{content:"▸\00a0";}
+
+.c-input{padding:8px 40px 20px;}
+.in-box{position:relative;background:var(--card);border:1px solid var(--ink);padding:11px 16px 10px 22px;}
+.in-box::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--amber);}
+.in-ph{font-size:13px;color:var(--sub);letter-spacing:0.02em;}
+.in-ph .mono{font-size:12px;}
+.in-row{display:flex;justify-content:space-between;align-items:center;margin-top:11px;}
+.up{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--sub);letter-spacing:0.04em;}
+.up .mono,.in-ph .mono{color:var(--sub);}
+.send{
+  background:var(--ink);color:#fff;font-size:12.5px;letter-spacing:0.22em;text-indent:0.11em;
+  padding:9px 16px 9px 18px;border-radius:2px;cursor:pointer;
+}
+.send:hover{background:#2a4d78;}
+
+/* ---------- 右栏 · 图纸标注边栏 ---------- */
+.right{width:380px;flex:none;background:var(--panel);border-left:1px solid var(--line);padding:16px;display:flex;}
+.sheet{
+  flex:1;background:var(--card);border:1px solid var(--ink);
+  position:relative;padding:16px 16px 15px;display:flex;flex-direction:column;
+  background-image:
+    repeating-linear-gradient(0deg,rgba(30,58,95,0.055) 0px,rgba(30,58,95,0.055) 1px,transparent 1px,transparent 26px),
+    repeating-linear-gradient(90deg,rgba(30,58,95,0.055) 0px,rgba(30,58,95,0.055) 1px,transparent 1px,transparent 26px);
+}
+.pc{position:absolute;width:11px;height:11px;pointer-events:none;}
+.pc.tl{top:-6px;left:-6px;border-top:1px solid var(--ink);border-left:1px solid var(--ink);}
+.pc.tr{top:-6px;right:-6px;border-top:1px solid var(--ink);border-right:1px solid var(--ink);}
+.pc.bl{bottom:-6px;left:-6px;border-bottom:1px solid var(--ink);border-left:1px solid var(--ink);}
+.pc.br{bottom:-6px;right:-6px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink);}
+
+.sh-head{border-bottom:1px solid var(--line);padding-bottom:13px;}
+.sh-kicker{font-size:9.5px;letter-spacing:0.32em;color:var(--sub);}
+.sh-row{display:flex;justify-content:space-between;align-items:center;margin-top:8px;}
+.sh-title{font-size:17px;font-weight:700;letter-spacing:0.08em;}
+.chip{
+  display:flex;align-items:center;gap:6px;background:var(--card);
+  border:1px solid var(--amber);color:var(--amber);
+  font-size:10px;padding:3px 8px;letter-spacing:0.1em;border-radius:2px;
+}
+.chip i{width:5px;height:5px;background:var(--amber);flex:none;}
+.chip .mono{font-size:9.5px;}
+
+.doc{width:12px;height:15px;border:1px solid var(--ink);background:var(--card);position:relative;flex:none;}
+.doc::before{content:"";position:absolute;left:2.5px;right:2.5px;top:4px;height:1px;background:var(--sub);
+  box-shadow:0 3px 0 var(--sub),0 6px 0 var(--sub);}
+
+.entries{display:flex;flex-direction:column;gap:7px;margin-top:10px;}
+.entry{
+  display:flex;align-items:center;gap:9px;background:var(--card);
+  border:1px solid var(--line);padding:8px 12px;
+  font-size:12px;font-weight:500;letter-spacing:0.05em;
+}
+.entry:hover{border-color:var(--ink);}
+.chev{margin-left:auto;width:6px;height:6px;border-top:1px solid var(--sub);border-right:1px solid var(--sub);transform:rotate(45deg);margin-right:3px;flex:none;}
+
+.drop{
+  margin-top:9px;border:1px dashed var(--sub);padding:7px 11px;
+  display:flex;align-items:center;gap:9px;
+}
+.drop-t{font-size:10.5px;color:var(--sub);letter-spacing:0.02em;white-space:nowrap;}
+.drop-t .mono{font-size:10px;}
+.file-chip{
+  display:flex;align-items:center;gap:6px;background:var(--card);
+  border:1px solid var(--ink);padding:3px 8px;
+  font-size:10px;color:var(--ink);letter-spacing:0.06em;flex:none;
+}
+
+/* 字段组：尺寸标注线 */
+.group{position:relative;border-top:1px solid var(--ink);margin-top:17px;padding-top:10px;}
+.group::before,.group::after{content:"";position:absolute;top:-5px;width:1px;height:11px;background:var(--ink);}
+.group::before{left:0;}
+.group::after{right:0;}
+.g-label{
+  position:absolute;top:-7px;left:50%;transform:translateX(-50%);
+  background:var(--card);padding:0 9px;
+  font-size:9.5px;letter-spacing:0.26em;color:var(--sub);white-space:nowrap;
+}
+.f-row{
+  position:relative;display:flex;justify-content:space-between;align-items:center;
+  background:var(--card);border:1px solid var(--line);padding:7px 11px 7px 14px;
+}
+.f-row + .f-row{margin-top:6px;}
+.f-row::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:3px;}
+.f-row.ok::before{background:var(--ink);}
+.f-row.na::before{background:var(--line);}
+.f-row.todo::before{background:var(--amber);}
+.f-k{font-size:12px;font-weight:500;letter-spacing:0.05em;}
+.f-v{font-size:11px;letter-spacing:0.02em;text-align:right;}
+.f-row.na .f-v{color:var(--sub);}
+.f-row.todo .f-v{color:var(--amber);font-weight:600;}
+
+.est{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;}
+.est-meta{font-size:10.5px;color:var(--sub);letter-spacing:0.04em;}
+.est-meta .mono{font-size:10px;}
+.est-price{display:flex;align-items:baseline;gap:10px;margin-top:6px;}
+.est-arrow{font-size:13px;color:var(--sub);}
+.est-num{font-size:24px;font-weight:600;letter-spacing:0.02em;}
+.est-tol{position:relative;margin-top:5px;padding-left:11px;font-size:10px;color:var(--sub);letter-spacing:0.1em;}
+.est-tol::before{content:"";position:absolute;left:2px;top:-1px;width:1px;height:11px;background:var(--line);}
+
+.actions{display:flex;gap:10px;margin-top:12px;}
+.btn-pri,.btn-sec{
+  flex:1;height:36px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;letter-spacing:0.28em;text-indent:0.28em;border-radius:2px;cursor:pointer;
+}
+.btn-pri{background:var(--ink);color:#fff;}
+.btn-pri:hover{background:#2a4d78;}
+.btn-sec{border:1px solid var(--ink);color:var(--ink);background:var(--card);}
+.btn-sec:hover{background:rgba(30,58,95,0.06);}
+</style>
+</head>
+<body>
+
+<i class="crop tl"></i><i class="crop tr"></i><i class="crop bl"></i><i class="crop br"></i>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="po mono">PO</div>
+    <div class="bt">
+      <div class="bt-cn">印刷订单智能体</div>
+      <div class="bt-en mono">PRINT OPERATIONS AGENT</div>
+    </div>
+  </div>
+  <div class="tb-mid">
+    <span class="reg"></span>
+    <span class="reg-line"></span>
+    <span class="reg"></span>
+  </div>
+  <div class="tb-right">
+    <span class="ord mono">订单 b7fbc3d64e12 · 版本 13</span>
+    <span class="online"><i></i>智能体在线</span>
+    <span class="tbtn">接口设置</span>
+    <span class="tbtn">新建订单</span>
+  </div>
+</header>
+
+<div class="main">
+
+  <aside class="left">
+    <div class="sec"><span class="sec-t">当前订单</span></div>
+    <div class="cur-card">
+      <div class="cur-name">名片 · <span class="mono">1,200</span> 张</div>
+      <div class="cur-no mono">b7fbc3d64e12</div>
+      <div class="cur-meter"><span>信息度</span><span class="mono">92%</span></div>
+      <div class="cur-bar"><i></i></div>
+      <div class="cur-scale"></div>
+    </div>
+
+    <div class="sec"><span class="sec-t">旅程刻度</span></div>
+    <div class="journey">
+      <div class="j-item done">
+        <i class="j-tick"></i>
+        <div class="j-idx mono">01</div>
+        <div class="j-txt">
+          <div class="j-title">收集需求</div>
+          <div class="j-note">告诉智能体印什么</div>
+        </div>
+      </div>
+      <div class="j-item cur">
+        <i class="j-tick"></i>
+        <div class="j-idx mono">02</div>
+        <div class="j-txt">
+          <div class="j-title">选择方案</div>
+          <div class="j-note">比较方案与成本</div>
+        </div>
+      </div>
+      <div class="j-item todo">
+        <i class="j-tick"></i>
+        <div class="j-idx mono">03</div>
+        <div class="j-txt">
+          <div class="j-title">核对与交接</div>
+          <div class="j-note">确认规格与未决项</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec"><span class="sec-t">订单归档</span></div>
+    <div class="arch-card is-editing">
+      <div class="a-name">名片 · <span class="mono">1,200</span> 张</div>
+      <div class="a-meta"><span class="a-st">草稿</span><span class="mono">10月24日 20:24</span></div>
+    </div>
+    <div class="arch-card is-archived">
+      <div class="a-name">宣传册 · <span class="mono">100</span> 份</div>
+      <div class="a-meta"><span class="a-st">已确认</span><span class="mono">10月15日 14:51</span></div>
+    </div>
+
+    <div class="specs">
+      <div class="sec"><span class="sec-t">常用规格</span></div>
+      <div class="spec-box">名片 · <span class="mono">300 g/m²</span> 白卡 · <span class="mono">500</span> 张</div>
+    </div>
+  </aside>
+
+  <section class="center">
+    <div class="c-head">
+      <div class="c-kicker mono">02 · COMPARE</div>
+      <h1 class="c-title">比较方案与成本</h1>
+      <div class="c-sub">当前产品：名片 · 交期已记录：一周内</div>
+    </div>
+
+    <div class="c-msgs">
+      <div class="msg me">
+        <div class="meta">我 · <span class="mono">20:24</span></div>
+        <div class="bubble-me">我要印<span class="mono">1200</span>张名片，成品尺寸<span class="mono">9×5.4cm</span>，<span class="mono">250g</span>铜版纸，双面四色，无特殊工艺，无需装订</div>
+      </div>
+
+      <div class="msg ai">
+        <div class="meta">印刷订单智能体 · <span class="mono">20:24</span></div>
+        <div class="bubble-ai">已识别印刷品：名片。数量 <span class="mono">1,200</span> 张；成品尺寸 <span class="mono">90×54 mm</span>；纸张/材料 <span class="mono">250 g/m²</span> 铜版纸；印刷颜色 双面四色；表面工艺 无；装订/后道 无需装订。<br><span class="ask">还需要确认：什么时候需要拿到成品？</span></div>
+        <div class="quick">
+          <span class="pill sel">一周内</span>
+          <span class="pill">两周内</span>
+          <span class="pill">时间不限</span>
+        </div>
+      </div>
+
+      <div class="msg me">
+        <div class="meta">我 · <span class="mono">20:25</span></div>
+        <div class="bubble-me">一周内</div>
+      </div>
+
+      <div class="msg ai">
+        <div class="meta">印刷订单智能体 · <span class="mono">20:25</span></div>
+        <div class="bubble-ai">交期已记录：一周内。方案比较已就绪：<b>经济方案</b> 双面四色 <span class="mono">250 g/m²</span> 铜版纸，估算 <span class="mono">¥168–214</span>；<br><b>加急方案</b> 三天出货，估算 <span class="mono">¥232–286</span>。可以随时打开"比较方案"逐项核对。</div>
+      </div>
+    </div>
+
+    <div class="c-input">
+      <div class="in-box">
+        <div class="in-ph">例如：门店开业发给路人，想印 <span class="mono">500</span> 张，下周要用……</div>
+        <div class="in-row">
+          <span class="up"><i class="doc"></i>上传文件 · 支持 <span class="mono">PDF</span>，单个文件不超过 <span class="mono">20 MB</span></span>
+          <span class="send">发送 ↗</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="right">
+    <div class="sheet">
+      <i class="pc tl"></i><i class="pc tr"></i><i class="pc bl"></i><i class="pc br"></i>
+
+      <div class="sh-head">
+        <div class="sh-kicker mono">ORDER DRAFT</div>
+        <div class="sh-row">
+          <div class="sh-title">订单草稿</div>
+          <span class="chip"><i></i><span class="mono">1</span> 项待补充</span>
+        </div>
+      </div>
+
+      <div class="entries">
+        <div class="entry"><i class="doc"></i><span>查看工艺方案</span><i class="chev"></i></div>
+        <div class="entry"><i class="doc"></i><span>查看交接资料</span><i class="chev"></i></div>
+      </div>
+
+      <div class="drop">
+        <span class="drop-t">拖拽 <span class="mono">PDF</span> 到这里 · 或点击选择文件 ·</span>
+        <span class="file-chip"><i class="doc"></i>背面文件</span>
+      </div>
+
+      <div class="group">
+        <span class="g-label mono">01 · 订单概览</span>
+        <div class="f-row ok"><span class="f-k">印刷品</span><span class="f-v mono">名片</span></div>
+        <div class="f-row ok"><span class="f-k">数量</span><span class="f-v mono">1,200 张</span></div>
+        <div class="f-row na"><span class="f-k">使用场景</span><span class="f-v">未设置</span></div>
+        <div class="f-row todo"><span class="f-k">预算偏好</span><span class="f-v">待补充</span></div>
+      </div>
+
+      <div class="group">
+        <span class="g-label mono">02 · 产品规格</span>
+        <div class="f-row ok"><span class="f-k">成品尺寸</span><span class="f-v mono">90×54 mm</span></div>
+        <div class="f-row ok"><span class="f-k">纸张/材料</span><span class="f-v mono">250 g/m² 铜版纸</span></div>
+        <div class="f-row ok"><span class="f-k">印刷颜色</span><span class="f-v mono">双面四色</span></div>
+        <div class="f-row ok"><span class="f-k">表面工艺</span><span class="f-v mono">无特殊工艺</span></div>
+        <div class="f-row ok"><span class="f-k">装订/后道</span><span class="f-v mono">无需装订</span></div>
+        <div class="f-row ok"><span class="f-k">交期</span><span class="f-v mono">一周内</span></div>
+      </div>
+
+      <div class="est">
+        <div class="est-meta">经济方案估算 · 双面四色 · <span class="mono">250 g/m²</span> 铜版纸</div>
+        <div class="est-price"><span class="est-arrow mono">→</span><span class="est-num mono">¥168–214</span></div>
+        <div class="est-tol mono">±23 · 经济方案</div>
+      </div>
+
+      <div class="actions">
+        <span class="btn-pri">确认交接</span>
+        <span class="btn-sec">比较方案</span>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+</body>
+</html>

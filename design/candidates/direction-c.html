@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方向 C · 校样批注台</title>
+<style>
+:root{
+  --desk:#f1f1ee;
+  --paper:#ffffff;
+  --ink:#141414;
+  --sub:#6b6b6b;
+  --hair:#d9d9d4;
+  --hi:#f5d90a;
+  --red:#b3261e;
+  --faint:#9a9a93;
+  --dash:#bfbfb8;
+  --tagline:#b5b5ae;
+  --hei:"PingFang SC","Microsoft YaHei",sans-serif;
+  --kai:"Kaiti SC","STKaiti","KaiTi",serif;
+  --mono:Consolas,"SF Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1440px;height:1000px;overflow:hidden}
+body{font-family:var(--hei);color:var(--ink);background:var(--desk);-webkit-font-smoothing:antialiased}
+.num{font-family:var(--mono);font-size:.92em}
+
+/* ---------- 顶部细条 ---------- */
+.topbar{height:44px;background:var(--paper);border-bottom:1px solid var(--hair);display:flex;align-items:center;padding:0 22px 0 20px}
+.tb-left{display:flex;align-items:center;gap:10px}
+.po{width:22px;height:22px;background:var(--ink);color:#fff;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1px;display:grid;place-items:center;padding-left:1px}
+.tb-title{font-size:14px;font-weight:800;letter-spacing:1px}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:22px}
+.tb-order{font-family:var(--mono);font-size:12px}
+.tb-nav{font-size:12px;color:var(--sub);letter-spacing:.5px}
+.tb-status{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sub)}
+.tb-status .dot{font-size:9px;line-height:1;color:var(--ink)}
+.tb-journey{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:.5px;border-left:1px solid var(--hair);padding-left:18px}
+
+/* ---------- 主区 ---------- */
+.main{position:relative;display:flex;height:956px}
+.desk{flex:1;background:var(--desk)}
+.sheet{width:680px;height:100%;margin-left:170px;background:var(--paper);box-shadow:0 2px 12px rgba(0,0,0,.06);padding:40px 52px 32px 56px;display:flex;flex-direction:column}
+
+.doc-title{font-size:30px;line-height:40px;font-weight:900;letter-spacing:2px;margin-bottom:12px}
+.doc-meta{display:flex;align-items:center;gap:14px;height:26px;margin-bottom:26px}
+.meta-id{font-family:var(--mono);font-size:12px}
+.stamp{display:inline-block;font-size:11px;font-weight:700;letter-spacing:2px;line-height:1;color:var(--red);border:1.5px solid var(--red);background:var(--paper);padding:4px 7px 4px 9px;transform:rotate(-2deg)}
+
+.sec-head{display:flex;align-items:center;gap:10px;height:20px;margin-bottom:14px}
+.sec-head .no{font-family:var(--mono);font-size:11px;color:var(--sub)}
+.sec-head .st{font-size:15px;font-weight:800;letter-spacing:5px}
+.sec-head .rule{flex:1;height:1px;background:var(--hair)}
+.sec-2{margin-top:24px}
+
+.field{display:flex;align-items:baseline;margin-bottom:11px}
+.f-label{flex:none;width:80px;font-size:12px;line-height:20px;color:var(--sub);letter-spacing:1px}
+.f-value{flex:1;text-align:right;font-size:15px;line-height:20px;padding-bottom:8px;border-bottom:1px dashed var(--dash)}
+.f-value.empty{color:var(--faint)}
+.caret{font-family:var(--mono);font-size:13px;font-weight:700;position:relative;top:-1px;margin-right:3px}
+.hl{background:var(--hi);padding:2px 4px}
+
+/* 文档行 → 页边批注 连线：锚定在待决字段行上 */
+.lead-row{position:relative}
+.lead-row::after{content:"";position:absolute;left:100%;top:14px;width:352px;height:1px;background:rgba(20,20,20,.45)}
+.lead-row::before{content:"";position:absolute;left:calc(100% + 348px);top:12.5px;width:4px;height:4px;background:var(--ink)}
+
+.pdfslot{width:480px;margin:22px auto 0;border:1px dashed var(--dash);padding:12px 16px;text-align:center;font-size:13px;line-height:20px;letter-spacing:.5px;color:var(--sub)}
+
+.doc-foot{margin-top:auto;border-top:1px solid var(--hair);padding-top:20px}
+.est{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:20px}
+.est-price{font-family:var(--mono);font-size:24px;font-weight:700;line-height:30px}
+.est-desc{font-size:12px;color:var(--sub)}
+.actions{display:flex;align-items:center;gap:20px}
+.btn-main{flex:1;height:46px;background:var(--ink);color:#fff;border:none;font-family:var(--hei);font-size:15px;font-weight:700;letter-spacing:3px}
+.link-compare{font-size:13px;color:var(--ink);text-decoration:underline;text-underline-offset:5px}
+
+/* ---------- 页边批注栏 ---------- */
+.margin-col{width:300px;flex:none;position:relative;background:#f7f7f3;border-left:1px solid var(--hair);padding:26px 22px 18px 24px}
+.mn-head{font-family:var(--mono);font-size:10px;line-height:13px;letter-spacing:2.5px;color:var(--sub);margin-bottom:16px}
+.note{margin-bottom:12px}
+.n-meta{display:flex;align-items:center;gap:6px;height:17px;margin-bottom:5px}
+.tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:2px;line-height:1}
+.tag-cust{background:var(--ink);color:#fff;padding:3px 4px 3px 6px}
+.tag-ai{border:1px solid var(--tagline);color:var(--sub);padding:2px 3px 2px 5px}
+.pilcrow{font-family:var(--mono);font-size:12px;line-height:1;color:var(--faint)}
+.n-time{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--faint)}
+.n-body{font-family:var(--kai);font-size:13px;line-height:21px;color:var(--ink)}
+.n-body.ai{color:var(--sub)}
+
+.proof-block{margin-top:20px}
+.proof-note{font-family:var(--kai);font-size:13px;line-height:21px;color:var(--ink);white-space:nowrap;margin-bottom:14px}
+.quick{display:flex;gap:10px;align-items:baseline;font-family:var(--kai);font-size:13px;line-height:22px;color:var(--ink);margin-bottom:16px}
+.opt{padding:1px 3px}
+.opt-sel{background:var(--hi)}
+
+.mn-bottom{position:absolute;left:24px;right:22px;bottom:18px}
+.mn-input{display:block;width:100%;background:transparent;border:none;border-top:1px solid var(--ink);font-family:var(--kai);font-size:13px;line-height:18px;padding:9px 0 7px;color:var(--ink);caret-color:var(--ink);outline:none}
+.mn-input::placeholder{color:var(--faint);opacity:1}
+.mn-foot{margin-top:12px;font-family:var(--kai);font-size:12px;color:var(--faint)}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="tb-left">
+    <span class="po">PO</span>
+    <span class="tb-title">印刷订单交接单</span>
+  </div>
+  <div class="tb-right">
+    <span class="tb-order">订单 b7fbc3d64e12 · 版本 13</span>
+    <span class="tb-nav">历史 · 2 单</span>
+    <span class="tb-nav">工具</span>
+    <span class="tb-status"><span class="dot">●</span>智能体在线</span>
+    <span class="tb-journey">01 ✓ · 02 • · 03 ○</span>
+  </div>
+</header>
+
+<main class="main">
+  <section class="desk">
+    <article class="sheet">
+      <h1 class="doc-title">印刷订单交接单</h1>
+      <div class="doc-meta">
+        <span class="meta-id">订单 b7fbc3d64e12 · 版本 13 · 信息度 92%</span>
+        <span class="stamp">2 项待补充</span>
+      </div>
+
+      <section class="sec">
+        <div class="sec-head"><span class="no">01</span><span class="st">订单概览</span><span class="rule"></span></div>
+        <div class="field"><span class="f-label">印刷品</span><span class="f-value">名片</span></div>
+        <div class="field"><span class="f-label">数量</span><span class="f-value"><span class="num">1,200</span> 张</span></div>
+        <div class="field"><span class="f-label">使用场景</span><span class="f-value empty">未设置</span></div>
+        <div class="field lead-row"><span class="f-label">预算偏好</span><span class="f-value"><span class="caret">^</span><span class="hl">待补充</span></span></div>
+      </section>
+
+      <section class="sec sec-2">
+        <div class="sec-head"><span class="no">02</span><span class="st">产品规格</span><span class="rule"></span></div>
+        <div class="field"><span class="f-label">成品尺寸</span><span class="f-value"><span class="num">90×54 mm</span></span></div>
+        <div class="field"><span class="f-label">纸张/材料</span><span class="f-value"><span class="num">250 g/m²</span> 铜版纸</span></div>
+        <div class="field"><span class="f-label">印刷颜色</span><span class="f-value">双面四色</span></div>
+        <div class="field"><span class="f-label">表面工艺</span><span class="f-value">无特殊工艺</span></div>
+        <div class="field"><span class="f-label">装订/后道</span><span class="f-value">无需装订</span></div>
+        <div class="field"><span class="f-label">交期</span><span class="f-value">一周内</span></div>
+      </section>
+
+      <div class="pdfslot">拖拽 PDF 到这里 · 或点击选择文件 · 背面文件</div>
+
+      <footer class="doc-foot">
+        <div class="est">
+          <span class="est-price">¥168–214</span>
+          <span class="est-desc">经济方案 · 双面四色 · <span class="num">250 g/m²</span> 铜版纸</span>
+        </div>
+        <div class="actions">
+          <button class="btn-main" type="button">确认交接，生成交接单</button>
+          <a class="link-compare" href="#">比较方案</a>
+        </div>
+      </footer>
+    </article>
+  </section>
+
+  <aside class="margin-col">
+    <div class="mn-head">MARGIN NOTES · 对话批注</div>
+
+    <div class="note">
+      <div class="n-meta"><span class="tag tag-cust">客户</span><span class="n-time">20:24</span></div>
+      <div class="n-body">我要印<span class="num">1200</span>张名片，成品尺寸<span class="num">9×5.4cm</span>，<span class="num">250g</span>铜版纸，双面四色，无特殊工艺，无需装订</div>
+    </div>
+
+    <div class="note">
+      <div class="n-meta"><span class="pilcrow">¶</span><span class="tag tag-ai">智能体</span><span class="n-time">20:24</span></div>
+      <div class="n-body ai">已识别印刷品：名片。数量 <span class="num">1,200</span> 张；成品尺寸 <span class="num">90×54 mm</span>；纸张/材料 <span class="num">250 g/m²</span> 铜版纸；印刷颜色 双面四色；表面工艺 无；装订/后道 无需装订。还需要确认：什么时候需要拿到成品？</div>
+    </div>
+
+    <div class="proof-block">
+      <div class="proof-note">还缺预算偏好，客户没提，先标出来。</div>
+      <div class="quick"><span class="opt opt-sel">［一周内］</span><span class="opt">［两周内］</span><span class="opt">［时间不限］</span></div>
+
+      <div class="note">
+        <div class="n-meta"><span class="tag tag-cust">客户</span><span class="n-time">20:25</span></div>
+        <div class="n-body">一周内</div>
+      </div>
+
+      <div class="note">
+        <div class="n-meta"><span class="pilcrow">¶</span><span class="tag tag-ai">智能体</span><span class="n-time">20:25</span></div>
+        <div class="n-body ai">交期已记录：一周内。方案比较已就绪：经济方案 双面四色 <span class="num">250 g/m²</span> 铜版纸，估算 <span class="num">¥168–214</span>；加急方案 三天出货，估算 <span class="num">¥232–286</span>。可以随时打开「比较方案」逐项核对。</div>
+      </div>
+    </div>
+
+    <div class="mn-bottom">
+      <input class="mn-input" type="text" placeholder="＋ 记录一条批注……">
+      <div class="mn-foot">常用规格：名片 · <span class="num">300 g/m²</span> 白卡 · <span class="num">500</span> 张</div>
+    </div>
+  </aside>
+</main>
+
+</body>
+</html>
