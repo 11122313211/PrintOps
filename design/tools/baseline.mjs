@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outDir = path.join(root, 'design', 'baseline');
+const outDir = path.join(root, 'design', 'after');
 const syntheticCard = '我要印1200张名片，成品尺寸9×5.4cm，250g铜版纸，双面四色，无特殊工艺，无需装订';
 
 const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -48,6 +48,7 @@ try {
   const page = await desktop.newPage();
   await page.goto(appURL);
   await page.locator('#message-input').waitFor({state: 'visible'});
+  await page.waitForTimeout(450);
   await page.screenshot({path: `${outDir}/01-desktop-first-use.png`});
   await send(page);
   await page.waitForTimeout(400);
