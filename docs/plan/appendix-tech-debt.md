@@ -10,6 +10,8 @@
 | --- | --- | --- | --- | --- | --- |
 | TD-02 | agent.py 多产品拆分路径 | 单产品阶段积累的 fieldMeta（provenance）在拆分为 items 时不迁移到 `items.{itemId}.*` 键，只在顶层键留存 | 项级置信度展示与路径 10 的徽标体系在"首条多产品消息"场景下缺数据 | 路径 7（S7-04）实现时一并评估迁移方案 | 未开始 |
 | TD-07 | tools/secret_scan.py | 模式仍以"形态匹配"为主，无法识别无前缀的自定义凭据（如 `Bearer xxx` 变量拼接） | 理论漏报 | 待排期（增加 Bearer/Authorization 头形态） | 未开始 |
+| TD-23 | agent.py chat() 焦点短路 + 否定块 | 带产品项焦点的"第1项不要300g铜版纸"因 focus-only 短路完全不生效；带已有焦点的"不要300g铜版纸"清两处 fieldMeta 但 item 值不清（否定块持有的 items 局部变量在 `_update_item` 重建列表后失效） | 项级否定取消材料在焦点场景丢语义 | 待排期（1.4 候选；G03 项级否定语义专项） | 未开始 |
+| TD-24 | perception_candidates.py 子句窗口 | 中文全角标点经 NFKC 展开后子句边界判断被跳过，多产品消息的 fieldMeta evidence quote 常退化为整句 | 依据抽屉原文摘录不够精确 | 待排期（低优先级；证据可追溯性打磨） | 未开始 |
 | TD-21 | agent.py `_set_field_meta` / paper 镜像 | 确认 `paper` 只解决 paper 冲突：镜像参数（如名片材质 `productSpecs.cardStock`）值同步但 fieldMeta/冲突不随确认升级，低置信替换后确认会留下一条未解决的镜像冲突 | 冲突面板残留一条"待确认"，需要用户再确认一次镜像字段 | 待排期（确认 paper 时对 linked spec 字段同步 `_set_field_meta`；1.4 候选） | 未开始 |
 
 ## B.2 行为一致性
@@ -55,6 +57,9 @@
 | TD-11 | 全量重绘导致输入焦点丢失与选中态闪跳 | 1.3.0 | 四个重绘函数补 `data-field-key` 焦点/选区契约（order:/item: 键，展开状态跨重绘保留），`ui_focus` 新增保持用例 |
 | TD-19 | 前后端各自维护错误文案，无单一来源 | 1.3.0 | 持续错误卡与设置页文案收敛到 `PrintOpsJourney.ERROR_TEXTS`（状态桶 + 已映射 code，未知 code 回落），已有文案一字未变 |
 | TD-20 | 尺寸别名归一测试哈希顺序敏感偶发（PYTHONHASHSEED flaky） | 1.3.0 | `_update_order` 冲突记录循环改 `sorted(changed)` / `sorted(set(before)\|set(after))` 确定性顺序；测试按 `field == 'paper'` 定位目标冲突而非 `conflicts[-1]`；7 个 seed 复跑全绿。镜像确认残留另立 TD-21 |
+| TD-02 | 单产品依据拆分时不迁入 items 键，"首条多产品消息"项级依据缺失 | 1.3.0 后 | `_migrate_single_product_provenance` 按 mention 归属把顶层产品作用域依据原样迁入 `items.{itemId}.*`（只补空不降级、审计条目改名用重建副本）；同轮发现并修复重述品名拆出空壳重复项（一条消息 N 个产品恰 N 项）。MCP 低置信契约随迁移更新为项级路径 |
+| TD-21 | 确认 paper 不升级镜像品类参数的依据与冲突 | 1.3.0 后 | `_set_field_meta` 按 `paper_spec_key` 传播确认到镜像 spec 字段（同 source/置信/evidence，不重写镜像值），镜像冲突随确认一次解决；显式改过镜像字段时不传播 |
+| TD-20b | runtime_hardening 请求日志断言全量跑偶发双计数 | 1.3.0 后 | 共享 logger 混入其他测试后台流量；断言改按 `requestId={id}` 过滤后计数（该请求恰好记录一次），多 seed 全量验证 |
 
 ## B.6 登记流程
 
