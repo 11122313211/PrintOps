@@ -2775,10 +2775,10 @@ PrintOpsJourney.init({
 setupSplitters();
 applyLayout();
 autoGrowComposer();
-bootstrap();
-setSidebarCollapsed(sidebarCollapsed);
-setHighContrast(localStorage.getItem("printops_theme") === "high-contrast");
 // TD-06: every listed id was checked before wiring; report whatever is still
 // missing in one message so a single broken element cannot hide behind the
 // first TypeError.
 reportMissingBindings();
+bootstrap();
+setSidebarCollapsed(sidebarCollapsed);
+setHighContrast(localStorage.getItem("printops_theme") === "high-contrast");

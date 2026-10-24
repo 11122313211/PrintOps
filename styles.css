@@ -1056,3 +1056,7 @@ html[data-theme="high-contrast"] .integration-grid article small { color: #222; 
 .compare-filter { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
 .different-option-value > th { color: var(--red-deep); }
 .file-state-heading > small { display: block; color: var(--ink-soft); line-height: 1.6; }
+
+/* TD-06: bootstrap id assertion banner. Rendered only when the binding section
+   finds expected elements missing; names every absent id in one place. */
+.binding-banner { position: relative; z-index: 80; padding: var(--space-3) var(--space-4); color: var(--paper-light); background: var(--red-deep); border-bottom: 2px solid var(--red-bright); font-size: var(--font-sm); line-height: 1.6; overflow-wrap: anywhere; }
