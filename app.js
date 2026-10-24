@@ -1202,10 +1202,6 @@ function makeTooltipIcon(text, className, ariaLabel = text, glyph = "?") {
   return icon;
 }
 
-function renderFieldList(selector, keys, editable = false) {
-  const list = $(selector);
-  list.innerHTML = "";
-  keys.forEach((key) => {
 // TD-11: order-pane re-renders rebuild these lists wholesale, so a snapshot
 // arriving while the user is typing would otherwise drop focus and caret.
 // Same contract as journey.js renderReview: record the focused input by its
@@ -1233,9 +1229,13 @@ function restoreFieldFocus(root) {
   return true;
 }
 
+function renderFieldList(selector, keys, editable = false) {
+  const list = $(selector);
+  captureFieldFocus(list);
+  list.innerHTML = "";
+  keys.forEach((key) => {
     const current = getFieldValue(key);
     const perItem = key === "deadline" && (state.order?.items?.length || 0) > 1 && !hasValue(current);
-  captureFieldFocus(list);
     const missing = !perItem && !hasValue(current) && isRequiredField(key);
     const row = document.createElement("div");
     row.className = `field-row ${missing ? "required-missing" : ""} ${updatedOrderKeys.has(key) ? "updated" : ""}`;
@@ -1255,11 +1255,11 @@ function restoreFieldFocus(root) {
       valueNode.placeholder = missing ? "待补充" : "未设置";
       valueNode.setAttribute("aria-label", labels[key]);
       valueNode.dataset.fieldPath = key;
+      valueNode.dataset.fieldKey = `order:${key}`;
       valueNode.addEventListener("change", () => commitFieldEdit(key, valueNode));
     } else {
       valueNode = document.createElement("span");
       valueNode.className = `field-value ${hasValue(current) ? "" : "empty"}`;
-      valueNode.dataset.fieldKey = `order:${key}`;
       valueNode.textContent = current || (perItem ? "按产品分别设置" : missing ? "待补充" : "未设置");
     }
     valueWrap.append(valueNode);
@@ -1274,11 +1274,11 @@ function restoreFieldFocus(root) {
     row.append(label, valueWrap);
     list.appendChild(row);
   });
+  restoreFieldFocus(list);
 }
 
 function commitFieldEdit(key, input) {
   let value = input.value.trim();
-  restoreFieldFocus(list);
   try { if (key === "size") value = PrintOpsWorkbench.manualDimension(value); }
   catch (error) { showToast(error.message, "error"); return; }
   const current = getFieldValue(key);
@@ -1305,23 +1305,23 @@ function renderDimensionRows(selector, order = state.order) {
     valueNode.value = current;
     valueNode.setAttribute("aria-label", label);
     valueNode.dataset.fieldPath = `dimensions.${key}`;
+    valueNode.dataset.fieldKey = `order:dimensions.${key}`;
     valueNode.addEventListener("change", () => changeField(reviewField(`dimensions.${key}`), valueNode.value.trim() ? "set" : "clear", valueNode.value.trim()));
     const meta = fieldProvenance(`dimensions.${key}`);
     const valueWrap = document.createElement("span");
     valueWrap.className = "field-value-wrap";
-    valueNode.dataset.fieldKey = `order:dimensions.${key}`;
     valueWrap.append(valueNode);
     if (meta?.status === "pending_confirmation" || Number(meta?.confidence) < .75) valueWrap.append(PrintOpsJourney.button("确认此值", () => changeField(reviewField(`dimensions.${key}`), "confirm"), "field-confirm"));
     row.append(labelNode, valueWrap);
     list.appendChild(row);
   });
+  // Completes a restore renderFieldList left pending: the focused dimension
+  // input only exists again once these rows are re-appended.
+  restoreFieldFocus(list);
 }
 
 async function updateMultiItemField(index, key, value, kind = "base") {
   const path = kind === "spec" ? `productSpecs.${key}` : kind === "dimension" ? `dimensions.${key}` : key;
-  // Completes a restore renderFieldList left pending: the focused dimension
-  // input only exists again once these rows are re-appended.
-  restoreFieldFocus(list);
   await changeField(reviewField(path, state.order.items[index]?.itemId), String(value || "").trim() ? "set" : "clear", String(value || "").trim());
 }
 
@@ -1331,18 +1331,18 @@ function renderMultiProductItems() {
   if (!panel || !root) return;
   const items = Array.isArray(state.order?.items) ? state.order.items.filter((item) => item && typeof item === "object") : [];
   panel.hidden = items.length < 2;
-  root.innerHTML = "";
-  if (items.length < 2) return;
-  $("#multi-product-count").textContent = `${items.length} 项`;
-  const itemFields = [
   // TD-11: same-order re-renders keep the user's expanded item/editor state
   // and the focused editor input, mirroring journey.js renderReview.
   const sameOrder = root.dataset.orderId === String(sessionId || "");
   const itemOpenStates = new Map(sameOrder ? [...root.querySelectorAll(".multi-product-item")].map((node) => [node.dataset.itemId, node.open]) : []);
   const editorOpenStates = new Map(sameOrder ? [...root.querySelectorAll(".multi-product-item")].map((node) => [node.dataset.itemId, node.querySelector(".multi-product-editor")?.open === true]) : []);
   captureFieldFocus(root);
-    ["quantity", "数量"], ["pages", "页数"], ["paper", "材料"],
+  root.innerHTML = "";
   root.dataset.orderId = String(sessionId || "");
+  if (items.length < 2) return;
+  $("#multi-product-count").textContent = `${items.length} 项`;
+  const itemFields = [
+    ["quantity", "数量"], ["pages", "页数"], ["paper", "材料"],
     ["printing", "颜色"], ["finishing", "表面工艺"], ["binding", "后道/装订"], ["deadline", "交期"], ["uploadedFile", "文件"]
   ];
   const specLabels = {
@@ -1437,11 +1437,11 @@ function renderMultiProductItems() {
     }
     const editor = document.createElement("details");
     editor.className = "multi-product-editor";
+    editor.open = editorOpenStates.get(details.dataset.itemId) === true;
     const editorSummary = document.createElement("summary");
     editorSummary.textContent = "直接编辑本项";
     editor.appendChild(editorSummary);
     const editorGrid = document.createElement("div");
-    editor.open = editorOpenStates.get(details.dataset.itemId) === true;
     editorGrid.className = "multi-product-editor-grid";
     const baseFields = [
       ["quantity", "数量"], ["size", "成品尺寸"], ["pages", "页数"], ["paper", "纸张/材料"],
@@ -1462,11 +1462,11 @@ function renderMultiProductItems() {
       input.value = currentValue || "";
       input.dataset.fieldPath = kind === "spec" ? `productSpecs.${key}` : kind === "dimension" ? `dimensions.${key}` : key;
       input.dataset.itemId = item.itemId;
+      input.dataset.fieldKey = `item:${item.itemId ?? index}:${input.dataset.fieldPath}`;
       input.placeholder = required ? `请填写${label}` : label;
       input.addEventListener("change", () => updateMultiItemField(index, key, input.value, kind));
       field.append(name, input);
       const review = reviewField(input.dataset.fieldPath, item.itemId);
-      input.dataset.fieldKey = `item:${item.itemId ?? index}:${input.dataset.fieldPath}`;
       if (review.provenance) field.append(PrintOpsWorkbench.evidence(review.provenance));
       if (review.status === "pending_confirmation") field.append(PrintOpsJourney.button("确认此值", () => changeField(review, "confirm"), "field-confirm"));
       editorGrid.appendChild(field);
@@ -1489,11 +1489,11 @@ function renderMultiProductItems() {
     details.appendChild(body);
     root.appendChild(details);
   });
+  restoreFieldFocus(root);
 }
 
 function syncDraftGroups(hasProduct, hasProcessData) {
   const recommendations = (state.options || []).length > 0;
-  restoreFieldFocus(root);
   if (state.order.productType !== renderedProduct) {
     renderedProduct = state.order.productType || "";
     $("[data-draft-group='overview']").open = true;
@@ -1710,11 +1710,11 @@ function renderParameterForm(profile) {
   $("#product-profile-summary").textContent = profile.summary || "先按通用字段收集订单信息。";
   $("#product-profile-readiness").textContent = profile.missing?.length ? `还有 ${profile.missing.length} 项待补充` : "品类参数已填写";
   const root = $("#parameter-form");
+  captureFieldFocus(root);
   root.innerHTML = "";
   if (!state.order?.productType) return;
   const title = document.createElement("p");
   title.className = "parameter-form-title";
-  captureFieldFocus(root);
   title.textContent = `${profile.category || "产品"}参数`;
   root.appendChild(title);
   (profile.parameters || []).forEach((item) => {
@@ -1739,11 +1739,11 @@ function renderParameterForm(profile) {
     input.setAttribute("aria-describedby", `parameter-hint-${item.key}`);
     if (!item.filled && item.required) input.setAttribute("aria-invalid", "true");
     input.dataset.fieldPath = `productSpecs.${item.key}`;
+    input.dataset.fieldKey = `order:productSpecs.${item.key}`;
     input.addEventListener("change", () => changeField(reviewField(input.dataset.fieldPath), input.value.trim() ? "set" : "clear", input.value.trim()));
     input.addEventListener("input", () => {
       if (!input.value.trim()) return;
       field.classList.remove("missing");
-    input.dataset.fieldKey = `order:productSpecs.${item.key}`;
       input.removeAttribute("aria-invalid");
     });
     const hint = document.createElement("small");
@@ -1755,11 +1755,11 @@ function renderParameterForm(profile) {
     if (provenance?.status === "pending_confirmation" || Number(provenance?.confidence) < .75) field.append(PrintOpsJourney.button("确认此值", () => changeField(reviewField(input.dataset.fieldPath), "confirm"), "field-confirm"));
     root.appendChild(field);
   });
+  restoreFieldFocus(root);
 }
 
 function updateDraftToggle() {
   const groups = [...document.querySelectorAll(".draft-group")];
-  restoreFieldFocus(root);
   const allOpen = groups.every((group) => group.open);
   const button = $("#toggle-draft-groups");
   button.dataset.allOpen = String(allOpen);
