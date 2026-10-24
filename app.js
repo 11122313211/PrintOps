@@ -803,8 +803,10 @@ function activateSettingsView(view = "overview", {focus = false} = {}) {
   panels.forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== next; });
   const catalogPanel = $("#settings-panel-products .catalog-panel");
   const toolPanel = $("#settings-panel-tools .tool-panel");
+  const toolStatsPanel = $("#tool-stats-panel");
   if (catalogPanel) catalogPanel.open = next === "products";
   if (toolPanel) toolPanel.open = next === "tools";
+  if (toolStatsPanel) toolStatsPanel.open = next === "tools";
   if (focus) nav?.querySelector(`[data-settings-view="${next}"]`)?.focus();
 }
 

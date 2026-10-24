@@ -505,9 +505,12 @@ def main() -> int:
         print(f"平均响应耗时：{report['averageResponseMs']}ms")
         for tag, stats in report["tagReport"].items():
             print(f"- [{tag}] {stats['cases']} 例，字段准确率 {stats['fieldAccuracy']}%")
-        if report["toolReport"]:
+        # Tolerate report-shaped stubs (see tests/test_real_corpus_eval.py)
+        # that predate the toolReport key.
+        tool_report = report.get("toolReport") or {}
+        if tool_report:
             print("工具调用汇总（runTrace 终态事件）：")
-            for name, entry in report["toolReport"].items():
+            for name, entry in tool_report.items():
                 print(f"- {name}：{entry['calls']} 次，成功率 {entry['successRate']}%，平均 {entry['avgMs']}ms")
         for label, suite in (("合成语料", report), ("真实语料", real_report)):
             if suite is None:
