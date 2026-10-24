@@ -2066,8 +2066,89 @@ function renderTools() {
   });
 }
 
-function renderCatalog(categories = []) {
-  const root = $("#catalog-list");
+function fmtMs(value) {
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))}ms` : "—";
+}
+
+// v1.3.0 tool-call statistics in the settings toolbox. The render only ever
+// uses createElement/textContent — no HTML interpolation — so server-side
+// tool names and reasons cannot inject markup.
+function renderToolStats(stats) {
+  const list = $("#tool-stats-list");
+  const empty = $("#tool-stats-empty");
+  if (!list) return;
+  const totals = (stats && typeof stats === "object" && stats.totals) || {};
+  const tools = Array.isArray(stats?.tools) ? stats.tools : [];
+  const reasons = Array.isArray(stats?.blockedReasons) ? stats.blockedReasons : [];
+  list.innerHTML = "";
+  const isEmpty = !tools.length && !Number(totals.calls);
+  if (empty) {
+    empty.hidden = !isEmpty;
+    empty.textContent = "暂无记录：发送需求或点击工具后，这里会显示调用量、成功率与耗时。";
+  }
+  if (isEmpty) return;
+  const summary = document.createElement("div");
+  summary.className = "run-event run-ok";
+  const summaryBody = document.createElement("span");
+  summaryBody.className = "run-event-body";
+  const summaryTitle = document.createElement("strong");
+  summaryTitle.textContent = `全部工具 · ${Number(totals.calls) || 0} 次`;
+  const summaryDetail = document.createElement("small");
+  summaryDetail.textContent = `成功率 ${Number(totals.successRate) || 0}% · 平均 ${fmtMs(totals.avgMs)} · p95 ${fmtMs(totals.p95Ms)}`;
+  summaryBody.append(summaryTitle, summaryDetail);
+  summary.append(document.createElement("span"), summaryBody);
+  list.append(summary);
+  tools.forEach((tool) => {
+    const row = document.createElement("div");
+    row.className = `run-event run-${tool.blocked || tool.failed || tool.rejected ? "fallback" : "ok"}`;
+    const body = document.createElement("span");
+    body.className = "run-event-body";
+    const title = document.createElement("strong");
+    title.textContent = `${tool.tool || "未知工具"} · ${Number(tool.calls) || 0} 次`;
+    const detail = document.createElement("small");
+    const parts = [`成功率 ${Number(tool.successRate) || 0}%`, `平均 ${fmtMs(tool.avgMs)}`, `p95 ${fmtMs(tool.p95Ms)}`];
+    if (Number(tool.blocked)) parts.push(`阻断 ${tool.blocked}`);
+    if (Number(tool.failed)) parts.push(`失败 ${tool.failed}`);
+    if (Number(tool.rejected)) parts.push(`拒绝 ${tool.rejected}`);
+    detail.textContent = parts.join(" · ");
+    body.append(title, detail);
+    row.append(document.createElement("span"), body);
+    list.append(row);
+  });
+  if (reasons.length) {
+    const row = document.createElement("div");
+    row.className = "run-event run-fallback";
+    const body = document.createElement("span");
+    body.className = "run-event-body";
+    const title = document.createElement("strong");
+    title.textContent = "阻断原因";
+    const detail = document.createElement("small");
+    detail.textContent = reasons
+      .slice(0, 6)
+      .map((item) => `${item.reason || "未注明"} ×${Number(item.count) || 0}`)
+      .join("、");
+    body.append(title, detail);
+    row.append(document.createElement("span"), body);
+    list.append(row);
+  }
+}
+
+async function loadToolStats() {
+  const list = $("#tool-stats-list");
+  const empty = $("#tool-stats-empty");
+  if (!list) return;
+  try {
+    renderToolStats(await api("/api/tools/stats?window=30d", undefined, "GET"));
+  } catch (error) {
+    list.innerHTML = "";
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "调用统计读取失败，请稍后重新打开设置。";
+    }
+  }
+}
+
+function renderCatalog(categories = []) {  const root = $("#catalog-list");
   if (!root) return;
   root.innerHTML = "";
   const countLabel = `${categories.length} 类`;
@@ -2649,6 +2730,9 @@ on("settings-button", "click", () => {
   renderSettings({ llm: llmSettings });
   $("#settings-dialog").showModal();
   activateSettingsView("overview", {focus: true});
+  // Tool-call telemetry refreshes on every settings open; failures keep the
+  // previous content and degrade to an inline note.
+  loadToolStats();
 });
 on("settings-cancel", "click", () => $("#settings-dialog").close());
 on("settings-dialog", "close", () => { settingsAbort?.abort(); settingsAbort = null; });
