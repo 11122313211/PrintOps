@@ -1608,291 +1608,9 @@ class Agent:
 
         # An optional LLM planner improves language understanding while field
         # patches and tool names remain constrained by this Agent.
-        if self.planner and getattr(self.planner, "enabled", False):
-            # A new chat owns a fresh bounded receipt ledger.  The previous
-            # run remains available through runHistory/lastRun, but must not
-            # contaminate this provider request.
-            self._planner_tool_receipts = []
-            self.state["toolReceipts"] = []
-            initial_validation = validate_order(self.state["order"])
-            self.trace.append(f"调用模型：{getattr(self.planner, 'model', '已配置模型')}")
-            self._event("plan", "started", "请求模型规划", model=getattr(self.planner, "model", "已配置模型"))
-            plan = self._ask_planner(text, tool_ledger=[])
-            last_tool_name = ""
-            last_tool_response: dict[str, Any] | None = None
-            last_receipt: dict[str, Any] | None = None
-            final_reply = ""
-            seen_signatures: set[str] = set()
-            tool_call_count = 0
-            limit_reached = False
-            forced_names: list[str] = []
-            post_force_synthesized = False
-
-            def plan_calls(value: dict[str, Any]) -> list[tuple[str, dict[str, Any], dict[str, Any] | None]]:
-                """Normalize JSON and native batch calls to one local shape."""
-                raw_batch = value.get("_nativeToolCalls")
-                calls: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
-                if isinstance(raw_batch, list):
-                    for raw_call in raw_batch:
-                        if not isinstance(raw_call, dict):
-                            continue
-                        function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
-                        name = function.get("name")
-                        arguments = function.get("arguments", {})
-                        if isinstance(name, str) and isinstance(arguments, dict):
-                            calls.append((name.strip(), arguments, raw_call))
-                if calls:
-                    return calls
-                raw_tool = value.get("tool")
-                if not isinstance(raw_tool, dict):
-                    return []
-                name = raw_tool.get("name")
-                arguments = raw_tool.get("arguments", {})
-                if not isinstance(name, str) or not isinstance(arguments, dict):
-                    return []
-                native = value.get("_nativeToolCall") if isinstance(value.get("_nativeToolCall"), dict) else None
-                return [(name.strip(), arguments, native)]
-
-            # The model gets at most three local tool rounds.  A batch response
-            # consumes one budget unit per call and is executed sequentially so
-            # state-dependent tools observe the prior call's result.
-            while isinstance(plan, dict):
-                if not isinstance(plan, dict):
-                    break
-                changed = self._apply_plan(plan)
-                if changed:
-                    self._mark_planner_receipts_stale()
-                calls = plan_calls(plan)
-                if not calls:
-                    if plan.get("reply"):
-                        final_reply = str(plan["reply"])
-                    break
-                batch_native_calls: list[dict[str, Any]] = []
-                stop_loop = False
-                for tool_name, arguments, native_call in calls:
-                    if tool_call_count >= MAX_PLANNER_TOOL_ROUNDS:
-                        limit_reached = True
-                        self._event("plan", "limit_reached", "工具调用达到本轮上限",
-                                    tool=tool_name, round=tool_call_count + 1)
-                        stop_loop = True
-                        break
-                    item_index = arguments.get("itemIndex") if isinstance(arguments, dict) else None
-                    tool_signature = self._planner_signature(
-                        tool_name, arguments, item_index if isinstance(item_index, int) else None)
-                    if tool_signature in seen_signatures:
-                        self.trace.append(f"阻止重复工具：{tool_name}")
-                        self._event("plan", "duplicate_blocked", "模型重复请求相同工具和状态",
-                                    tool=tool_name, round=tool_call_count + 1,
-                                    signature=tool_signature[:512])
-                        self._planner_tool_receipts.append({
-                            "name": tool_name[:128], "arguments": self._planner_compact_value(arguments),
-                            "result": {"status": "duplicate_blocked"}, "status": "duplicate_blocked",
-                            "inputFingerprint": self._planner_order_fingerprint(
-                                item_index if isinstance(item_index, int) else None),
-                            "stale": False, "round": tool_call_count + 1,
-                            "runId": self.run_id or None, "signature": tool_signature[:512],
-                        })
-                        self._planner_tool_receipts = self._planner_fit_receipts(self._planner_tool_receipts)
-                        self.state["toolReceipts"] = deepcopy(self._planner_tool_receipts)
-                        stop_loop = True
-                        break
-                    seen_signatures.add(tool_signature)
-                    last_tool_name = tool_name
-                    call_id = ""
-                    if isinstance(native_call, dict) and isinstance(native_call.get("id"), str):
-                        call_id = native_call["id"]
-                        batch_native_calls.append(deepcopy(native_call))
-                    self._event("plan", "tool_requested", "模型请求调用工具", tool=tool_name,
-                                round=tool_call_count + 1, callId=call_id or None)
-                    try:
-                        last_tool_response, last_receipt = self._planner_dispatch_tool(
-                            tool_name, arguments, call_id=call_id,
-                            round_number=tool_call_count + 1, signature=tool_signature)
-                    except Exception as error:
-                        # _planner_dispatch_tool normally catches this; keep a
-                        # second boundary in case a custom gateway fails while
-                        # constructing its response.
-                        self._event("tool", "error", "工具结果封装失败", tool=tool_name,
-                                    error=error.__class__.__name__)
-                        last_tool_response = {"messages": ["工具执行失败，未完成该步骤。"],
-                                              "toolResult": {"status": "error", "reason": "tool_exception"}}
-                        last_receipt = None
-                    tool_call_count += 1
-                    if last_receipt is not None:
-                        self._mark_planner_receipts_stale()
-                    result_value = last_tool_response.get("toolResult") if isinstance(last_tool_response, dict) else None
-                    if stop_loop:
-                        break
-                if stop_loop:
-                    break
-                if tool_call_count >= MAX_PLANNER_TOOL_ROUNDS:
-                    limit_reached = True
-                    self._event("plan", "limit_reached", "工具调用达到本轮上限",
-                                round=tool_call_count)
-                    break
-                self.trace.append(f"调用模型总结工具结果：{getattr(self.planner, 'model', '已配置模型')}")
-                plan = self._ask_planner(
-                    text,
-                    {"name": last_tool_name, "result": result_value},
-                    tool_call=(batch_native_calls[-1] if batch_native_calls else None),
-                    tool_calls=batch_native_calls or None,
-                    tool_ledger=self._planner_tool_receipts,
-                )
-
-            # A hard round limit is followed by one tools-disabled synthesis
-            # request.  This keeps the final answer model-generated without
-            # allowing an unbounded continuation loop.
-            if limit_reached:
-                self.trace.append(f"调用模型最终总结：{getattr(self.planner, 'model', '已配置模型')}")
-                synthesis = self._ask_planner(
-                    text,
-                    {"name": last_tool_name, "result": (last_tool_response or {}).get("toolResult")},
-                    tool_call=None, tool_calls=None,
-                    tool_ledger=self._planner_tool_receipts,
-                    allow_tools=False, synthesis=True,
-                )
-                if isinstance(synthesis, dict):
-                    # This turn has tools disabled and is summary-only.  A late
-                    # patch would make every completed observation stale with
-                    # no remaining re-plan budget, so it is deliberately not
-                    # applied.
-                    if synthesis.get("patch"):
-                        self._event("plan", "patch_ignored", "最终总结中的字段更新未应用")
-                    if synthesis.get("reply"):
-                        final_reply = str(synthesis["reply"])
-
-            self._mark_planner_receipts_stale()
-            required_names = self._planner_required_tools(text, initial_validation)
-            # A bare production request gets one automatic recommendation when
-            # the provider emitted only text/validation.  If it already chose a
-            # different successful domain observation, keep that choice unless
-            # the user explicitly asked for a scheme (compound intents remain
-            # hard obligations).
-            explicit_recommendation = self._planner_intent(text, "recommendation")
-            if required_names == ["recommend_processes"] and not explicit_recommendation \
-                    and any(item.get("name") != "validate_order" and not item.get("stale")
-                            and item.get("status") not in {
-                                "error", "invalid_arguments", "duplicate_blocked", "blocked",
-                            } for item in self._planner_tool_receipts):
-                required_names = []
-            for required_name in required_names:
-                # A readiness gate already performs the same authoritative
-                # validation before returning its blocked receipt.  Do not
-                # replace that useful blocking result with a second generic
-                # validation response.
-                if required_name == "validate_order" and any(
-                        isinstance(item.get("result"), dict)
-                        and item.get("result", {}).get("status") == "blocked"
-                        and item.get("result", {}).get("reason") == "order_not_ready"
-                        for item in self._planner_tool_receipts):
-                    continue
-                if self._planner_tool_satisfied(required_name):
-                    continue
-                latest_required = self._planner_latest_receipt(required_name)
-                retryable_failure = bool(
-                    latest_required and not latest_required.get("stale")
-                    and latest_required.get("status") in {
-                        "error", "invalid_arguments", "duplicate_blocked",
-                    }
-                )
-                # A deterministic blocked result is already authoritative.  A
-                # malformed/error attempt is not: retry it once with canonical
-                # local arguments below.
-                if (latest_required and not latest_required.get("stale")
-                        and not retryable_failure):
-                    continue
-                forced_arguments: dict[str, Any] = {}
-                if required_name == "explain_print_term":
-                    forced_arguments = {"question": text}
-                elif required_name in {
-                        "estimate_price", "recommend_processes", "prepare_handoff",
-                        "match_supplier_capability", "request_supplier_quote"}:
-                    active_index = self._item_index()
-                    if active_index is not None:
-                        forced_arguments = {"itemIndex": active_index}
-                if required_name in {
-                        "request_supplier_quote", "match_supplier_capability", "prepare_handoff"}:
-                    platform = self.state["order"].get("platform")
-                    if platform:
-                        forced_arguments["platformId"] = platform
-                self._event("plan", "fallback_tool", "模型未请求必要工具，按本地意图执行",
-                            tool=required_name)
-                forced_signature = self._planner_signature(required_name, forced_arguments)
-                if forced_signature in seen_signatures and not retryable_failure:
-                    self._event("plan", "duplicate_blocked", "必要工具调用与本轮已有状态重复",
-                                tool=required_name)
-                    continue
-                seen_signatures.add(forced_signature)
-                forced_response, forced_receipt = self._planner_dispatch_tool(
-                    required_name, forced_arguments, round_number=tool_call_count + 1,
-                    signature=forced_signature)
-                tool_call_count += 1
-                last_tool_name, last_tool_response, last_receipt = required_name, forced_response, forced_receipt
-                forced_names.append(required_name)
-                self._mark_planner_receipts_stale()
-
-            # A forced recovery call happens after the provider's earlier reply,
-            # so that reply cannot be considered grounded in the new results.
-            # Give capable adapters one tools-disabled turn over the complete
-            # bounded ledger.  Older/custom planners may return None, in which
-            # case the deterministic ledger summary below remains authoritative.
-            if forced_names:
-                self.trace.append(f"调用模型最终总结：{getattr(self.planner, 'model', '已配置模型')}")
-                synthesis = self._ask_planner(
-                    text,
-                    {"name": last_tool_name,
-                     "result": (last_tool_response or {}).get("toolResult")},
-                    tool_call=None, tool_calls=None,
-                    tool_ledger=self._planner_tool_receipts,
-                    allow_tools=False, synthesis=True,
-                )
-                if isinstance(synthesis, dict):
-                    if synthesis.get("patch"):
-                        self._event("plan", "patch_ignored", "最终总结中的字段更新未应用")
-                    if synthesis.get("reply"):
-                        final_reply = str(synthesis["reply"])
-                        post_force_synthesized = True
-
-            if getattr(self.planner, "last_error", "") and not any(
-                    event.get("step") == "plan" and event.get("status") == "fallback"
-                    for event in self.run_events):
-                self.trace.append(f"模型回退：{self.planner.last_error}")
-                self._event("plan", "fallback", self.planner.last_error)
-
-            if last_tool_response is not None:
-                result = last_tool_response.get("toolResult")
-                stale_latest = bool(last_receipt and last_receipt.get("stale"))
-                forced_latest = [self._planner_latest_receipt(name) for name in forced_names]
-                forced_failure = any(
-                    receipt and not receipt.get("stale") and receipt.get("status") in {
-                        "blocked", "error", "invalid_arguments", "duplicate_blocked",
-                    }
-                    for receipt in forced_latest
-                )
-                if final_reply.strip() and (not forced_names or post_force_synthesized) \
-                        and not stale_latest and not forced_failure:
-                    message = final_reply.strip()
-                else:
-                    message = self._planner_receipts_fallback()
-                self._remember("assistant", message)
-                self._save()
-                ledger_options, ledger_handoff = self._planner_artifacts()
-                options = ledger_options or last_tool_response.get("options", [])
-                handoff_value = ledger_handoff or last_tool_response.get("handoff")
-                if isinstance(handoff_value, dict) and handoff_value.get("status") != "ready":
-                    handoff_value = None
-                return self._result(
-                    [message], options=options,
-                    handoff=handoff_value, tool_result=result,
-                )
-            if final_reply:
-                self.state["stage"] = "collect" if self._missing_fields() else "recommend"
-                self._remember("assistant", final_reply)
-                self._save()
-                return self._result([final_reply])
-            if getattr(self.planner, "last_error", ""):
-                self.trace.append(f"模型回退：{self.planner.last_error}")
-                self._event("plan", "fallback", self.planner.last_error)
+        planned = self._planner_chat_turn(text)
+        if planned is not None:
+            return planned
 
         if self._is_explanation_request(text):
             result = self._call("explain_print_term", text)
@@ -1966,6 +1684,301 @@ class Agent:
         self._remember("assistant", message)
         self._save()
         return self._result([message], quick, options, tool_result=tool_result)
+
+    def _planner_chat_turn(self, text: str) -> dict[str, Any] | None:
+        """Run one bounded provider-planner turn; ``None`` falls through to local intents.
+
+        The planner may consume its tool rounds and still leave the turn to the
+        deterministic intent dispatch when it produced neither a tool result nor
+        a usable reply.
+        """
+        if not (self.planner and getattr(self.planner, "enabled", False)):
+            return None
+        # A new chat owns a fresh bounded receipt ledger.  The previous
+        # run remains available through runHistory/lastRun, but must not
+        # contaminate this provider request.
+        self._planner_tool_receipts = []
+        self.state["toolReceipts"] = []
+        initial_validation = validate_order(self.state["order"])
+        self.trace.append(f"调用模型：{getattr(self.planner, 'model', '已配置模型')}")
+        self._event("plan", "started", "请求模型规划", model=getattr(self.planner, "model", "已配置模型"))
+        plan = self._ask_planner(text, tool_ledger=[])
+        last_tool_name = ""
+        last_tool_response: dict[str, Any] | None = None
+        last_receipt: dict[str, Any] | None = None
+        final_reply = ""
+        seen_signatures: set[str] = set()
+        tool_call_count = 0
+        limit_reached = False
+        forced_names: list[str] = []
+        post_force_synthesized = False
+
+        def plan_calls(value: dict[str, Any]) -> list[tuple[str, dict[str, Any], dict[str, Any] | None]]:
+            """Normalize JSON and native batch calls to one local shape."""
+            raw_batch = value.get("_nativeToolCalls")
+            calls: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
+            if isinstance(raw_batch, list):
+                for raw_call in raw_batch:
+                    if not isinstance(raw_call, dict):
+                        continue
+                    function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                    name = function.get("name")
+                    arguments = function.get("arguments", {})
+                    if isinstance(name, str) and isinstance(arguments, dict):
+                        calls.append((name.strip(), arguments, raw_call))
+            if calls:
+                return calls
+            raw_tool = value.get("tool")
+            if not isinstance(raw_tool, dict):
+                return []
+            name = raw_tool.get("name")
+            arguments = raw_tool.get("arguments", {})
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                return []
+            native = value.get("_nativeToolCall") if isinstance(value.get("_nativeToolCall"), dict) else None
+            return [(name.strip(), arguments, native)]
+
+        # The model gets at most three local tool rounds.  A batch response
+        # consumes one budget unit per call and is executed sequentially so
+        # state-dependent tools observe the prior call's result.
+        while isinstance(plan, dict):
+            if not isinstance(plan, dict):
+                break
+            changed = self._apply_plan(plan)
+            if changed:
+                self._mark_planner_receipts_stale()
+            calls = plan_calls(plan)
+            if not calls:
+                if plan.get("reply"):
+                    final_reply = str(plan["reply"])
+                break
+            batch_native_calls: list[dict[str, Any]] = []
+            stop_loop = False
+            for tool_name, arguments, native_call in calls:
+                if tool_call_count >= MAX_PLANNER_TOOL_ROUNDS:
+                    limit_reached = True
+                    self._event("plan", "limit_reached", "工具调用达到本轮上限",
+                                tool=tool_name, round=tool_call_count + 1)
+                    stop_loop = True
+                    break
+                item_index = arguments.get("itemIndex") if isinstance(arguments, dict) else None
+                tool_signature = self._planner_signature(
+                    tool_name, arguments, item_index if isinstance(item_index, int) else None)
+                if tool_signature in seen_signatures:
+                    self.trace.append(f"阻止重复工具：{tool_name}")
+                    self._event("plan", "duplicate_blocked", "模型重复请求相同工具和状态",
+                                tool=tool_name, round=tool_call_count + 1,
+                                signature=tool_signature[:512])
+                    self._planner_tool_receipts.append({
+                        "name": tool_name[:128], "arguments": self._planner_compact_value(arguments),
+                        "result": {"status": "duplicate_blocked"}, "status": "duplicate_blocked",
+                        "inputFingerprint": self._planner_order_fingerprint(
+                            item_index if isinstance(item_index, int) else None),
+                        "stale": False, "round": tool_call_count + 1,
+                        "runId": self.run_id or None, "signature": tool_signature[:512],
+                    })
+                    self._planner_tool_receipts = self._planner_fit_receipts(self._planner_tool_receipts)
+                    self.state["toolReceipts"] = deepcopy(self._planner_tool_receipts)
+                    stop_loop = True
+                    break
+                seen_signatures.add(tool_signature)
+                last_tool_name = tool_name
+                call_id = ""
+                if isinstance(native_call, dict) and isinstance(native_call.get("id"), str):
+                    call_id = native_call["id"]
+                    batch_native_calls.append(deepcopy(native_call))
+                self._event("plan", "tool_requested", "模型请求调用工具", tool=tool_name,
+                            round=tool_call_count + 1, callId=call_id or None)
+                try:
+                    last_tool_response, last_receipt = self._planner_dispatch_tool(
+                        tool_name, arguments, call_id=call_id,
+                        round_number=tool_call_count + 1, signature=tool_signature)
+                except Exception as error:
+                    # _planner_dispatch_tool normally catches this; keep a
+                    # second boundary in case a custom gateway fails while
+                    # constructing its response.
+                    self._event("tool", "error", "工具结果封装失败", tool=tool_name,
+                                error=error.__class__.__name__)
+                    last_tool_response = {"messages": ["工具执行失败，未完成该步骤。"],
+                                          "toolResult": {"status": "error", "reason": "tool_exception"}}
+                    last_receipt = None
+                tool_call_count += 1
+                if last_receipt is not None:
+                    self._mark_planner_receipts_stale()
+                result_value = last_tool_response.get("toolResult") if isinstance(last_tool_response, dict) else None
+                if stop_loop:
+                    break
+            if stop_loop:
+                break
+            if tool_call_count >= MAX_PLANNER_TOOL_ROUNDS:
+                limit_reached = True
+                self._event("plan", "limit_reached", "工具调用达到本轮上限",
+                            round=tool_call_count)
+                break
+            self.trace.append(f"调用模型总结工具结果：{getattr(self.planner, 'model', '已配置模型')}")
+            plan = self._ask_planner(
+                text,
+                {"name": last_tool_name, "result": result_value},
+                tool_call=(batch_native_calls[-1] if batch_native_calls else None),
+                tool_calls=batch_native_calls or None,
+                tool_ledger=self._planner_tool_receipts,
+            )
+
+        # A hard round limit is followed by one tools-disabled synthesis
+        # request.  This keeps the final answer model-generated without
+        # allowing an unbounded continuation loop.
+        if limit_reached:
+            self.trace.append(f"调用模型最终总结：{getattr(self.planner, 'model', '已配置模型')}")
+            synthesis = self._ask_planner(
+                text,
+                {"name": last_tool_name, "result": (last_tool_response or {}).get("toolResult")},
+                tool_call=None, tool_calls=None,
+                tool_ledger=self._planner_tool_receipts,
+                allow_tools=False, synthesis=True,
+            )
+            if isinstance(synthesis, dict):
+                # This turn has tools disabled and is summary-only.  A late
+                # patch would make every completed observation stale with
+                # no remaining re-plan budget, so it is deliberately not
+                # applied.
+                if synthesis.get("patch"):
+                    self._event("plan", "patch_ignored", "最终总结中的字段更新未应用")
+                if synthesis.get("reply"):
+                    final_reply = str(synthesis["reply"])
+
+        self._mark_planner_receipts_stale()
+        required_names = self._planner_required_tools(text, initial_validation)
+        # A bare production request gets one automatic recommendation when
+        # the provider emitted only text/validation.  If it already chose a
+        # different successful domain observation, keep that choice unless
+        # the user explicitly asked for a scheme (compound intents remain
+        # hard obligations).
+        explicit_recommendation = self._planner_intent(text, "recommendation")
+        if required_names == ["recommend_processes"] and not explicit_recommendation \
+                and any(item.get("name") != "validate_order" and not item.get("stale")
+                        and item.get("status") not in {
+                            "error", "invalid_arguments", "duplicate_blocked", "blocked",
+                        } for item in self._planner_tool_receipts):
+            required_names = []
+        for required_name in required_names:
+            # A readiness gate already performs the same authoritative
+            # validation before returning its blocked receipt.  Do not
+            # replace that useful blocking result with a second generic
+            # validation response.
+            if required_name == "validate_order" and any(
+                    isinstance(item.get("result"), dict)
+                    and item.get("result", {}).get("status") == "blocked"
+                    and item.get("result", {}).get("reason") == "order_not_ready"
+                    for item in self._planner_tool_receipts):
+                continue
+            if self._planner_tool_satisfied(required_name):
+                continue
+            latest_required = self._planner_latest_receipt(required_name)
+            retryable_failure = bool(
+                latest_required and not latest_required.get("stale")
+                and latest_required.get("status") in {
+                    "error", "invalid_arguments", "duplicate_blocked",
+                }
+            )
+            # A deterministic blocked result is already authoritative.  A
+            # malformed/error attempt is not: retry it once with canonical
+            # local arguments below.
+            if (latest_required and not latest_required.get("stale")
+                    and not retryable_failure):
+                continue
+            forced_arguments: dict[str, Any] = {}
+            if required_name == "explain_print_term":
+                forced_arguments = {"question": text}
+            elif required_name in {
+                    "estimate_price", "recommend_processes", "prepare_handoff",
+                    "match_supplier_capability", "request_supplier_quote"}:
+                active_index = self._item_index()
+                if active_index is not None:
+                    forced_arguments = {"itemIndex": active_index}
+            if required_name in {
+                    "request_supplier_quote", "match_supplier_capability", "prepare_handoff"}:
+                platform = self.state["order"].get("platform")
+                if platform:
+                    forced_arguments["platformId"] = platform
+            self._event("plan", "fallback_tool", "模型未请求必要工具，按本地意图执行",
+                        tool=required_name)
+            forced_signature = self._planner_signature(required_name, forced_arguments)
+            if forced_signature in seen_signatures and not retryable_failure:
+                self._event("plan", "duplicate_blocked", "必要工具调用与本轮已有状态重复",
+                            tool=required_name)
+                continue
+            seen_signatures.add(forced_signature)
+            forced_response, forced_receipt = self._planner_dispatch_tool(
+                required_name, forced_arguments, round_number=tool_call_count + 1,
+                signature=forced_signature)
+            tool_call_count += 1
+            last_tool_name, last_tool_response, last_receipt = required_name, forced_response, forced_receipt
+            forced_names.append(required_name)
+            self._mark_planner_receipts_stale()
+
+        # A forced recovery call happens after the provider's earlier reply,
+        # so that reply cannot be considered grounded in the new results.
+        # Give capable adapters one tools-disabled turn over the complete
+        # bounded ledger.  Older/custom planners may return None, in which
+        # case the deterministic ledger summary below remains authoritative.
+        if forced_names:
+            self.trace.append(f"调用模型最终总结：{getattr(self.planner, 'model', '已配置模型')}")
+            synthesis = self._ask_planner(
+                text,
+                {"name": last_tool_name,
+                 "result": (last_tool_response or {}).get("toolResult")},
+                tool_call=None, tool_calls=None,
+                tool_ledger=self._planner_tool_receipts,
+                allow_tools=False, synthesis=True,
+            )
+            if isinstance(synthesis, dict):
+                if synthesis.get("patch"):
+                    self._event("plan", "patch_ignored", "最终总结中的字段更新未应用")
+                if synthesis.get("reply"):
+                    final_reply = str(synthesis["reply"])
+                    post_force_synthesized = True
+
+        if getattr(self.planner, "last_error", "") and not any(
+                event.get("step") == "plan" and event.get("status") == "fallback"
+                for event in self.run_events):
+            self.trace.append(f"模型回退：{self.planner.last_error}")
+            self._event("plan", "fallback", self.planner.last_error)
+
+        if last_tool_response is not None:
+            result = last_tool_response.get("toolResult")
+            stale_latest = bool(last_receipt and last_receipt.get("stale"))
+            forced_latest = [self._planner_latest_receipt(name) for name in forced_names]
+            forced_failure = any(
+                receipt and not receipt.get("stale") and receipt.get("status") in {
+                    "blocked", "error", "invalid_arguments", "duplicate_blocked",
+                }
+                for receipt in forced_latest
+            )
+            if final_reply.strip() and (not forced_names or post_force_synthesized) \
+                    and not stale_latest and not forced_failure:
+                message = final_reply.strip()
+            else:
+                message = self._planner_receipts_fallback()
+            self._remember("assistant", message)
+            self._save()
+            ledger_options, ledger_handoff = self._planner_artifacts()
+            options = ledger_options or last_tool_response.get("options", [])
+            handoff_value = ledger_handoff or last_tool_response.get("handoff")
+            if isinstance(handoff_value, dict) and handoff_value.get("status") != "ready":
+                handoff_value = None
+            return self._result(
+                [message], options=options,
+                handoff=handoff_value, tool_result=result,
+            )
+        if final_reply:
+            self.state["stage"] = "collect" if self._missing_fields() else "recommend"
+            self._remember("assistant", final_reply)
+            self._save()
+            return self._result([final_reply])
+        if getattr(self.planner, "last_error", ""):
+            self.trace.append(f"模型回退：{self.planner.last_error}")
+            self._event("plan", "fallback", self.planner.last_error)
+        return None
 
     def call_tool(self, name: str, payload: dict[str, Any] | None = None, preserve_trace: bool = False,
                   remember: bool = True) -> dict[str, Any]:

@@ -2168,23 +2168,61 @@ async function callTool(toolName, payload = {}) {
   }
 }
 
-$("#message-form").addEventListener("submit", (event) => { event.preventDefault(); sendMessage($("#message-input").value); });
-$("#message-input").addEventListener("input", () => { autoGrowComposer(); renderComposerPreview(); });
-$("#preview-toggle").addEventListener("click", () => {
+// TD-06: the wiring below assumes every listed element exists. One missing id
+// used to surface as the first TypeError and silently kill every later
+// binding behind it. Assert once before wiring: collect all ids the binding
+// section references, report the missing ones in a single console message plus
+// a page banner, skip only the bindings whose element is absent, and keep the
+// rest of the page fully wired. Scripts load at the end of <body>, so this
+// runs after the DOM is parsed and before any user interaction.
+const BINDING_TARGET_IDS = [
+  "message-form", "message-input", "preview-toggle", "generate-order", "confirm-order",
+  "quote-refresh", "quote-cancel", "copy-order", "toggle-draft-groups", "upload-button",
+  "drop-zone", "file-input", "platform-select", "sidebar-toggle", "order-toggle",
+  "mobile-back", "workspace-backdrop", "history-context-menu", "history-list",
+  "theme-toggle", "settings-nav", "history-include-archived", "save-preset",
+  "preset-list", "reset-order", "confirm-reset-dialog", "settings-test",
+  "settings-button", "settings-cancel", "settings-dialog", "settings-cancel-secondary",
+  "settings-form", "settings-clear"
+];
+const missingBindingIds = new Set(BINDING_TARGET_IDS.filter((id) => !document.getElementById(id)));
+function on(id, type, listener, options) {
+  const node = document.getElementById(id);
+  if (!node) {
+    missingBindingIds.add(id);
+    return null;
+  }
+  node.addEventListener(type, listener, options);
+  return node;
+}
+function reportMissingBindings() {
+  if (!missingBindingIds.size) return;
+  const list = [...missingBindingIds].join("、");
+  console.error(`[PrintOps] 页面缺少 ${missingBindingIds.size} 个预期元素（${list}），相关交互未绑定。请确认页面文件完整后重启本地服务并刷新。`);
+  const banner = document.createElement("div");
+  banner.className = "binding-banner";
+  banner.setAttribute("role", "alert");
+  banner.textContent = `界面初始化不完整：缺少 ${missingBindingIds.size} 个界面元素（${list}）。部分操作暂时不可用，请重启本地服务并刷新页面。`;
+  document.body.prepend(banner);
+}
+
+on("message-form", "submit", (event) => { event.preventDefault(); sendMessage($("#message-input").value); });
+on("message-input", "input", () => { autoGrowComposer(); renderComposerPreview(); });
+on("preview-toggle", "click", () => {
   const toggle = $("#preview-toggle");
   toggle.setAttribute("aria-pressed", String(toggle.getAttribute("aria-pressed") !== "true"));
   renderComposerPreview();
 });
-$("#message-input").addEventListener("keydown", (event) => {
+on("message-input", "keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#message-form").requestSubmit(); }
 });
-$("#generate-order").addEventListener("click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { showToast(apiErrorText(error, "订单生成失败，请重试"), "error"); } });
-$("#confirm-order").addEventListener("click", async () => {
+on("generate-order", "click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { showToast(apiErrorText(error, "订单生成失败，请重试"), "error"); } });
+on("confirm-order", "click", async () => {
   try { render(await api("/api/confirm", { sessionId, note: "用户在订单工作台确认" })); }
   catch (error) { showToast(apiErrorText(error, "确认交接单失败，请重试"), "error"); }
 });
-$("#quote-refresh").addEventListener("click", async () => {
+on("quote-refresh", "click", async () => {
   const requestId = state.activeQuoteRequestId || state.quoteRequest?.requestId || (state.quoteRequests?.length ? state.quoteRequests[state.quoteRequests.length - 1]?.requestId : "");
   if (!requestId) return;
   try {
@@ -2192,7 +2230,7 @@ $("#quote-refresh").addEventListener("click", async () => {
     showToast("询价状态已刷新");
   } catch (error) { showToast(apiErrorText(error, "询价状态刷新失败，请重试"), "error"); }
 });
-$("#quote-cancel").addEventListener("click", async () => {
+on("quote-cancel", "click", async () => {
   const requestId = state.activeQuoteRequestId || state.quoteRequest?.requestId || (state.quoteRequests?.length ? state.quoteRequests[state.quoteRequests.length - 1]?.requestId : "");
   if (!requestId) return;
   try {
@@ -2200,7 +2238,7 @@ $("#quote-cancel").addEventListener("click", async () => {
     showToast("询价请求已取消");
   } catch (error) { showToast(apiErrorText(error, "取消询价失败，请重试"), "error"); }
 });
-$("#copy-order").addEventListener("click", async () => {
+on("copy-order", "click", async () => {
   try {
     const document = await currentHandoff();
     await navigator.clipboard.writeText(document.markdown);
@@ -2318,7 +2356,7 @@ async function exportOrder(format) {
 }
 
 document.querySelectorAll(".export-option").forEach((button) => button.addEventListener("click", () => exportOrder(button.dataset.format)));
-$("#toggle-draft-groups").addEventListener("click", () => {
+on("toggle-draft-groups", "click", () => {
   const groups = [...document.querySelectorAll(".draft-group")];
   const open = !groups.every((group) => group.open);
   groups.forEach((group) => { group.open = open; });
@@ -2401,32 +2439,32 @@ async function uploadFile(file) {
     showToast(fileFeedback.message, "error");
   }
 }
-$("#upload-button").addEventListener("click", () => $("#file-input").click());
-$("#drop-zone").addEventListener("click", () => $("#file-input").click());
-$("#file-input").addEventListener("change", async () => {
+on("upload-button", "click", () => $("#file-input").click());
+on("drop-zone", "click", () => $("#file-input").click());
+on("file-input", "change", async () => {
   await uploadFile($("#file-input").files[0]);
   $("#file-input").value = "";
 });
-["dragenter", "dragover"].forEach((type) => $("#drop-zone").addEventListener(type, (event) => {
+["dragenter", "dragover"].forEach((type) => on("drop-zone", type, (event) => {
   event.preventDefault();
   $("#drop-zone").classList.add("is-dragging");
 }));
-["dragleave", "drop"].forEach((type) => $("#drop-zone").addEventListener(type, () => $("#drop-zone").classList.remove("is-dragging")));
-$("#drop-zone").addEventListener("drop", (event) => {
+["dragleave", "drop"].forEach((type) => on("drop-zone", type, () => $("#drop-zone").classList.remove("is-dragging")));
+on("drop-zone", "drop", (event) => {
   event.preventDefault();
   uploadFile(event.dataTransfer?.files?.[0]);
 });
-$("#platform-select").addEventListener("change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败"), "error"); } });
-$("#sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
-$("#order-toggle").addEventListener("click", () => {
+on("platform-select", "change", async (event) => { try { render(await api("/api/platform", { sessionId, platformId: event.target.value })); } catch (error) { showToast(apiErrorText(error, "平台切换失败"), "error"); } });
+on("sidebar-toggle", "click", () => setSidebarCollapsed(!sidebarCollapsed));
+on("order-toggle", "click", () => {
   if (!DESKTOP_QUERY.matches) { $("#workspace").dataset.mobilePane = "order"; updateOrderToggle(); $("#mobile-back").focus(); return; }
   layout.orderCollapsed = !layout.orderCollapsed;
   applyLayout();
   saveLayout();
 });
-$("#mobile-back").addEventListener("click", () => { closeHistoryContextMenu(); $("#workspace").dataset.mobilePane = "work"; updateOrderToggle(); $("#order-toggle").focus(); });
-$("#workspace-backdrop").addEventListener("click", () => setSidebarCollapsed(true));
-$("#history-context-menu").addEventListener("click", (event) => {
+on("mobile-back", "click", () => { closeHistoryContextMenu(); $("#workspace").dataset.mobilePane = "work"; updateOrderToggle(); $("#order-toggle").focus(); });
+on("workspace-backdrop", "click", () => setSidebarCollapsed(true));
+on("history-context-menu", "click", (event) => {
   const control = event.target.closest("[data-history-menu-action]");
   if (!control) return;
   const menu = $("#history-context-menu");
@@ -2434,7 +2472,7 @@ $("#history-context-menu").addEventListener("click", (event) => {
   closeHistoryContextMenu({restoreFocus: true});
   historyAction(control.dataset.historyMenuAction, orderId);
 });
-$("#history-list").addEventListener("contextmenu", (event) => {
+on("history-list", "contextmenu", (event) => {
   const item = event.target.closest(".history-item");
   if (!item) return;
   event.preventDefault();
@@ -2487,14 +2525,14 @@ function syncPaneViewport() {
 }
 window.addEventListener("resize", syncPaneViewport);
 DESKTOP_QUERY.addEventListener("change", syncPaneViewport);
-$("#theme-toggle").addEventListener("click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
-$("#settings-nav").addEventListener("click", (event) => {
+on("theme-toggle", "click", () => setHighContrast(document.documentElement.dataset.theme !== "high-contrast"));
+on("settings-nav", "click", (event) => {
   const button = event.target.closest("[data-settings-view]");
   if (button) activateSettingsView(button.dataset.settingsView, {focus: true});
 });
-$("#settings-nav").addEventListener("keydown", settingsNavigationKeydown);
-$("#history-include-archived").addEventListener("change", (event) => refreshOrderHistory(event.currentTarget.checked));
-$("#history-list").addEventListener("click", (event) => {
+on("settings-nav", "keydown", settingsNavigationKeydown);
+on("history-include-archived", "change", (event) => refreshOrderHistory(event.currentTarget.checked));
+on("history-list", "click", (event) => {
   const hoverAction = event.target.closest("[data-history-action]");
   if (hoverAction) {
     event.stopPropagation();
@@ -2504,7 +2542,7 @@ $("#history-list").addEventListener("click", (event) => {
   const item = event.target.closest(".history-item");
   if (item) switchOrder(item.dataset.sessionId);
 });
-$("#history-list").addEventListener("pointerdown", (event) => {
+on("history-list", "pointerdown", (event) => {
   if (event.target.closest(".history-item")) closeHistoryContextMenu();
 });
 document.addEventListener("pointerdown", (event) => {
@@ -2512,22 +2550,22 @@ document.addEventListener("pointerdown", (event) => {
   if (!menu || menu.hidden) return;
   if (!menu.contains(event.target)) closeHistoryContextMenu();
 });
-$("#save-preset").addEventListener("click", saveCurrentSpecPreset);
-$("#preset-list").addEventListener("click", (event) => {
+on("save-preset", "click", saveCurrentSpecPreset);
+on("preset-list", "click", (event) => {
   const apply = event.target.closest(".preset-apply");
   if (apply) applySpecPreset(apply.dataset.presetId);
   const remove = event.target.closest(".preset-remove");
   if (remove) removeSpecPreset(remove.dataset.presetId);
 });
-$("#reset-order").addEventListener("click", () => {
+on("reset-order", "click", () => {
   const dialog = $("#confirm-reset-dialog");
   dialog.returnValue = "";
   dialog.showModal();
 });
 
-const confirmResetDialog = $("#confirm-reset-dialog");
-confirmResetDialog.addEventListener("close", () => {
-  if (confirmResetDialog.returnValue !== "confirm") {
+on("confirm-reset-dialog", "close", () => {
+  const dialog = $("#confirm-reset-dialog");
+  if (!dialog || dialog.returnValue !== "confirm") {
     $("#reset-order").focus({preventScroll: true});
     return;
   }
@@ -2555,7 +2593,7 @@ confirmResetDialog.addEventListener("close", () => {
   })();
 });
 
-$("#settings-test").addEventListener("click", async () => {
+on("settings-test", "click", async () => {
   const button = $("#settings-test");
   const force = settingsProbeUsedCache;
   settingsProbeUsedCache = false;
@@ -2603,15 +2641,15 @@ $("#settings-test").addEventListener("click", async () => {
   }
 });
 
-$("#settings-button").addEventListener("click", () => {
+on("settings-button", "click", () => {
   renderSettings({ llm: llmSettings });
   $("#settings-dialog").showModal();
   activateSettingsView("overview", {focus: true});
 });
-$("#settings-cancel").addEventListener("click", () => $("#settings-dialog").close());
-$("#settings-dialog").addEventListener("close", () => { settingsAbort?.abort(); settingsAbort = null; });
-$("#settings-cancel-secondary").addEventListener("click", () => $("#settings-dialog").close());
-$("#settings-form").addEventListener("submit", async (event) => {
+on("settings-cancel", "click", () => $("#settings-dialog").close());
+on("settings-dialog", "close", () => { settingsAbort?.abort(); settingsAbort = null; });
+on("settings-cancel-secondary", "click", () => $("#settings-dialog").close());
+on("settings-form", "submit", async (event) => {
   event.preventDefault();
   const save = $("#settings-save");
   save.disabled = true;
@@ -2648,7 +2686,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
     save.disabled = false;
   }
 });
-$("#settings-clear").addEventListener("click", async () => {
+on("settings-clear", "click", async () => {
   const clear = $("#settings-clear");
   clear.disabled = true;
   try {
@@ -2740,3 +2778,7 @@ autoGrowComposer();
 bootstrap();
 setSidebarCollapsed(sidebarCollapsed);
 setHighContrast(localStorage.getItem("printops_theme") === "high-contrast");
+// TD-06: every listed id was checked before wiring; report whatever is still
+// missing in one message so a single broken element cannot hide behind the
+// first TypeError.
+reportMissingBindings();
