@@ -169,6 +169,51 @@ for (const width of [390, 1440]) {
   });
 }
 
+test('响应到达时正在编辑草稿字段，焦点与选区不丢', async ({page, appURL}) => {
+  await page.setViewportSize({width:1440, height:844});
+  await boot(page, appURL);
+  await send(page, card);
+  await showOrder(page);
+  const input = page.locator('.field-input[data-field-path="purpose"]');
+  // 保存一次用途，让重绘后的输入框持有服务端值，选区才有意义。
+  const saved = page.waitForResponse(r => new URL(r.url()).pathname === '/api/fields');
+  await input.fill('线下门店推广');
+  await input.press('Tab');
+  expect((await saved).status()).toBe(200);
+  await expect(input).toHaveValue('线下门店推广');
+  await expect(input).toHaveAttribute('data-field-key', 'order:purpose');
+  // 平台切换的真实响应被闸住；响应到达前用户正带着选区编辑这个草稿字段。
+  const received = gate(), release = gate();
+  await page.route('**/api/platform', async route => {
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    received.release();
+    await release.promise;
+    await route.fulfill({response});
+  });
+  try {
+    const arrived = page.waitForResponse(r => new URL(r.url()).pathname === '/api/platform');
+    await page.locator('#platform-select').selectOption('shengda');
+    await received.promise;
+    await input.focus();
+    await input.evaluate(node => node.setSelectionRange(2, 5));
+    await expect(input).toBeFocused();
+    expect(await input.evaluate(node => [node.selectionStart, node.selectionEnd])).toEqual([2, 5]);
+    release.release();
+    await arrived;
+    await settled(page);
+    const after = await page.locator('.field-input[data-field-path="purpose"]').evaluate(node => ({
+      focused: document.activeElement === node,
+      start: node.selectionStart,
+      end: node.selectionEnd,
+      value: node.value,
+    }));
+    expect(after.focused, '重绘后焦点必须回到正在编辑的草稿字段').toBe(true);
+    expect([after.start, after.end], '重绘后选区必须保持').toEqual([2, 5]);
+    expect(after.value).toBe('线下门店推广');
+  } finally { release.release(); }
+});
+
 for (const direction of ['backward', 'forward']) {
   test(`mobile sidebar cycles ${direction} through visible controls when native details are closed`, async ({page, appURL}) => {
     await page.setViewportSize({width:390, height:844});
