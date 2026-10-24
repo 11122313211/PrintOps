@@ -50,3 +50,18 @@ PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.
 原生 Safari 已通过网站设置实际选择 200% 缩放，并在补丁前完成“到达输入区→保留未发草稿→打开订单栏→查看方案→返回对话”的真实操作。最终补丁后重新加载时，本机锁屏阻断了原生操作，因此最终版本的 200% 复验、恢复测试站点 100% 缩放及关闭临时标签页仍待解锁后完成。记录见[原生 Safari 走查](../reports/ui-position-tuning/focus-followup/native-safari-zoom.md)。
 
 真实手机软键盘、系统中文选词、辅助技术和 5 名新用户入口走查仍未执行。后续位置调整继续由实际漏找、误触或遮挡记录驱动；C2 任务条重排保持候选。既有至少 20 条真实脱敏订单的发布门槛不由这些合成测试替代。
+
+## 2026-10-24 补记：订单草稿重绘不再丢焦点与选区（TD-11）
+
+此前复核字段（journey.js `renderReview`）已有"重绘前记录焦点、重绘后恢复"的约定，但订单草稿侧的四个重绘函数（`renderFieldList`、`renderDimensionRows`、`renderMultiProductItems`、`renderParameterForm`）仍是整体清空重建：快照在用户输入途中到达时，正在编辑的输入框被销毁，焦点掉到 body，光标位置丢失。
+
+本批把同一约定移植到订单草稿：
+
+- 重绘前经共享的 `captureFieldFocus(root)` 记录焦点输入框的稳定 `data-field-key` 与选区，重绘后 `restoreFieldFocus(root)` 恢复焦点与 `selectionStart/End`。
+- `data-field-key` 命名：订单级字段为 `order:<fieldPath>`（如 `order:purpose`、`order:dimensions.boxSize`、`order:productSpecs.cardStock`）；多产品编辑器内字段为 `item:<itemId>:<fieldPath>`，与 journey.js 现有 `data-review-input`（按 fieldId）语义对齐，值跨重绘稳定。
+- `renderFieldList` 与 `renderDimensionRows` 先后写同一个 `#spec-fields`：前者未能完成的恢复保持 pending，由后者在补回尺寸行后完成，避免"焦点在尺寸字段时被中间态吞掉"。
+- 多产品列表在同为一张订单的重绘间保留用户展开的产品项与"直接编辑本项"编辑器状态（对齐 renderReview 的分组展开保留），否则编辑器收起后焦点无从恢复。
+
+验收：`ui_focus` 新增用例"响应到达时正在编辑草稿字段，焦点与选区不丢"——真实的 `/api/platform` 响应在路由层被暂缓，用户此时正带着选区编辑已保存的用途字段；响应重建订单栏后断言 `activeElement`、`selectionStart/End` 与已保存值全部保持。Chromium 下 `ui_focus` 15/15（原 14 项 + 新增 1 项）、`journey`（含 journey_edges）34/34、`ui_positions` 16/16。全部使用隔离服务与合成订单，不依赖真实模型服务。
+
+工程记录：本批 app.js 的首次提交因 `git apply --cached --unidiff-zero` 错置插入块而损坏，随后以独立修复提交（`fix(ui): repair renderFieldList helper placement from misapplied hunk staging`）恢复；验收均跑在修复后的最终源码上。重建过程全程使用 `textContent`/`createElement`，未新增任何 innerHTML 插值点。
