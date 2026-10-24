@@ -29,6 +29,7 @@
 | TD-14 | llm_adapter.py SSRF | 配置时校验与请求时之间存在 DNS 重绑定理论窗口 | 本地单机威胁模型内可接受 | 路径 9（S9-08） | 计划内 |
 | TD-15 | llm_config.json | Key 明文为默认存储 | 本机文件泄露即凭据泄露 | 路径 9（S9-06/07） | 计划内 |
 | TD-16 | server.py 静态白名单 | 目录白名单扩展后需保持"`/app/../server.py` 归一化 404"类测试常青 | 路径穿越回归 | 路径 2（S2-01） | 计划内 |
+| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-10-24 Mimosa deep 扫描（scan-2026-10-24T07-02-43，113 项）triage：83 项为 `reports/journey-webkit/**` Playwright trace viewer 第三方产物噪音（gitignored 测试工具，非源码）；30 项项目源码标记逐一核查——addMessage/renderMessageBody/journey.js:173 的 innerHTML 均走 markdown.js 白名单渲染器（先转义、仅白名单标签、链接限 http(s)/mailto，`test_markdown_render.py` 契约锁定），renderFieldList/renderToolStats 等为 textContent，querySelector→mongo-sort-injection 为启发式误报（仓库无 MongoDB），SSRF 指向 llm_adapter.py:1478 的用户配置模型端点请求（有 host 校验，残余窗口即 TD-14）。扫描 run status 为 inconclusive（动态派发致调用图不完整），不构成安全结论 | 扫描噪音长期存在，renderer 契约变更时需人工复查污点链 | 待排期（renderer 或渲染路径变更时重扫；考虑让扫描聚焦源码目录排除 reports/） | 已 triage |
 
 ## B.4 文档与流程
 
