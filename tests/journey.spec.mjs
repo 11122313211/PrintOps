@@ -248,6 +248,14 @@ test('uploaded PDF check survives reload and becomes visibly stale after a speci
   expect(uploaded.preflightResults.stale).toBe(false);
   await openOrder(page);
   await expect(page.locator('#file-state')).toContainText('所属产品：单页');
+  // 预检卡片的值（如 MediaBox "209.9×297.0 mm"）不得溢出卡片压到相邻列。
+  await expect(page.locator('.file-check').first()).toBeVisible();
+  const overflowRight = await page.locator('.file-check').evaluateAll(cards => cards.map(card => {
+    const value = card.querySelector('strong');
+    if (!value) return 0;
+    return value.getBoundingClientRect().right - card.getBoundingClientRect().right;
+  }));
+  expect(Math.max(...overflowRight, 0)).toBeLessThanOrEqual(0.5);
   await page.reload();
   await expect(page.locator('#file-state')).toContainText('synthetic-a4-print.pdf');
   const restored = await currentOrder(page);
