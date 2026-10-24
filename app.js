@@ -735,7 +735,11 @@ async function focusItem(itemId) {
 }
 
 function apiErrorText(error, fallback) {
-  const base = error?.message || fallback;
+  // TD-19: a code with dedicated copy in PrintOpsJourney.ERROR_TEXTS keeps
+  // that copy; everything else falls back to the server message, then the
+  // caller's per-site fallback.
+  const known = PrintOpsJourney.ERROR_TEXTS?.[error?.code];
+  const base = known?.title || error?.message || fallback;
   return error?.requestId ? `${base}（请求号 ${error.requestId}）` : base;
 }
 
@@ -2629,9 +2633,9 @@ on("settings-test", "click", async () => {
     // A forced click that never reached the endpoint must stay forced: falling
     // through would show the very verdict the user clicked to replace.
     settingsProbeUsedCache = force;
-    const message = error?.code === "ADDRESS_VALIDATION_TIMEOUT"
-      ? "域名解析超时，请检查本机 DNS 或代理后重试"
-      : (error?.message || "模型连接测试失败");
+    // TD-19: fixed copy for mapped codes comes from the shared ERROR_TEXTS.
+    const known = PrintOpsJourney.ERROR_TEXTS?.[error?.code];
+    const message = known?.title || error?.message || "模型连接测试失败";
     showToast(`${message}${error?.requestId ? `（请求号 ${error.requestId}）` : ""}`, "error");
   } finally {
     clearInterval(timer);
@@ -2673,11 +2677,16 @@ on("settings-form", "submit", async (event) => {
     // Server messages name the real cause (DNS timeout, busy outbound pool,
     // unwritable config, rejected host). The old fallback replaced all of them
     // with "check the address", which blamed a correct URL.
+    // TD-19: the two dedicated texts live in the shared ERROR_TEXTS table;
+    // the server answers both with the generic INVALID_SETTINGS code, so the
+    // detection stays on the message content and unknown codes fall through
+    // to the server message untouched.
+    const known = PrintOpsJourney.ERROR_TEXTS;
     const message = error?.message || "";
     const settingsMessage = message.includes("URL 和模型名")
-      ? "URL 和模型名需要同时填写"
+      ? known.settingsUrlModel.title
       : message.includes("本机或内网")
-        ? "该接口解析到本机或内网地址，当前安全策略不允许"
+        ? known.settingsPrivateHost.title
         : message
           ? `${message}${error?.requestId ? `（请求号 ${error.requestId}）` : ""}`
           : "设置保存失败，请稍后重试";
@@ -2695,10 +2704,9 @@ on("settings-clear", "click", async () => {
     $("#settings-dialog").close();
     showToast("已清空模型配置，继续使用规则模式");
   } catch (error) {
-    const message = error?.message || "";
-    showToast(message
-      ? `${message}${error?.requestId ? `（请求号 ${error.requestId}）` : ""}`
-      : "配置清空失败，请重试", "error");
+    // TD-19: same shape as the shared apiErrorText lookup (message first,
+    // fixed fallback), now table-aware for mapped codes.
+    showToast(apiErrorText(error, "配置清空失败，请重试"), "error");
   }
   finally { clear.disabled = false; }
 });

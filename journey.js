@@ -221,12 +221,39 @@
     callbacks?.syncControls?.();
   }
   function saved(text, tone = "saved") { $("#save-status").textContent = text; $("#save-status").dataset.state = tone; }
+  // TD-19: single source for user-facing failure copy. Bucket keys carry the
+  // status titles failure() has always shown; named keys carry the server
+  // codes the UI maps explicitly (app.js toasts consult the same table via
+  // PrintOpsJourney.ERROR_TEXTS). Unknown codes fall back to the buckets.
+  const FAILURE_HINT = "输入已保留，先读取最新状态再继续。";
+  const ERROR_TEXTS = {
+    conflict: {title: "订单已有更新，请先核对差异", hint: FAILURE_HINT},
+    credentials: {title: "本地访问凭据已失效", hint: FAILURE_HINT},
+    timeout: {title: "操作超时，保存结果尚未确认", hint: FAILURE_HINT},
+    server: {title: "本地服务暂时无法完成操作", hint: FAILURE_HINT},
+    client: {title: "这项内容需要调整", hint: FAILURE_HINT},
+    offline: {title: "连接中断，保存结果尚未确认", hint: FAILURE_HINT},
+    noDetail: {title: "", hint: "请检查本地服务是否运行。"},
+    ADDRESS_VALIDATION_TIMEOUT: {title: "域名解析超时，请检查本机 DNS 或代理后重试", hint: "请检查本机 DNS 或代理后重试。"},
+    settingsUrlModel: {title: "URL 和模型名需要同时填写", hint: FAILURE_HINT},
+    settingsPrivateHost: {title: "该接口解析到本机或内网地址，当前安全策略不允许", hint: FAILURE_HINT}
+  };
+  function errorTitle(error) {
+    const known = ERROR_TEXTS[error?.code];
+    if (known?.title) return known.title;
+    const {status} = error || {};
+    if (status === 409) return ERROR_TEXTS.conflict.title;
+    if (status === 401 || status === 403) return ERROR_TEXTS.credentials.title;
+    if (status === 408) return ERROR_TEXTS.timeout.title;
+    if (status >= 500) return ERROR_TEXTS.server.title;
+    if (status >= 400) return ERROR_TEXTS.client.title;
+    return ERROR_TEXTS.offline.title;
+  }
   function failure(error, request, recover) {
     const conflict = error.status === 409;
-    const title = conflict ? "订单已有更新，请先核对差异" : error.status === 401 || error.status === 403 ? "本地访问凭据已失效" : error.status === 408 ? "操作超时，保存结果尚未确认" : error.status >= 500 ? "本地服务暂时无法完成操作" : error.status >= 400 ? "这项内容需要调整" : "连接中断，保存结果尚未确认";
     $("#operation-error").hidden = false;
-    $("#operation-error-title").textContent = title;
-    $("#operation-error-message").textContent = `${error.message || "请检查本地服务是否运行。"} 输入已保留，先读取最新状态再继续。`;
+    $("#operation-error-title").textContent = errorTitle(error);
+    $("#operation-error-message").textContent = `${error.message || ERROR_TEXTS[error.code]?.hint || ERROR_TEXTS.noDetail.hint} ${FAILURE_HINT}`;
     $("#operation-error-detail").textContent = [error.code, error.requestId].filter(Boolean).join(" · ") || "没有服务器请求号";
     const actions = $("#operation-error-actions"); actions.replaceChildren();
     actions.append(button("读取最新状态", () => recover(request)));
@@ -256,5 +283,5 @@
     actions.append(button("保留当前服务器内容", () => {$("#operation-error").hidden = true;}));
   }
   function clearFailure() { $("#operation-error").hidden = true; $("#operation-error-diff").replaceChildren(); }
-  root.PrintOpsJourney = {init, render, view, locate, saved, failure, recovered, clearFailure, renderDocument, fieldSaved, el, button};
+  root.PrintOpsJourney = {init, render, view, locate, saved, failure, recovered, clearFailure, renderDocument, fieldSaved, el, button, ERROR_TEXTS};
 })(window);
