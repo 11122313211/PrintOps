@@ -3890,7 +3890,13 @@ class Agent:
             prefix = first_prefix if key in changed else target_prefix
             if not prefix:
                 continue
-            field_meta[prefix + key] = deepcopy(field_meta.pop(key))
+            # A same-turn item-scoped parse can already hold a more precise
+            # entry than the coarse top-level copy (e.g. size 0.9 vs 0.55);
+            # relocation fills gaps and must never downgrade such entries.
+            entry = field_meta.pop(key)
+            item_key = prefix + key
+            if item_key not in field_meta:
+                field_meta[item_key] = deepcopy(entry)
             migrated_keys.append(key)
         if not migrated_keys:
             return
@@ -3898,19 +3904,34 @@ class Agent:
         first_id = str(items[0].get("itemId") or "item-1")
         target_id = target_prefix[len("items."):-1]
         migrated = set(migrated_keys)
+        # The audit list shares candidate dicts with the live turn's local
+        # candidate list (chat builds state["fieldCandidates"] by
+        # concatenation).  Rebuild with renamed copies instead of mutating in
+        # place, or the item-scoped meta writes later in the same turn would
+        # replay the top-level candidates under their new item names and
+        # overwrite higher-confidence entries with coarse top-level grades.
+        rebuilt = []
         for candidate in self.state.get("fieldCandidates", []):
             if not isinstance(candidate, dict):
+                rebuilt.append(candidate)
                 continue
             field = candidate.get("field")
             if field not in migrated:
+                rebuilt.append(candidate)
                 continue
             field = str(field)
+            renamed = deepcopy(candidate)
             if field in changed:
-                candidate["field"] = first_prefix + field
-                candidate["scope"] = first_id
+                renamed["field"] = first_prefix + field
+                renamed["scope"] = first_id
             elif target_prefix:
-                candidate["field"] = target_prefix + field
-                candidate["scope"] = target_id
+                renamed["field"] = target_prefix + field
+                renamed["scope"] = target_id
+            else:
+                rebuilt.append(candidate)
+                continue
+            rebuilt.append(renamed)
+        self.state["fieldCandidates"] = rebuilt[-128:]
 
     @staticmethod
     def _is_explanation_request(text: str) -> bool:

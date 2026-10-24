@@ -222,14 +222,12 @@ class PrintOpsMCPTest(unittest.TestCase):
         session_id = "shared-uncertain"
         agent = Agent(self.server.memory, session_id)
         agent.chat("做 500 张名片和 1000 张折页，都使用A4，157g哑粉纸，双面四色，下周内")
-        # The first item is complete enough for the readiness check. Its
-        # paper and size are inherited from the top-level compatibility view,
-        # where the parser stores their provenance.
+        # The first item is complete enough for the readiness check. Shared
+        # provenance migrates into the item scope on split, so the item-1
+        # paper and finished-size entries carry the parser's confidence.
         agent.state["order"]["items"][0]["selectedOption"] = "balanced"
-        agent.state["fieldMeta"].pop("items.item-1.paper", None)
-        agent.state["fieldMeta"].pop("items.item-1.dimensions.finishedSize", None)
-        agent.state["fieldMeta"]["paper"]["confidence"] = 0.5
-        agent.state["fieldMeta"]["dimensions.finishedSize"]["confidence"] = 0.5
+        agent.state["fieldMeta"]["items.item-1.paper"]["confidence"] = 0.5
+        agent.state["fieldMeta"]["items.item-1.dimensions.finishedSize"]["confidence"] = 0.5
         agent.memory.save(session_id, agent.state)
 
         server = PrintOpsMCP(self.db, bound_session_id=session_id, capabilities="L0,L1")
@@ -240,8 +238,8 @@ class PrintOpsMCPTest(unittest.TestCase):
         })
         payload = blocked["result"]["structuredContent"]
         self.assertEqual(payload["toolResult"]["reason"], "low_confidence")
-        self.assertIn("paper", payload["toolResult"]["uncertain"])
-        self.assertIn("dimensions.finishedSize", payload["toolResult"]["uncertain"])
+        self.assertIn("items.item-1.paper", payload["toolResult"]["uncertain"])
+        self.assertIn("items.item-1.dimensions.finishedSize", payload["toolResult"]["uncertain"])
 
     def test_precondition_only_blocks_low_confidence_production_fields(self):
         session_id = "preference-confidence"
