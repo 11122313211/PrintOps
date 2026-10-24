@@ -1451,6 +1451,109 @@ class Agent:
             add("recommend_processes")
         return required[:MAX_PLANNER_REQUIRED_CALLS]
 
+    # Ordered intent dispatch table.  Within one phase the first matcher that
+    # fires owns the turn, mirroring the historical if-chain exactly, so the
+    # entry order is load-bearing.  ``matcher`` names a method; ``None`` means
+    # the shared negation-aware ``_planner_intent(text, key)``.  A ``None``
+    # handler marks a query-only entry that never routes a turn.
+    INTENT_DISPATCH: tuple[tuple[str, str, str | None, str | None], ...] = (
+        # phase, intent key, matcher override, handler
+        ("pre_planner", "multi_generate", "_matches_multi_generate", "_handle_multi_generate"),
+        ("post_planner", "explanation", "_matches_explanation", "_handle_explanation"),
+        # Supplier-quote language wins over the generic estimate keywords.
+        ("post_planner", "quote", None, "_handle_quote"),
+        ("post_planner", "price", None, "_handle_price"),
+        ("post_planner", "capability", None, "_handle_capability"),
+        ("post_planner", "validation", None, "_handle_validation"),
+        ("post_planner", "handoff", None, "_handle_handoff"),
+        # Query-only: the planner turn reads it to decide whether the automatic
+        # recommendation fallback is still required.  It never routes a turn.
+        ("planner", "recommendation", None, None),
+    )
+
+    def _matches_multi_generate(self, text: str) -> bool:
+        """Aggregate generation stays an all-items operation, never an ordinal one."""
+        return bool(_multi_product_info(self.state["order"])) \
+            and self._planner_positive_intent(text, r"生成订单|生成草稿|下单")
+
+    def _matches_explanation(self, text: str) -> bool:
+        return self._is_explanation_request(text)
+
+    def _intent_fired(self, text: str, key: str) -> bool:
+        """Evaluate one table intent (negation-aware) without routing the turn."""
+        for _phase, entry_key, matcher, _handler in self.INTENT_DISPATCH:
+            if entry_key != key:
+                continue
+            return bool(getattr(self, matcher)(text) if matcher else self._planner_intent(text, key))
+        return self._planner_intent(text, key)
+
+    def _dispatch_intents(self, text: str, phase: str) -> dict[str, Any] | None:
+        """Run one ordered phase of the intent table; the first match owns the turn."""
+        for entry_phase, key, matcher, handler in self.INTENT_DISPATCH:
+            if entry_phase != phase or handler is None:
+                continue
+            matches = getattr(self, matcher)(text) if matcher else self._planner_intent(text, key)
+            if matches:
+                return getattr(self, handler)(text)
+        return None
+
+    def _handle_multi_generate(self, text: str) -> dict[str, Any]:
+        self._save()
+        return self.generate()
+
+    def _handle_explanation(self, text: str) -> dict[str, Any]:
+        result = self._call("explain_print_term", text)
+        message = f"{result['topic']}：{result['answer']}\n\n{result['next']}"
+        self._remember("assistant", message)
+        self._save()
+        return self._result([message], tool_result=result)
+
+    def _handle_quote(self, text: str) -> dict[str, Any]:
+        active_index = self._item_index()
+        result = self._prepare_quote_request(active_index, self.state["order"].get("platform"))
+        message = result.get("message", "已准备询价请求，正式发送前需要人工确认。")
+        self._remember("assistant", message)
+        self._save()
+        return self._result([message], tool_result=result)
+
+    def _handle_price(self, text: str) -> dict[str, Any]:
+        active_index = self._item_index()
+        item_order = self._item_order(active_index) if active_index is not None else None
+        result = self._estimate_reference(item_order, active_index)
+        if item_order is not None:
+            result = {**result, "itemId": item_order.get("itemId"), "itemIndex": active_index}
+        if result.get("status") == "blocked":
+            message = self._estimate_message(result)
+        else:
+            message = (self._estimate_message(result)
+                       if result["range"] else f"我调用了费用估算工具，但信息还不足。\n还需要：{'、'.join(result['missing'])}。")
+        self._remember("assistant", message)
+        self._save()
+        return self._result([message], tool_result=result)
+
+    def _handle_capability(self, text: str) -> dict[str, Any]:
+        platform = self.state["order"].get("platform")
+        active_index = self._item_index()
+        item_order = self._item_order(active_index) if active_index is not None else None
+        result = self._call("match_supplier_capability", item_order or self.state["order"], platform)
+        if active_index is not None and item_order is not None:
+            result = {**result, "itemId": item_order.get("itemId"), "itemIndex": active_index}
+        message = "已完成供应商能力匹配，请查看支持项与待确认项。"
+        self._remember("assistant", message)
+        self._save()
+        return self._result([message], tool_result=result)
+
+    def _handle_validation(self, text: str) -> dict[str, Any]:
+        result = self._call("validate_order", self.state["order"])
+        message = self._validation_message(result)
+        self._remember("assistant", message)
+        self._save()
+        return self._result([message], tool_result=result)
+
+    def _handle_handoff(self, text: str) -> dict[str, Any]:
+        self._save()
+        return self.generate()
+
     def chat(self, text: str, patch: dict[str, str] | None = None, item_index: int | None = None) -> dict[str, Any]:
         self._begin_run("chat")
         self.trace = ["感知需求"]
@@ -1601,10 +1704,9 @@ class Agent:
         # ordinal only establishes which item the UI should show if generation
         # is blocked; it never creates a partial handoff that bypasses the other
         # items' readiness and selection gates.
-        if multi_products and self._planner_positive_intent(
-                text, r"生成订单|生成草稿|下单"):
-            self._save()
-            return self.generate()
+        dispatched = self._dispatch_intents(text, "pre_planner")
+        if dispatched is not None:
+            return dispatched
 
         # An optional LLM planner improves language understanding while field
         # patches and tool names remain constrained by this Agent.
@@ -1612,56 +1714,10 @@ class Agent:
         if planned is not None:
             return planned
 
-        if self._is_explanation_request(text):
-            result = self._call("explain_print_term", text)
-            message = f"{result['topic']}：{result['answer']}\n\n{result['next']}"
-            self._remember("assistant", message)
-            self._save()
-            return self._result([message], tool_result=result)
-
         # Explicit intents let users invoke a tool before the order is complete.
-        # Supplier-quote language wins over the generic estimate keywords.
-        if self._planner_intent(text, "quote"):
-            active_index = self._item_index()
-            result = self._prepare_quote_request(active_index, self.state["order"].get("platform"))
-            message = result.get("message", "已准备询价请求，正式发送前需要人工确认。")
-            self._remember("assistant", message)
-            self._save()
-            return self._result([message], tool_result=result)
-        if self._planner_intent(text, "price"):
-            active_index = self._item_index()
-            item_order = self._item_order(active_index) if active_index is not None else None
-            result = self._estimate_reference(item_order, active_index)
-            if item_order is not None:
-                result = {**result, "itemId": item_order.get("itemId"), "itemIndex": active_index}
-            if result.get("status") == "blocked":
-                message = self._estimate_message(result)
-            else:
-                message = (self._estimate_message(result)
-                           if result["range"] else f"我调用了费用估算工具，但信息还不足。\n还需要：{'、'.join(result['missing'])}。")
-            self._remember("assistant", message)
-            self._save()
-            return self._result([message], tool_result=result)
-        if self._planner_intent(text, "capability"):
-            platform = self.state["order"].get("platform")
-            active_index = self._item_index()
-            item_order = self._item_order(active_index) if active_index is not None else None
-            result = self._call("match_supplier_capability", item_order or self.state["order"], platform)
-            if active_index is not None and item_order is not None:
-                result = {**result, "itemId": item_order.get("itemId"), "itemIndex": active_index}
-            message = "已完成供应商能力匹配，请查看支持项与待确认项。"
-            self._remember("assistant", message)
-            self._save()
-            return self._result([message], tool_result=result)
-        if self._planner_intent(text, "validation"):
-            result = self._call("validate_order", self.state["order"])
-            message = self._validation_message(result)
-            self._remember("assistant", message)
-            self._save()
-            return self._result([message], tool_result=result)
-        if self._planner_intent(text, "handoff"):
-            self._save()
-            return self.generate()
+        dispatched = self._dispatch_intents(text, "post_planner")
+        if dispatched is not None:
+            return dispatched
 
         missing = self._missing_fields()
         if missing:
@@ -1853,7 +1909,7 @@ class Agent:
         # different successful domain observation, keep that choice unless
         # the user explicitly asked for a scheme (compound intents remain
         # hard obligations).
-        explicit_recommendation = self._planner_intent(text, "recommendation")
+        explicit_recommendation = self._intent_fired(text, "recommendation")
         if required_names == ["recommend_processes"] and not explicit_recommendation \
                 and any(item.get("name") != "validate_order" and not item.get("stale")
                         and item.get("status") not in {
