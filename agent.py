@@ -1635,6 +1635,11 @@ class Agent:
             product_hint = hint_items[hint_index].get("productType") or ""
         perceived, perceived_confidence = self._perceive_full(text, product_hint)
         candidates = field_candidates(text, perceived, perceived_confidence)
+        # One item per distinct product: a restated mention ("…，名片90×54mm")
+        # attaches parameters to the product's first item instead of splitting
+        # a duplicate. Runs before the evidence map so item-scoped evidence
+        # keys already use the surviving item's prefix.
+        self._merge_repeated_product_mentions(perceived, perceived_confidence, candidates)
         evidence = candidate_evidence(candidates)
         explicit_action = self._has_explicit_action_intent(text)
         if target_supplied:
@@ -3793,6 +3798,11 @@ class Agent:
             field_confidence=field_confidence, field_evidence=field_evidence,
             allowed_keys=ORDER_PATCH_KEYS,
             list_fields=list_fields, settle=settle)
+        # First turn from a single-product order to product items: relocate the
+        # product-scoped provenance that accumulated at the top level so the
+        # item-scoped views find it under ``items.{itemId}.*``.
+        if not (isinstance(previous_items, list) and previous_items):
+            self._migrate_single_product_provenance(previous, changed)
         # Replacing the item list can be a pure identity repair/migration. In
         # that case ``migrate_state_item_references`` has already moved cached
         # options to the repaired IDs; preserve those buckets for unchanged
@@ -3817,6 +3827,90 @@ class Agent:
             if self.state["stage"] == "confirm": self.state["stage"] = "recommend"
             self.state["workflowStage"] = "recommend"
         return changed
+
+    PRODUCT_SCOPED_META_KEYS = frozenset({
+        "quantity", "quantityValue", "quantityUnit", "size", "pages", "paper",
+        "printing", "finishing", "binding", "orientation",
+    })
+
+    @classmethod
+    def _is_product_scoped_meta_key(cls, key: str) -> bool:
+        """Whether one top-level provenance key describes a single product."""
+        if key in cls.PRODUCT_SCOPED_META_KEYS:
+            return True
+        return key.startswith("dimensions.") or key.startswith("productSpecs.")
+
+    def _migrate_single_product_provenance(self, previous_order: dict[str, Any],
+                                           changed: set[str]) -> None:
+        """TD-02: move product-scoped provenance into item keys at split time.
+
+        While the order is still single-product, conversation provenance
+        accumulates under top-level ``fieldMeta`` keys (``paper``, ``size``,
+        ``dimensions.*``, ``productSpecs.*``, ``quantity``...).  When a patch
+        first turns the order into product items, the item badge and confidence
+        views read ``items.{itemId}.*`` keys and would find nothing.
+
+        Attribution follows perception mention order: items are listed in the
+        order their products were mentioned, so the pre-split order product
+        (``previous_order["productType"]``) maps to the first item carrying the
+        same ``productType``.  Entries whose value was written by the splitting
+        patch itself (``changed``) describe the new first-item compatibility
+        projection and therefore follow item 1 instead.  Entries that cannot be
+        attributed stay at the top level: no pre-split product, no item with a
+        matching product type, or keys that never describe one product
+        (``productType``, ``productTypes``, ``platform``, ``purpose``,
+        ``budget``, ``deadline`` and the whole item list).  Evidence,
+        confidence and status are moved verbatim — never recomputed — and item
+        order values are not touched here; this only relocates provenance.
+        Key iteration is ``sorted()`` so the relocation never depends on hash
+        order.
+        """
+        items = self.state["order"].get("items")
+        if not isinstance(items, list) or not items \
+                or not isinstance(items[0], dict):
+            return
+        field_meta = self.state.get("fieldMeta")
+        if not isinstance(field_meta, dict):
+            return
+        first_prefix = f"items.{items[0].get('itemId') or 'item-1'}."
+        product = str(previous_order.get("productType") or "").strip()
+        target_prefix = ""
+        if product:
+            target_index = next((index for index, item in enumerate(items)
+                                 if isinstance(item, dict)
+                                 and str(item.get("productType") or "").strip() == product), None)
+            if target_index is not None:
+                target_prefix = f"items.{items[target_index].get('itemId') or f'item-{target_index + 1}'}."
+        migrated_keys: list[str] = []
+        for key in sorted(field_meta):
+            if not isinstance(key, str) or key.startswith("items.") \
+                    or not self._is_product_scoped_meta_key(key) \
+                    or not isinstance(field_meta[key], dict):
+                continue
+            prefix = first_prefix if key in changed else target_prefix
+            if not prefix:
+                continue
+            field_meta[prefix + key] = deepcopy(field_meta.pop(key))
+            migrated_keys.append(key)
+        if not migrated_keys:
+            return
+        # The evidence drawer keeps its audit entries under the owning item.
+        first_id = str(items[0].get("itemId") or "item-1")
+        target_id = target_prefix[len("items."):-1]
+        migrated = set(migrated_keys)
+        for candidate in self.state.get("fieldCandidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            field = candidate.get("field")
+            if field not in migrated:
+                continue
+            field = str(field)
+            if field in changed:
+                candidate["field"] = first_prefix + field
+                candidate["scope"] = first_id
+            elif target_prefix:
+                candidate["field"] = target_prefix + field
+                candidate["scope"] = target_id
 
     @staticmethod
     def _is_explanation_request(text: str) -> bool:
@@ -4250,7 +4344,111 @@ class Agent:
         return perceive(text, allow_multi=allow_multi)[0]
 
     @staticmethod
-    def _perceive_full(text: str, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
+    def _merge_repeated_product_mentions(perceived: dict[str, Any], confidence: dict[str, float],
+                                         candidates: list[dict[str, Any]] | None = None) -> None:
+        """Collapse repeated mentions of one product into its first item, in place.
+
+        ``nlu.perceive`` builds one item per catalog mention.  A common phrasing
+        restates the product to attach its parameters ("做名片和海报，名片90×54mm…，
+        海报A2…"), which would otherwise keep an empty stub item plus a filled
+        duplicate for the same product.  A later mention of an already-seen
+        product therefore updates that product's first item instead of adding a
+        second one: later non-empty values win, empty values never erase, and
+        the per-mention confidence grades travel with the values they graded.
+        One message with N distinct products keeps yielding exactly N items.
+
+        Runs after :func:`field_candidates` so every mention's evidence window
+        was computed against its own clause; matching item-scoped candidates
+        are re-prefixed to the surviving item alongside the patch and grades.
+        """
+        items = perceived.get("items")
+        if not isinstance(items, list) or len(items) < 2:
+            return
+        merged: list[Any] = []
+        merged_grades: list[dict[str, float]] = []
+        mention_target: dict[int, int] = {}
+        item_index_by_product: dict[str, int] = {}
+        changed = False
+        for mention_index, item in enumerate(items):
+            source_prefix = f"items.item-{mention_index + 1}."
+            if not isinstance(item, dict):
+                merged.append(item)
+                merged_grades.append({})
+                continue
+            product = str(item.get("productType") or "").strip()
+            target = item_index_by_product.get(product) if product else None
+            if target is None:
+                if product:
+                    item_index_by_product[product] = len(merged)
+                mention_target[mention_index] = len(merged)
+                merged.append(deepcopy(item))
+                merged_grades.append({key[len(source_prefix):]: grade
+                                      for key, grade in confidence.items()
+                                      if isinstance(key, str) and key.startswith(source_prefix)})
+                continue
+            changed = True
+            mention_target[mention_index] = target
+            base = merged[target]
+            base_grades = merged_grades[target]
+            for key, value in item.items():
+                if key == "productType" or value in (None, "") or base.get(key) == value:
+                    continue
+                if isinstance(value, dict):
+                    slot = base.get(key)
+                    if not isinstance(slot, dict):
+                        slot = {}
+                        base[key] = slot
+                    for name, entry in value.items():
+                        if entry in (None, "") or slot.get(name) == entry:
+                            continue
+                        slot[name] = deepcopy(entry)
+                        grade = confidence.get(f"{source_prefix}{key}.{name}",
+                                               confidence.get(f"{source_prefix}{key}"))
+                        if grade is not None:
+                            base_grades[f"{key}.{name}"] = grade
+                    continue
+                base[key] = deepcopy(value)
+                grade = confidence.get(f"{source_prefix}{key}")
+                if grade is not None:
+                    base_grades[key] = grade
+        if not changed:
+            return
+        perceived["items"] = merged
+        # Scalar top-level fields are a compatibility projection of item 1
+        # (see ``nlu.perceive``).  Re-derive it from the merged first item so
+        # the projection cannot keep describing a pre-merge mention stub.
+        for key in ("quantity", "quantityValue", "quantityUnit", "size", "dimensions",
+                    "paper", "printing", "finishing", "binding", "productSpecs"):
+            value = merged[0].get(key) if merged and isinstance(merged[0], dict) else None
+            perceived.pop(key, None)
+            if value not in (None, ""):
+                perceived[key] = deepcopy(value)
+        for key in [key for key in confidence if isinstance(key, str) and key.startswith("items.item-")]:
+            del confidence[key]
+        for index, grades in enumerate(merged_grades):
+            for key, grade in grades.items():
+                confidence[f"items.item-{index + 1}.{key}"] = grade
+        for candidate in candidates or []:
+            if not isinstance(candidate, dict):
+                continue
+            field = candidate.get("field")
+            if not isinstance(field, str) or not field.startswith("items.item-"):
+                continue
+            parts = field.split(".", 2)
+            if len(parts) < 3:
+                continue
+            try:
+                mention = int(parts[1].removeprefix("item-")) - 1
+            except ValueError:
+                continue
+            target = mention_target.get(mention)
+            if target is None or target == mention:
+                continue
+            candidate["field"] = f"items.item-{target + 1}.{parts[2]}"
+            candidate["scope"] = f"item-{target + 1}"
+
+    @classmethod
+    def _perceive_full(cls, text: str, product_hint: str = "") -> tuple[dict[str, Any], dict[str, float]]:
         """Return fields plus the per-field evidence confidence grade."""
         return perceive(text, product_hint=product_hint)
 
