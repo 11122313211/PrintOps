@@ -63,6 +63,12 @@ MAX_RUN_EVENTS = 64
 MAX_RUN_HISTORY = 20
 MAX_QUOTE_REQUESTS = 40
 QUOTE_ACTIVE_STATUSES = {"awaiting_human_confirmation", "confirmed"}
+# Planner tool receipts carrying one of these statuses failed outright; a
+# deterministic retry with canonical local arguments may still succeed.
+PLANNER_RETRYABLE_FAILURE_STATUSES = {"error", "invalid_arguments", "duplicate_blocked"}
+# Receipts/result statuses that must never read as a grounded success, including
+# the deterministic workflow blocks.
+PLANNER_FAILURE_STATUSES = PLANNER_RETRYABLE_FAILURE_STATUSES | {"blocked"}
 # ``call_tool`` is also used by the local HTTP bridge, so keep a small
 # provider-independent boundary here instead of relying only on MCP schemas.
 MAX_TOOL_NAME_LENGTH = 128
@@ -1314,7 +1320,7 @@ class Agent:
             if receipt.get("name") != name or receipt.get("stale"):
                 continue
             status = receipt.get("status")
-            if status in {"error", "invalid_arguments", "duplicate_blocked"}:
+            if status in PLANNER_RETRYABLE_FAILURE_STATUSES:
                 continue
             result = receipt.get("result")
             if name == "recommend_processes":
@@ -1912,9 +1918,8 @@ class Agent:
         explicit_recommendation = self._intent_fired(text, "recommendation")
         if required_names == ["recommend_processes"] and not explicit_recommendation \
                 and any(item.get("name") != "validate_order" and not item.get("stale")
-                        and item.get("status") not in {
-                            "error", "invalid_arguments", "duplicate_blocked", "blocked",
-                        } for item in self._planner_tool_receipts):
+                        and item.get("status") not in PLANNER_FAILURE_STATUSES
+                        for item in self._planner_tool_receipts):
             required_names = []
         for required_name in required_names:
             # A readiness gate already performs the same authoritative
@@ -1932,9 +1937,7 @@ class Agent:
             latest_required = self._planner_latest_receipt(required_name)
             retryable_failure = bool(
                 latest_required and not latest_required.get("stale")
-                and latest_required.get("status") in {
-                    "error", "invalid_arguments", "duplicate_blocked",
-                }
+                and latest_required.get("status") in PLANNER_RETRYABLE_FAILURE_STATUSES
             )
             # A deterministic blocked result is already authoritative.  A
             # malformed/error attempt is not: retry it once with canonical
@@ -2005,9 +2008,8 @@ class Agent:
             stale_latest = bool(last_receipt and last_receipt.get("stale"))
             forced_latest = [self._planner_latest_receipt(name) for name in forced_names]
             forced_failure = any(
-                receipt and not receipt.get("stale") and receipt.get("status") in {
-                    "blocked", "error", "invalid_arguments", "duplicate_blocked",
-                }
+                receipt and not receipt.get("stale")
+                and receipt.get("status") in PLANNER_FAILURE_STATUSES
                 for receipt in forced_latest
             )
             if final_reply.strip() and (not forced_names or post_force_synthesized) \
@@ -3959,8 +3961,7 @@ class Agent:
 
     def _planner_tool_fallback(self, name: str, result: Any) -> str:
         """Give the user a useful answer if the second synthesis call fails."""
-        if isinstance(result, dict) and result.get("status") in {
-                "blocked", "error", "invalid_arguments", "duplicate_blocked"}:
+        if isinstance(result, dict) and result.get("status") in PLANNER_FAILURE_STATUSES:
             if result.get("message"):
                 return str(result["message"])
             if result.get("text"):
