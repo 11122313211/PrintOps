@@ -324,9 +324,42 @@ def _field(order: dict[str, Any], key: str) -> Any:
     return value
 
 
+def _tool_report_from_run_traces(traces: list[list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """Aggregate per-tool call counts, success rate and latency from runTrace events.
+
+    Only terminal tool events count as calls (``started`` is bookkeeping);
+    ``durationMs`` averages over the events that carry one, so rejected or
+    blocked gateway events recorded without a duration still contribute to
+    the call counts.
+    """
+    aggregated: dict[str, dict[str, Any]] = {}
+    for trace in traces:
+        for event in trace:
+            if not isinstance(event, dict) or event.get("step") != "tool" or not event.get("tool"):
+                continue
+            status = str(event.get("status") or "")
+            if status not in ("ok", "failed", "blocked", "rejected", "error"):
+                continue
+            entry = aggregated.setdefault(str(event["tool"]),
+                                          {"calls": 0, "ok": 0, "failed": 0, "blocked": 0,
+                                           "rejected": 0, "error": 0, "durations": []})
+            entry["calls"] += 1
+            entry[status] += 1
+            duration = event.get("durationMs")
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+                entry["durations"].append(duration)
+    report: dict[str, dict[str, Any]] = {}
+    for name, entry in sorted(aggregated.items(), key=lambda item: (-item[1]["calls"], item[0])):
+        durations = entry.pop("durations")
+        report[name] = entry | {"successRate": round(entry["ok"] / entry["calls"] * 100) if entry["calls"] else 0,
+                                "avgMs": round(sum(durations) / len(durations), 2) if durations else None}
+    return report
+
+
 def run_suite(cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     cases = CASES if cases is None else cases
     case_results: list[dict[str, Any]] = []
+    run_traces: list[list[dict[str, Any]]] = []
     total_fields = 0
     matched_fields = 0
     total_turns = 0
@@ -349,6 +382,9 @@ def run_suite(cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
                 final = agent.chat(turn["text"], turn.get("patch"))
                 latencies.append((time.perf_counter() - started) * 1000)
                 total_turns += 1
+                trace = final.get("runTrace")
+                if isinstance(trace, list):
+                    run_traces.append([item for item in trace if isinstance(item, dict)])
                 if ready_turn is None and not final.get("missingFields"):
                     ready_turn = index
             if ready_turn is not None:
@@ -383,7 +419,8 @@ def run_suite(cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "fieldAccuracy": round(matched_fields / total_fields * 100) if total_fields else 100,
         "averageTurnsToReady": round(sum(turns_to_ready) / len(turns_to_ready), 2) if turns_to_ready else None,
         "averageResponseMs": round(sum(latencies) / len(latencies), 2) if latencies else None,
-        "totalTurns": total_turns, "tagReport": tag_report, "results": case_results,
+        "totalTurns": total_turns, "toolReport": _tool_report_from_run_traces(run_traces),
+        "tagReport": tag_report, "results": case_results,
     }
 
 
@@ -468,6 +505,10 @@ def main() -> int:
         print(f"平均响应耗时：{report['averageResponseMs']}ms")
         for tag, stats in report["tagReport"].items():
             print(f"- [{tag}] {stats['cases']} 例，字段准确率 {stats['fieldAccuracy']}%")
+        if report["toolReport"]:
+            print("工具调用汇总（runTrace 终态事件）：")
+            for name, entry in report["toolReport"].items():
+                print(f"- {name}：{entry['calls']} 次，成功率 {entry['successRate']}%，平均 {entry['avgMs']}ms")
         for label, suite in (("合成语料", report), ("真实语料", real_report)):
             if suite is None:
                 continue
