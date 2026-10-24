@@ -371,14 +371,18 @@ test('390px layout does not overflow horizontally and navigation opens and close
 
 test('settings toolbox shows local-only tool-call statistics', async ({page, appURL}) => {
   await boot(page, appURL);
-  // The rule-mode chat path dispatches tools through the same gateway the
-  // telemetry records, so one synthetic order guarantees stats rows exist.
   await send(page, syntheticCard);
   await openTools(page);
+  // Only gateway dispatches (/api/tools/call) reach the telemetry log, so
+  // make one explicitly instead of relying on the shared server's history.
+  const called = page.waitForResponse((r) => r.url().endsWith('/api/tools/call'));
+  await page.getByRole('button', {name: 'PR 估算费用 生成非正式价格区间'}).click();
+  await called;
+  await openTools(page);  // reopen settings: opening the dialog refreshes stats
   await expect(page.locator('#tool-stats-panel')).toHaveAttribute('open', '');
   await expect(page.locator('#tool-stats-scope')).toHaveText('仅本机数据');
   await expect(page.locator('#tool-stats-list')).toContainText('全部工具');
-  await expect(page.locator('#tool-stats-list')).toContainText('validate_order');
+  await expect(page.locator('#tool-stats-list')).toContainText('estimate_price');
   const summary = page.locator('#tool-stats-list .run-event').first();
   await expect(summary).toContainText('成功率');
   await expect(summary).toContainText('平均');
