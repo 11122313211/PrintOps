@@ -1,6 +1,7 @@
 """Store contracts, migration, atomicity and concurrency; synthetic fixtures only."""
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import json
 from contextlib import closing
 from pathlib import Path
@@ -10,7 +11,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from storage_contract import OrderStore, StoreConflictError
+from storage_contract import OrderStore, StoreConflictError, ToolCallRecorder, timestamp
 from storage_factory import create_store, register_store
 from storage_memory import InMemoryOrderStore
 from storage_sqlite import SQLiteOrderStore
@@ -130,6 +131,45 @@ class StoreContractTest(unittest.TestCase):
                 self.assertEqual(store.list_orders({"status": "confirmed"})["total"], 0)
                 with self.assertRaises(StoreConflictError):
                     store.create_order(fixture("synthetic-0"))
+
+    def test_tool_call_log_records_aggregates_and_filters_by_window(self):
+        for store in self.stores:
+            with self.subTest(mode=store.metadata()["mode"]):
+                self.assertIsInstance(store, ToolCallRecorder)
+                fresh = timestamp()
+                stale = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat(timespec="microseconds")
+                store.record_tool_call({"tool_name": "estimate_price", "status": "ok", "duration_ms": 100,
+                                        "session_id": "synthetic", "run_id": "run-1", "item_index": 0,
+                                        "created_at": fresh})
+                store.record_tool_call({"tool_name": "estimate_price", "status": "blocked",
+                                        "reason": "order_not_ready", "duration_ms": 200,
+                                        "session_id": "synthetic", "created_at": fresh})
+                store.record_tool_call({"tool_name": "request_supplier_quote", "status": "rejected",
+                                        "reason": "tool_name", "created_at": stale})
+                # Malformed entries never raise; they degrade to a failed row.
+                store.record_tool_call({"tool_name": 42, "status": "mystery", "duration_ms": "x"})
+                month = store.load_tool_stats(30)
+                self.assertEqual(month["windowDays"], 30)
+                self.assertEqual(month["scope"], "local-only")
+                self.assertEqual(month["totals"]["calls"], 3)
+                self.assertEqual(month["totals"]["ok"], 1)
+                self.assertEqual(month["totals"]["blocked"], 1)
+                self.assertEqual(month["totals"]["failed"], 1)
+                self.assertEqual(month["totals"]["successRate"], 33)
+                self.assertEqual(month["totals"]["avgMs"], 100.0)
+                self.assertEqual(month["totals"]["p95Ms"], 200.0)
+                self.assertEqual(month["tools"][0]["tool"], "estimate_price")
+                self.assertEqual(month["tools"][0]["calls"], 2)
+                self.assertEqual(month["blockedReasons"], [{"reason": "order_not_ready", "count": 1}])
+                quarter = store.load_tool_stats(90)
+                self.assertEqual(quarter["totals"]["calls"], 4)
+                self.assertEqual(quarter["totals"]["rejected"], 1)
+                estimate = next(tool for tool in quarter["tools"] if tool["tool"] == "estimate_price")
+                self.assertEqual(estimate["successRate"], 50)
+                with self.assertRaises(ValueError):
+                    store.load_tool_stats(0)
+                with self.assertRaises(ValueError):
+                    store.load_tool_stats("soon")
 
 
 class SQLiteMigrationTest(unittest.TestCase):

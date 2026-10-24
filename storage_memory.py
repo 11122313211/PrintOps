@@ -1,12 +1,15 @@
 """Volatile OrderStore for tests and explicitly selected ephemeral deployments."""
 from __future__ import annotations
 
+from collections import deque
 from copy import deepcopy
 import threading
 import uuid
 from typing import Any
-from storage_contract import (STORE_CONTRACT_VERSION, StoreConflictError, change_event,
-                              json_text, message_delta, prepare_record, summary, timestamp)
+from storage_contract import (STORE_CONTRACT_VERSION, StoreConflictError, TOOL_CALL_LOG_LIMIT,
+                              aggregate_tool_calls, change_event, json_text, message_delta,
+                              normalize_tool_call_entry, prepare_record, summary, timestamp,
+                              tool_stats_cutoff)
 
 
 class InMemoryOrderStore:
@@ -17,6 +20,9 @@ class InMemoryOrderStore:
         self._messages: dict[str, list[dict[str, Any]]] = {}
         self._quotes: dict[str, dict[str, dict[str, Any]]] = {}
         self._audit: dict[str, list[dict[str, Any]]] = {}
+        # Bounded telemetry ring: the same cap the SQLite table would hold in
+        # aggregate, so an ephemeral deployment cannot grow without bound.
+        self._tool_calls: deque[dict[str, Any]] = deque(maxlen=TOOL_CALL_LOG_LIMIT)
 
     def metadata(self) -> dict[str, Any]:
         return {"mode": "memory", "persistent": False, "contractVersion": STORE_CONTRACT_VERSION,
@@ -127,6 +133,18 @@ class InMemoryOrderStore:
             for collection in (self._orders, self._events, self._messages, self._quotes, self._audit):
                 collection.pop(order_id, None)
             return {"orderId": order_id, "deleted": True}
+
+    def record_tool_call(self, entry: dict[str, Any]) -> None:
+        """Append one normalized telemetry entry to the bounded ring."""
+        record = normalize_tool_call_entry(entry)
+        with self._lock:
+            self._tool_calls.append(record)
+
+    def load_tool_stats(self, window_days: int) -> dict[str, Any]:
+        with self._lock:
+            cutoff = tool_stats_cutoff(window_days)
+            rows = [dict(row) for row in self._tool_calls if row["created_at"] >= cutoff]
+        return aggregate_tool_calls(rows, window_days)
 
     def export_order(self, order_id: str) -> dict[str, Any] | None:
         with self._lock:
