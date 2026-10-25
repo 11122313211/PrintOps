@@ -7,18 +7,25 @@ const output='reports/ui-redesign/capture';
 await mkdir(output,{recursive:true});
 const browser=await chromium.launch();
 async function openOrder(page) {
- if(await page.locator('#order-toggle').getAttribute('aria-expanded')!=='true') await page.locator('#order-toggle').click();
- const back=page.locator('.order-view:not([hidden]) [data-order-view="order"]');
- if(await back.isVisible()) await back.click();
- await expect(page.locator('#phase-order')).toBeVisible();
+ if(await page.locator('#settings-dialog[open]').count()) await page.keyboard.press('Escape');
+ if(!await page.locator('.order-section').isVisible()) await page.locator('#order-toggle').click();
+ await expect(page.locator('.order-section')).toBeVisible();
+}
+async function openView(page,name) {
+ await openOrder(page);
+ await page.locator(`.order-document-links [data-view="${name}"]`).click();
+ await expect(page.locator(`#phase-${name}`)).toBeVisible();
 }
 async function verifyPrint(page,suffix,orderId) {
  await page.emulateMedia({media:'print'});
  await expect(page.locator('#handoff-preview')).toBeVisible();
  await expect(page.locator('#handoff-preview')).toContainText(orderId);
- for(const selector of ['.topbar','.sidebar','.chat-section','.order-pane-footer','#order-pane > .pane-header','#phase-order','#phase-compare','#mobile-back']) await expect(page.locator(selector)).toBeHidden();
+ for(const selector of ['.sidebar','.order-section','.pane-splitter','#phase-compare']) await expect(page.locator(selector).first()).toBeHidden();
  await page.pdf({path:`${output}/handoff-${suffix}.pdf`,format:'A4',printBackground:true,preferCSSPageSize:true});
  await page.emulateMedia({media:'screen'});
+ // page.pdf resizes the viewport to paper width; the breakpoint watcher
+ // persists that crossing as a user collapse. Restore the expanded default.
+ await page.evaluate(()=>localStorage.setItem("printops_sidebar","expanded"));
  return {sample:suffix,handoffVisible:true,applicationChromeHidden:true};
 }
 try {
@@ -28,8 +35,8 @@ try {
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base);await expect(page.locator('#message-input')).toBeEnabled();
  await page.evaluate(()=>document.fonts.ready);
- await expect(page.locator('#order-toggle')).toHaveAttribute('aria-expanded','false');
- await expect(page.locator('#quick-replies button')).toHaveCount(0);
+ await expect(page.locator('#order-toggle')).toHaveAttribute('aria-expanded','true');
+ await expect(page.locator('#quick-replies button')).toHaveCount(3);
  await expect(page.locator('#message-input')).toHaveCount(1);
  await page.screenshot({path:`${output}/first-use.png`});
  const records=[],printChecks=[];
@@ -54,19 +61,17 @@ try {
   await page.reload();await page.locator('#order-number').filter({hasText:result.sessionId.toUpperCase()}).waitFor();
   await expect(page.locator('#message-input')).toBeEnabled();
   await openOrder(page);
-  await page.locator('#order-pane-body').evaluate(n=>n.scrollTop=0);
   if(suffix==='1-items') await page.screenshot({path:`${output}/workbench.png`});
   if(count===1){
-   await page.locator('#open-options').click();
-   await page.locator('.choose-option').first().waitFor();
-   await page.locator('#order-pane-body').evaluate(n=>n.scrollTop=0);
+   await openView(page,'compare');
+   await page.locator('#phase-compare').evaluate(n=>n.scrollTop=0);
+   await expect(page.locator('.choose-option').first()).toBeVisible();
    if(suffix==='1-items') await page.screenshot({path:`${output}/plan-comparison.png`});
    const choice=page.waitForResponse(r=>r.url().endsWith('/api/choose'));
    await page.locator('.choose-option').first().click();
    if((await choice).status()!==200)throw new Error('Option selection failed');
-   await openOrder(page);
   }
-  await page.locator('#open-handoff').click();
+  await openView(page,'review');
   const generate=page.waitForResponse(r=>r.url().endsWith('/api/generate'));
   await page.locator('#generate-order').click();
   if((await generate).status()!==200)throw new Error('Handoff generation failed');
@@ -77,7 +82,7 @@ try {
   await page.locator('#handoff-preview').getByText('状态：已本地确认',{exact:false}).waitFor();
   if(!confirmed.handoffDocument?.exportable)throw new Error('Expected exportable confirmed document');
   await writeFile(`${output}/handoff-${suffix}.json`,JSON.stringify(confirmed.handoffDocument,null,2));
-  await page.locator('#order-pane-body').evaluate(n=>n.scrollTop=0);
+  await page.locator('#phase-review').evaluate(n=>n.scrollTop=0);
   await page.screenshot({path:`${output}/review-${suffix}.png`});
   printChecks.push(await verifyPrint(page,suffix,confirmed.sessionId));
   records.push({items:count,sample:suffix,orderId:confirmed.sessionId,revision:confirmed.revision,confirmedRevision:confirmed.handoffDocument.confirmedRevision,exportable:true});
@@ -87,8 +92,7 @@ try {
  await page.locator('#order-number').filter({hasText:records.find(record=>record.items===3).orderId.toUpperCase()}).waitFor();
  await expect(page.locator('#message-input')).toBeEnabled();
  await page.setViewportSize({width:390,height:844});
- await expect(page.locator('#workspace')).toHaveAttribute('data-layout','narrow');
- await expect(page.locator('#workspace')).toHaveAttribute('data-drawer','');
+ await expect(page.locator('#message-input')).toBeVisible();
  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1))throw new Error('Narrow screenshot has horizontal page overflow');
  await page.screenshot({path:`${output}/mobile-390.png`,fullPage:true});
  if(errors.length)throw new Error(errors.join('\n'));
