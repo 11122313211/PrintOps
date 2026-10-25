@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20261024-file-check-overflow-1" />
+    <link rel="stylesheet" href="styles.css?v=20261025-history-batch-3" />
   </head>
   <body>
     <div class="app-shell">
@@ -61,12 +61,6 @@
             <div class="history-list" id="history-list"></div>
           </section>
 
-          <section class="preset-panel" aria-label="常用规格">
-            <div class="tool-panel-heading"><span>常用规格</span><span id="preset-count">0 组</span></div>
-            <div class="preset-list" id="preset-list"></div>
-            <button class="preset-save" id="save-preset" type="button">保存当前工艺组合</button>
-          </section>
-
           <section class="decision-panel" aria-label="当前决策">
             <div class="tool-panel-heading"><span>当前决策</span><span id="decision-confidence">可解释</span></div>
             <strong id="workflow-label">需求收集</strong>
@@ -76,6 +70,16 @@
           </section>
 
           </div>
+
+          <section class="preset-panel" aria-label="常用规格">
+            <div class="preset-compact">
+              <button class="preset-save" id="save-preset" type="button" title="把当前纸张、颜色、工艺与装订保存为常用组合，需要时从“常用”里点击复用">＋ 保存常用</button>
+              <button class="preset-toggle" id="preset-toggle" type="button" aria-expanded="false" aria-haspopup="true" title="展开常用规格列表，点击组合即可复用">常用 <span id="preset-count">0</span><span class="preset-caret" aria-hidden="true">▾</span></button>
+            </div>
+            <div class="preset-drawer" id="preset-drawer" aria-label="常用规格列表" hidden>
+              <div class="preset-list" id="preset-list"></div>
+            </div>
+          </section>
         </aside>
 
         <div class="pane-splitter" data-pane="sidebar" role="separator" tabindex="0" aria-orientation="vertical"
@@ -135,6 +139,7 @@
                 <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
                 <button class="tool-button" id="upload-button" type="button" title="上传 PDF 文件">上传文件</button>
                 <button class="tool-button" id="preview-toggle" type="button" aria-pressed="false" hidden title="按 Markdown 预览输入内容">预览</button>
+                <button class="tool-button" id="chat-cancel" type="button" hidden title="停止等待当前回复">停止</button>
                 <span class="tool-hint">支持 PDF，单个文件不超过 20 MB</span>
               </div>
               <button class="send-button" type="submit">
@@ -149,12 +154,38 @@
             <div class="phase-intro"><h3>按用途选择合适的方案</h3><p>对比同一产品与数量。差异来自材料、工艺和印刷方式；费用均为示例估算。</p></div>
             <p id="compare-empty">先补充必要参数，再生成方案。未标定的费用会明确列出。</p>
             <button id="request-options" class="secondary-action" type="button">生成本项方案</button>
+            <section class="estimate-panel" id="estimate-panel" aria-live="polite" hidden></section>
+            <div class="recommendations" id="recommendations" hidden>
+              <div class="recommendation-heading">
+                <div>
+                  <h3>推荐工艺方案</h3>
+                </div>
+                <span class="recommendation-count" id="recommendation-count">0 个方案</span>
+              </div>
+              <p class="option-note" id="option-note" hidden></p>
+              <div class="option-compare" id="option-compare" hidden></div>
+              <div class="option-list" id="option-list"></div>
+            </div>
           </section>
           <section id="phase-review" class="journey-pane" aria-label="核对与交接" hidden>
             <button class="tool-button" type="button" data-view="intake">← 返回对话</button>
             <div class="phase-intro"><h3>核对每个产品，再生成交接单</h3><p>检查数量、尺寸、材料与文件归属。当前只准备本地交接资料，尚未发送供应商。</p></div>
             <details id="review-checklist-section" open><summary>查看与修改生产参数</summary><div id="review-checklist"></div></details>
             <article id="handoff-preview" class="handoff-document" aria-label="交接单预览"></article>
+            <div class="order-actions">
+              <button class="primary-action" id="generate-order" type="button" disabled>生成订单草稿</button>
+              <button class="secondary-action" id="confirm-order" type="button" hidden>确认交接单</button>
+              <button class="secondary-action" id="copy-order" type="button" disabled>复制订单信息</button>
+            </div>
+            <div class="order-export" id="order-export" hidden>
+              <span id="export-label">导出订单</span>
+              <div class="export-options" aria-labelledby="export-label">
+                <button class="export-option" type="button" data-format="json">JSON</button>
+                <button class="export-option" type="button" data-format="csv">CSV</button>
+                <button class="export-option" type="button" data-format="markdown">Markdown</button>
+                <button class="export-option" type="button" data-format="print">打印 / PDF</button>
+              </div>
+            </div>
           </section>
           <div class="task-bar" aria-label="当前任务" hidden><div><strong id="next-task-title">说说你的印刷用途</strong><small id="next-task-description">从数量、用途或交期开始。</small></div><button id="next-task-action" type="button" class="primary-action">开始填写</button></div>
           <div class="sr-only" id="journey-announcement" role="status" aria-live="polite"></div>
@@ -259,19 +290,6 @@
             </label>
             <p id="provider-status">未配置 · 仅生成本地草稿</p>
           </section>
-          <section class="estimate-panel" id="estimate-panel" aria-live="polite" hidden></section>
-
-          <div class="recommendations" id="recommendations" hidden>
-            <div class="recommendation-heading">
-              <div>
-                <h3>推荐工艺方案</h3>
-              </div>
-              <span class="recommendation-count" id="recommendation-count">0 个方案</span>
-            </div>
-            <p class="option-note" id="option-note" hidden></p>
-            <div class="option-compare" id="option-compare" hidden></div>
-            <div class="option-list" id="option-list"></div>
-          </div>
 
           <div class="quote-panel" id="quote-panel" hidden>
             <div class="quote-heading">
@@ -288,21 +306,6 @@
             <div class="quote-actions">
               <button class="secondary-action" id="quote-refresh" type="button">刷新状态</button>
               <button class="secondary-action" id="quote-cancel" type="button">取消询价</button>
-            </div>
-          </div>
-
-          <div class="order-actions">
-            <button class="primary-action" id="generate-order" type="button" disabled>生成订单草稿</button>
-            <button class="secondary-action" id="confirm-order" type="button" hidden>确认交接单</button>
-            <button class="secondary-action" id="copy-order" type="button" disabled>复制订单信息</button>
-          </div>
-          <div class="order-export" id="order-export" hidden>
-            <span id="export-label">导出订单</span>
-            <div class="export-options" aria-labelledby="export-label">
-              <button class="export-option" type="button" data-format="json">JSON</button>
-              <button class="export-option" type="button" data-format="csv">CSV</button>
-              <button class="export-option" type="button" data-format="markdown">Markdown</button>
-              <button class="export-option" type="button" data-format="print">打印 / PDF</button>
             </div>
           </div>
         </aside>
@@ -338,7 +341,7 @@
             <button id="settings-view-overview" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-overview" data-settings-view="overview"><strong>总览</strong><small>在线状态与集成功能</small></button>
             <button id="settings-view-appearance" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" data-settings-view="appearance"><strong>界面显示</strong><small>对比度与显示偏好</small></button>
             <button id="settings-view-interface" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-interface" data-settings-view="interface"><strong>接口设置</strong><small>模型连接与能力检测</small></button>
-            <button id="settings-view-history" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-history" data-settings-view="history"><strong>历史归档</strong><small>查看已归档会话</small></button>
+            <button id="settings-view-history" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-history" data-settings-view="history"><strong>历史订单</strong><small>批量归档、导出与清理</small></button>
             <button id="settings-view-products" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-products" data-settings-view="products"><strong>产品索引</strong><small>常用品类入口</small></button>
             <button id="settings-view-tools" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-tools" data-settings-view="tools"><strong>工具箱</strong><small>工具与本次运行</small></button>
           </nav>
@@ -384,10 +387,23 @@
               <div class="settings-actions"><button class="secondary-action settings-clear" id="settings-clear" type="button">清空配置</button><span class="settings-action-spacer"></span><button class="secondary-action" id="settings-test" type="button">测试连接</button><button class="secondary-action" id="settings-cancel-secondary" type="button">取消</button><button class="secondary-action settings-save" id="settings-save" type="submit">保存设置</button></div>
             </section>
             <section class="settings-panel" id="settings-panel-history" data-settings-panel="history" role="tabpanel" aria-labelledby="settings-view-history" tabindex="0" hidden>
-              <div class="settings-panel-heading"><div><p class="eyebrow">HISTORY & ARCHIVE</p><h3>历史归档</h3></div></div>
+              <div class="settings-panel-heading"><div><p class="eyebrow">HISTORY &amp; ARCHIVE</p><h3>历史订单管理</h3></div></div>
+              <div class="settings-history-toolbar" id="settings-history-toolbar">
+                <label class="settings-history-select" for="settings-history-select-all">
+                  <input type="checkbox" id="settings-history-select-all">
+                  <span>全选</span>
+                </label>
+                <span class="settings-history-selection" id="settings-history-selection-count">已选 0</span>
+                <span class="settings-history-bulk-actions">
+                  <button class="settings-history-action settings-history-bulk" type="button" data-history-bulk="archive" title="把所选进行中订单归档为只读">归档所选</button>
+                  <button class="settings-history-action settings-history-bulk" type="button" data-history-bulk="export" title="导出所选订单的完整备份">导出所选</button>
+                  <button class="settings-history-action settings-history-bulk danger" type="button" data-history-bulk="delete" title="永久删除所选订单（未归档的会先自动归档再清除）">删除所选</button>
+                </span>
+              </div>
+              <div class="settings-history-list" id="settings-history-list" aria-label="全部订单（含归档）"></div>
               <label class="settings-history-option" for="history-include-archived">
                 <input type="checkbox" id="history-include-archived">
-                <span><strong>显示已归档订单</strong><small>归档订单只读，可查看、导出或永久删除；取消后从当前历史列表隐藏。</small></span>
+                <span><strong>在左侧历史列表显示已归档订单</strong><small>归档订单只读；这里不勾选时仍可在上方列表查看、导出或永久删除。</small></span>
               </label>
             </section>
             <section class="settings-panel" id="settings-panel-products" data-settings-panel="products" role="tabpanel" aria-labelledby="settings-view-products" tabindex="0" hidden>
@@ -408,8 +424,8 @@
 
     <div class="toast" id="toast" role="status"></div>
     <script src="markdown.js?v=20260918-1"></script>
-    <script src="workbench.js?v=20261023-no-provenance-chips"></script>
-    <script src="journey.js?v=20261024-error-texts-1"></script>
-    <script src="app.js?v=20261024-tool-stats-1"></script>
+    <script src="workbench.js?v=20261025-tooltip-export-1"></script>
+    <script src="journey.js?v=20261025-static-panes-1"></script>
+    <script src="app.js?v=20261025-history-batch-3"></script>
   </body>
 </html>

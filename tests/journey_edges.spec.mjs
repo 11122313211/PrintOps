@@ -199,6 +199,123 @@ test('archived review and option controls remain read-only after phase navigatio
   await expect(page.locator('#drop-zone')).toBeEnabled();
 });
 
+test('the settings history panel lists every order and purges archived ones for good', async ({page, appURL}) => {
+  await boot(page, appURL);
+  // The worker-scoped server keeps its database across tests, so archived
+  // leftovers from earlier cases are purged up front; the panel now lists all
+  // orders, so assertions are scoped by session id instead of list length.
+  const token = await page.evaluate(() => window.__PRINTOPS_TOKEN__);
+  const leftovers = await page.request.get(new URL('/api/orders?includeArchived=true&status=archived', page.url()).href, {headers:{'X-PrintOps-Token':token}});
+  for (const entry of (await leftovers.json()).orders) {
+    const purged = await page.request.post(new URL(`/api/orders/${entry.orderId}/purge`, page.url()).href, {headers:{'X-PrintOps-Token':token}, data:{expectedRevision: entry.revision, confirm: true}});
+    expect(purged.status()).toBe(200);
+  }
+  const current = await send(page, card);
+  page.once('dialog', dialog => dialog.accept());
+  await openHistoryMenu(page, current.sessionId);
+  await posted(page, `/api/orders/${current.sessionId}/archive`, () => page.locator('#history-context-menu [data-history-menu-action="archive"]').click());
+  // The archived order is hidden from the sidebar by default but must be
+  // manageable from the settings history panel.
+  await expect(page.locator(`.history-item[data-session-id="${current.sessionId}"]`)).toHaveCount(0);
+  await page.locator('#settings-button').click();
+  await page.locator('[data-settings-view="history"]').click();
+  const row = (id) => page.locator('.settings-history-row').filter({has: page.locator(`.settings-history-view[data-order-id="${id}"]`)});
+  await expect(row(current.sessionId)).toBeVisible();
+  await expect(row(current.sessionId).getByText('已归档')).toBeVisible();
+  await expect(row(current.sessionId).getByRole('button', {name: '永久删除'})).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await posted(page, `/api/orders/${current.sessionId}/purge`, () => row(current.sessionId).getByRole('button', {name: '永久删除'}).click());
+  await expect(row(current.sessionId)).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  const list = await page.request.get(new URL('/api/orders?includeArchived=true', page.url()).href, {headers:{'X-PrintOps-Token':token}});
+  expect((await list.json()).orders.map((entry) => entry.orderId)).not.toContain(current.sessionId);
+});
+
+test('bulk selection permanently deletes several orders with a single confirm', async ({page, appURL}) => {
+  await boot(page, appURL);
+  const token = await page.evaluate(() => window.__PRINTOPS_TOKEN__);
+  const leftovers = await page.request.get(new URL('/api/orders?includeArchived=true&status=archived', page.url()).href, {headers:{'X-PrintOps-Token':token}});
+  for (const entry of (await leftovers.json()).orders) {
+    await page.request.post(new URL(`/api/orders/${entry.orderId}/purge`, page.url()).href, {headers:{'X-PrintOps-Token':token}, data:{expectedRevision: entry.revision, confirm: true}});
+  }
+  const a = await send(page, card);
+  const empty = await writeAsOtherClient(page, '/api/session', {});
+  const b = await writeAsOtherClient(page, '/api/chat', {sessionId: empty.sessionId, expectedRevision: empty.revision, text: '800张单页，210×297mm'});
+  await page.locator('#settings-button').click();
+  await page.locator('[data-settings-view="history"]').click();
+  const row = (id) => page.locator('.settings-history-row').filter({has: page.locator(`.settings-history-view[data-order-id="${id}"]`)});
+  await expect(row(a.sessionId)).toBeVisible();
+  await expect(row(b.sessionId)).toBeVisible();
+  const bulkDelete = page.locator('[data-history-bulk="delete"]');
+  await expect(bulkDelete).toBeDisabled();
+  await row(a.sessionId).locator('.settings-history-check').check();
+  await row(b.sessionId).locator('.settings-history-check').check();
+  await expect(page.locator('#settings-history-selection-count')).toHaveText('已选 2');
+  await expect(bulkDelete).toBeEnabled();
+  const dialogs = [];
+  page.on('dialog', dialog => { dialogs.push(dialog.message()); dialog.accept(); });
+  await bulkDelete.click();
+  await expect(row(a.sessionId)).toHaveCount(0);
+  await expect(row(b.sessionId)).toHaveCount(0);
+  await expect(page.locator('#settings-history-selection-count')).toHaveText('已选 0');
+  expect(dialogs).toHaveLength(1);
+  expect(dialogs[0]).toContain('2 个订单');
+  await page.keyboard.press('Escape');
+  const list = await page.request.get(new URL('/api/orders?includeArchived=true', page.url()).href, {headers:{'X-PrintOps-Token':token}});
+  const remaining = (await list.json()).orders.map((entry) => entry.orderId);
+  expect(remaining).not.toContain(a.sessionId);
+  expect(remaining).not.toContain(b.sessionId);
+  await expect(page.locator(`.history-item[data-session-id="${a.sessionId}"]`)).toHaveCount(0);
+});
+
+test('spec presets collapse to one row and pull out as a drawer on demand', async ({page, appURL}) => {
+  await boot(page, appURL);
+  const drawer = page.locator('#preset-drawer');
+  await expect(drawer).toBeHidden();
+  await expect(page.locator('#preset-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#save-preset')).toBeDisabled();
+  // The compact row is docked to the sidebar's bottom edge and stays there
+  // no matter how the scrolling history list above it changes.
+  const dockedAtBottom = () => page.evaluate(() => {
+    const panel = document.querySelector('.preset-panel').getBoundingClientRect();
+    const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
+    const list = document.querySelector('#history-list');
+    const before = list.scrollTop;
+    list.scrollTop = before + 40;
+    const after = document.querySelector('.preset-panel').getBoundingClientRect();
+    list.scrollTop = before;
+    return Math.abs(panel.bottom - sidebar.bottom) < 1.5 && Math.abs(after.bottom - panel.bottom) < 1.5;
+  });
+  expect(await dockedAtBottom()).toBe(true);
+  await send(page, card);
+  await expect(page.locator('#save-preset')).toBeEnabled();
+  await page.locator('#save-preset').click();
+  // Saving opens the drawer so the flash on the new entry is visible feedback.
+  await expect(drawer).toBeVisible();
+  // Expanding takes space inside the left column (the docked footer grows),
+  // never floating outside the sidebar.
+  const inColumn = await page.evaluate(() => {
+    const d = document.querySelector('#preset-drawer').getBoundingClientRect();
+    const s = document.querySelector('.sidebar').getBoundingClientRect();
+    return d.left >= s.left - 0.5 && d.right <= s.right + 0.5 && d.top >= s.top && d.bottom <= s.bottom + 1;
+  });
+  expect(inColumn).toBe(true);
+  await expect(page.locator('#preset-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#preset-count')).toHaveText('1');
+  await expect(drawer.locator('.preset-item.is-new')).toHaveCount(1);
+  const applied = page.waitForResponse(r => r.url().endsWith('/api/chat') && r.request().method() === 'POST');
+  await drawer.locator('.preset-apply').click();
+  await applied;
+  await expect(drawer).toBeHidden();
+  await page.locator('#preset-toggle').click();
+  await expect(drawer).toBeVisible();
+  await drawer.locator('.preset-remove').click();
+  await expect(drawer.locator('.preset-item')).toHaveCount(0);
+  await expect(drawer.locator('.preset-empty')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+});
+
 for (const [action, label] of [['confirm','确认候选值'],['reject','拒绝候选']]) test(`a stale ${action} action cannot be replayed against a changed candidate`, async ({page, appURL}) => {
   await boot(page, appURL);
   const initial = await send(page, '大约1k张名片');
@@ -489,4 +606,44 @@ for (const handoffState of ['ready', 'pending', 'confirmed']) test(`control avai
       expect(writes).toEqual(['/api/confirm']);
     }
   } finally { release.release(); }
+});
+
+test('a stopped chat turn frees the composer and still lands with a fresh revision', async ({page, appURL}) => {
+  await boot(page, appURL);
+  await expect(page.locator('#chat-cancel')).toBeHidden();
+  const received = gate(), release = gate();
+  await page.route('**/api/chat', async route => {
+    const response = await route.fetch();
+    received.release();
+    await release.promise;
+    await route.fulfill({response});
+  }, {times: 1});
+  try {
+    await page.locator('#message-input').fill(card);
+    await page.locator('#message-form button[type="submit"]').click();
+    await received.promise;
+    await expect(page.locator('#chat-cancel')).toBeVisible();
+    await expect(page.locator('.pending-message')).toBeVisible();
+    await expect(page.locator('#message-input')).toBeDisabled();
+    await page.locator('#chat-cancel').click();
+    await expect(page.locator('#message-input')).toBeEnabled();
+    await expect(page.locator('#message-input')).toBeFocused();
+    await expect(page.locator('.pending-message')).toHaveCount(0);
+    await expect(page.locator('#chat-cancel')).toBeHidden();
+    await expect(page.locator('#operation-error')).toBeHidden();
+    await expect(page.locator('#toast')).toContainText('已停止等待');
+    // The server committed the held turn while the page stopped waiting.
+    const stopped = await currentOrder(page);
+    expect(stopped.order.productType).toContain('名片');
+    // Releasing the held response renders it late: the reply appears and the
+    // local revision catches up, so the next turn carries a fresh
+    // expectedRevision instead of failing the server's CAS check.
+    release.release();
+    await expect(page.locator('#chat-feed .message.assistant')).toHaveCount(2);
+    const next = await send(page, '数量改成600张');
+    expect(next.order.quantity).toBe('600 张');
+    expect(next.revision).toBeGreaterThan(stopped.revision);
+  } finally {
+    release.release();
+  }
 });

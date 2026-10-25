@@ -61,7 +61,7 @@
     if (/^\s*\d+(?:\.\d+)?\s*[×x*]\s*\d+(?:\.\d+)?(?:\s*[×x*]\s*\d+(?:\.\d+)?)?\s*$/i.test(value)) return value + " mm";
     return value;
   }
-  const api = {priceDetails, providerStatus, evidence, manualDimension};
+  const api = {priceDetails, providerStatus, tooltipIcon, evidence, manualDimension};
   root.PrintOpsWorkbench = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

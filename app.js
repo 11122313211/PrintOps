@@ -2,13 +2,25 @@ const $ = (selector) => document.querySelector(selector);
 const labels = {
   productType: "印刷品", purpose: "使用场景", quantity: "数量", size: "成品尺寸",
   pages: "页数", orientation: "版式方向", paper: "纸张/材料", printing: "印刷颜色", finishing: "表面工艺", binding: "装订/后道",
-  deadline: "交期", budget: "预算偏好", platform: "目标平台"
+  deadline: "交期", budget: "预算偏好"
 };
 const dimensionLabels = {
   finishedSize: "成品尺寸", expandedSize: "展开尺寸", dieCutSize: "刀模尺寸", packageSize: "包装三维尺寸",
   packageInnerSize: "包装内尺寸", packageOuterSize: "包装外尺寸"
 };
-const overviewFields = ["productType", "quantity", "purpose", "deadline", "budget", "platform"];
+// Status label maps, hoisted beside the field labels so every renderer reads
+// one source per status domain. The export variants deliberately use audit
+// phrasing (已核对/候选待核对) while the review pane in journey.js uses user
+// phrasing (已确认/待确认); both wordings are test-pinned — keep the domains
+// separate, do not merge them.
+const ORDER_STATUS_LABELS = {draft: "草稿", collecting: "编辑中", ready_for_review: "待审核", confirmed: "已确认", handoff_ready: "交接就绪", quote_draft: "询价草稿", quote_received: "已收报价", cancelled: "已取消", archived: "已归档"};
+const QUOTE_STATUS_LABELS = {awaiting_human_confirmation: "待人工确认", confirmed: "已确认，待提交", cancelled: "已取消", stale: "已失效", submitted: "已提交", failed: "提交失败"};
+const ESTIMATE_STATUS_LABELS = {ready: "示例估算", partial: "部分费用可算", blocked: "待补充计价依据"};
+const EXPORT_DOCUMENT_STATUS_LABELS = {blocked: "需求整理中，禁止作为生产交接单导出", stale: "已失效，请重新生成", draft: "未确认草稿", confirmed: "已本地确认", unconfirmed: "未确认"};
+const EXPORT_FIELD_STATUS_LABELS = {missing: "待补充", pending_confirmation: "候选待核对", confirmed: "已核对", filled: "已填写", observed: "已填写", inferred: "推断待核对", stale: "已失效"};
+const EXPORT_FILE_STATUS_LABELS = {pending_delivery: "文件待交付", stale: "检查已过期", checked: "已完成基础检查", needs_review: "需核对"};
+const EXPORT_CHECK_STATUS_LABELS = {ok: "通过", warn: "需关注", error: "未通过", info: "信息", unknown: "未确认"};
+const overviewFields = ["productType", "quantity", "purpose", "deadline", "budget"];
 const defaultDraftFields = { specs: ["size", "pages", "orientation"], process: ["paper", "printing", "finishing", "binding"] };
 const productDraftFields = {
   "宣传册": { specs: ["size", "orientation"], process: ["paper", "printing", "finishing"] },
@@ -59,6 +71,16 @@ let llmSettings = { enabled: false, url: "", model: "", keyConfigured: false };
 let pendingMessage = null;
 let activeChatController = null;
 let chatRequestSeq = 0;
+// A stopped chat turn keeps its fetch alive so the delayed response can
+// render and refresh the local revision; the next send waits for it.
+let stoppedChatSettling = false;
+let activeChatSettle = null;
+let chatSettleWait = false;
+// P0-2: viewport-driven pane hiding must hand focus to a visible entry
+// instead of dropping it on <body>. Remember the last real focus target;
+// a deliberate blur lands on <body> via focusin and is never revived.
+let lastFocusedElement = null;
+document.addEventListener("focusin", (event) => { lastFocusedElement = event.target; });
 let sidebarCollapsed = localStorage.getItem("printops_sidebar") === "collapsed" ||
   (!localStorage.getItem("printops_sidebar") && window.matchMedia("(max-width: 1050px)").matches);
 let previousOrder = {};
@@ -69,6 +91,10 @@ let fileFeedback = null;
 let pdfPreview = null;
 const orderHistoryKey = "printops_order_history";
 let serverOrderHistory = [];
+// All recent orders (archived included) for the settings dialog's history
+// panel; the sidebar may hide archived entries, this cache never does.
+let settingsOrders = [];
+const settingsHistorySelection = new Set();
 let historyRequestSeq = 0;
 let providers = [];
 let storageInfo = {mode: "sqlite", persistent: true};
@@ -225,6 +251,94 @@ async function refreshOrderHistory(includeArchived = $("#history-include-archive
   }
 }
 
+function renderSettingsOrders() {
+  const root = $("#settings-history-list");
+  if (!root) return;
+  root.innerHTML = "";
+  if (!settingsOrders.length) {
+    const empty = document.createElement("p");
+    empty.className = "settings-history-empty";
+    empty.textContent = "还没有订单记录。开始对话后会自动出现在这里，可归档、导出或永久删除。";
+    root.append(empty);
+  } else {
+    settingsOrders.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = `settings-history-row${item.status === "archived" ? " is-archived" : ""}`;
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "settings-history-check";
+      check.dataset.orderId = item.id;
+      check.checked = settingsHistorySelection.has(item.id);
+      check.setAttribute("aria-label", `选择 ${orderHistoryTitle(item.order)}`);
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "settings-history-view";
+      view.dataset.orderId = item.id;
+      const title = document.createElement("strong");
+      title.textContent = orderHistoryTitle(item.order);
+      const meta = document.createElement("small");
+      meta.textContent = item.status === "archived" ? `已归档 · ${formatOrderHistoryTime(item.updatedAt)}` : formatOrderHistoryTime(item.updatedAt);
+      view.append(title, meta);
+      const exportAction = document.createElement("button");
+      exportAction.type = "button";
+      exportAction.className = "settings-history-action";
+      exportAction.dataset.historyAction = "export";
+      exportAction.dataset.orderId = item.id;
+      exportAction.textContent = "导出";
+      exportAction.title = "导出订单备份";
+      row.append(check, view, exportAction);
+      if (item.status !== "archived") {
+        const archiveAction = document.createElement("button");
+        archiveAction.type = "button";
+        archiveAction.className = "settings-history-action";
+        archiveAction.dataset.historyAction = "archive";
+        archiveAction.dataset.orderId = item.id;
+        archiveAction.textContent = "归档";
+        archiveAction.title = "归档订单";
+        row.append(archiveAction);
+      }
+      const purgeAction = document.createElement("button");
+      purgeAction.type = "button";
+      purgeAction.className = "settings-history-action danger";
+      purgeAction.dataset.historyAction = "purge";
+      purgeAction.dataset.orderId = item.id;
+      purgeAction.textContent = "永久删除";
+      purgeAction.title = item.status === "archived" ? "永久删除归档订单" : "永久删除订单（先自动归档）";
+      row.append(purgeAction);
+      root.append(row);
+    });
+  }
+  // Drop selections whose orders no longer exist after a refresh.
+  const ids = new Set(settingsOrders.map((item) => item.id));
+  for (const id of settingsHistorySelection) {
+    if (!ids.has(id)) settingsHistorySelection.delete(id);
+  }
+  syncSettingsHistoryToolbar();
+}
+
+function syncSettingsHistoryToolbar() {
+  const count = $("#settings-history-selection-count");
+  const selectAll = $("#settings-history-select-all");
+  if (!count || !selectAll) return;
+  const selected = settingsHistorySelection.size;
+  count.textContent = `已选 ${selected}`;
+  selectAll.checked = settingsOrders.length > 0 && selected === settingsOrders.length;
+  selectAll.indeterminate = selected > 0 && selected < settingsOrders.length;
+  document.querySelectorAll("#settings-history-toolbar [data-history-bulk]").forEach((button) => {
+    button.disabled = selected === 0;
+  });
+}
+
+async function refreshSettingsOrders() {
+  try {
+    const result = await api("/api/orders?limit=100&includeArchived=true", undefined, "GET");
+    settingsOrders = result.orders.map((entry) => ({...entry, id: entry.orderId}));
+  } catch {
+    return;
+  }
+  renderSettingsOrders();
+}
+
 async function migrateLocalHistory() {
   const legacy = localStorage.getItem(orderHistoryKey);
   if (!legacy) return;
@@ -273,8 +387,7 @@ function renderOrderHistory() {
     button.dataset.sessionId = item.id;
     button.setAttribute("aria-current", String(item.id === sessionId));
     const orderTitle = orderHistoryTitle(item.order);
-    const status = {draft:"草稿", collecting:"编辑中", ready_for_review:"待审核", confirmed:"已确认", handoff_ready:"交接就绪", quote_draft:"询价草稿", quote_received:"已收报价", cancelled:"已取消", archived:"已归档"};
-    const statusLabel = status[item.status] || "编辑中";
+    const statusLabel = ORDER_STATUS_LABELS[item.status] || "编辑中";
     const historyTime = formatOrderHistoryTime(item.updatedAt);
     const title = document.createElement("strong");
     title.textContent = orderTitle;
@@ -318,6 +431,9 @@ function renderOrderHistory() {
       purgeAction.title = "永久删除归档订单";
       hoverActions.append(purgeAction);
     }
+    // One-click delete for active orders lives in the right-click menu only:
+    // the sidebar rows are ~160px wide, and a third hover button's strip would
+    // cover the row's center point and swallow clicks on the row itself.
     row.append(hoverActions);
     button.dataset.historyMenu = item.id;
     button.setAttribute("aria-haspopup", "menu");
@@ -345,8 +461,13 @@ function historyContextMenuItems(orderId) {
   const item = serverOrderHistory.find((entry) => entry.id === orderId);
   if (!item) return [];
   const items = [["export", "导出备份"]];
-  if (item.status !== "archived") items.push(["archive", "归档订单"]);
-  else items.push(["purge", "永久删除记录"]);
+  if (item.status !== "archived") {
+    // "永久删除" stays after "归档订单": the keyboard-menu test walks one
+    // ArrowDown from the first item onto the archive entry.
+    items.push(["archive", "归档订单"], ["purge", "永久删除"]);
+  } else {
+    items.push(["purge", "永久删除记录"]);
+  }
   return items;
 }
 
@@ -364,6 +485,7 @@ function openHistoryContextMenu(orderId, trigger, point = {}) {
   const items = historyContextMenuItems(orderId);
   if (!menu || !items.length) return;
   closeHistoryContextMenu();
+  closePresetDrawer();
   menu.dataset.orderId = orderId;
   menu.innerHTML = "";
   items.forEach(([action, label], index) => {
@@ -399,42 +521,142 @@ function moveHistoryMenuFocus(direction) {
   items[next].focus();
 }
 
+// History actions can fire from the sidebar list or the settings history
+// panel; the settings cache holds entries the sidebar currently hides.
+function findOrderEntry(orderId) {
+  return serverOrderHistory.find((entry) => entry.id === orderId) || settingsOrders.find((entry) => entry.id === orderId);
+}
+
+async function exportOrderBackup(orderId) {
+  const result = await api(`/api/orders/${encodeURIComponent(orderId)}/export`, undefined, "GET");
+  const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], {type: "application/json;charset=utf-8"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `printops-backup-${orderId}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// The server only purges archived orders, so deleting an active order archives
+// it first and chains the purge with the revision the archive call returned.
+async function purgeOrderEntry(item) {
+  let revision = item.revision;
+  if (item.status !== "archived") {
+    const archived = await api(`/api/orders/${encodeURIComponent(item.id)}/archive`, {expectedRevision: revision});
+    revision = archived.revision;
+  }
+  await api(`/api/orders/${encodeURIComponent(item.id)}/purge`, {expectedRevision: revision, confirm: true});
+}
+
+async function teardownIfCurrentOrder(orderId) {
+  if (orderId !== sessionId) return;
+  // Mirror the reset-dialog teardown: without the sequence bump and
+  // removePendingMessage(), an aborted chat turn leaves its thinking
+  // bubble animating on a detached node.
+  viewEpoch += 1;
+  viewLoading = false;
+  chatRequestSeq += 1;
+  activeChatController?.abort();
+  activeChatController = null;
+  stoppedChatSettling = false;
+  activeChatSettle = null;
+  chatSettleWait = false;
+  removePendingMessage();
+  isSending = false;
+  state.status = null;
+  state.orderStatus = null;
+  setComposerBusy(false);
+  localStorage.removeItem("printops_session");
+  sessionId = "";
+  $("#chat-feed").innerHTML = "";
+  await bootstrap();
+}
+
+// Bulk operations from the settings history panel run one request per order;
+// per-order failures (e.g. a revision conflict from another client) are
+// skipped and summarized so one stuck order cannot block the rest.
+async function settingsHistoryBulk(kind) {
+  if (isSending || !settingsHistorySelection.size) return;
+  const targets = settingsOrders.filter((item) => settingsHistorySelection.has(item.id));
+  if (!targets.length) return;
+  let done = 0;
+  try {
+    if (kind === "archive") {
+      const pending = targets.filter((item) => item.status !== "archived");
+      if (!pending.length) {
+        showToast("所选订单均已归档");
+        return;
+      }
+      if (!window.confirm(`将归档 ${pending.length} 个订单？归档后只读，仍可查看和导出。`)) return;
+      const currentId = sessionId;
+      for (const item of pending) {
+        try {
+          await api(`/api/orders/${encodeURIComponent(item.id)}/archive`, {expectedRevision: item.revision});
+          done += 1;
+        } catch {}
+      }
+      if (pending.some((item) => item.id === currentId)) {
+        try { render(await api(`/api/orders/${encodeURIComponent(currentId)}`, undefined, "GET"), false); } catch {}
+      }
+      showToast(done === pending.length ? `已归档 ${done} 个订单` : `已归档 ${done} 个订单，${pending.length - done} 个失败`);
+    } else if (kind === "export") {
+      if (!window.confirm(`导出 ${targets.length} 个订单的完整备份？`)) return;
+      for (const item of targets) {
+        try {
+          await exportOrderBackup(item.id);
+          done += 1;
+        } catch {}
+      }
+      showToast(done === targets.length ? `已导出 ${done} 个订单备份` : `已导出 ${done} 个订单备份，${targets.length - done} 个失败`);
+    } else if (kind === "delete") {
+      if (!window.confirm(`将永久删除 ${targets.length} 个订单（含对话、报价与审计数据），不可恢复；未归档订单会先自动归档再清除。如需保留请先导出备份。`)) return;
+      const currentId = sessionId;
+      let includedCurrent = false;
+      for (const item of targets) {
+        try {
+          await purgeOrderEntry(item);
+          done += 1;
+          includedCurrent = includedCurrent || item.id === currentId;
+        } catch {}
+      }
+      if (includedCurrent) await teardownIfCurrentOrder(currentId);
+      showToast(done === targets.length ? `已永久删除 ${done} 个订单` : `已永久删除 ${done} 个订单，${targets.length - done} 个失败`);
+    } else {
+      return;
+    }
+  } finally {
+    settingsHistorySelection.clear();
+    await refreshSettingsOrders();
+    await refreshOrderHistory();
+  }
+}
+
 async function historyAction(action, orderId) {
   if (isSending) return;
   try {
     if (action === "export") {
-      const result = await api(`/api/orders/${encodeURIComponent(orderId)}/export`, undefined, "GET");
-      const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], {type: "application/json;charset=utf-8"}));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `printops-backup-${orderId}.json`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await exportOrderBackup(orderId);
       showToast("完整订单备份已导出，包含来源、对话和审计记录");
     } else if (action === "archive") {
+      const item = findOrderEntry(orderId);
+      if (!item) return;
       if (!window.confirm("归档后订单只读，仍可查看和导出。确定归档此订单？")) return;
-      const item = serverOrderHistory.find((entry) => entry.id === orderId);
       await api(`/api/orders/${encodeURIComponent(orderId)}/archive`, {expectedRevision: item.revision});
       if (orderId === sessionId) render(await api(`/api/orders/${encodeURIComponent(orderId)}`, undefined, "GET"), false);
       await refreshOrderHistory();
-      showToast("订单已归档；选择“显示已归档订单”可查看和导出");
+      showToast("订单已归档；可在设置 → 历史订单中查看、导出或永久删除");
     } else if (action === "purge") {
-      const item = serverOrderHistory.find((entry) => entry.id === orderId);
-      if (!item || item.status !== "archived") return;
-      if (!window.confirm("永久删除这条归档记录？订单、对话、报价和审计数据都会被清除；如需保留请先导出备份。")) return;
-      await api(`/api/orders/${encodeURIComponent(orderId)}/purge`, {expectedRevision: item.revision, confirm: true});
-      if (orderId === sessionId) {
-        viewEpoch += 1;
-        activeChatController?.abort();
-        activeChatController = null;
-        localStorage.removeItem("printops_session");
-        sessionId = "";
-        $("#chat-feed").innerHTML = "";
-        await bootstrap();
-      } else {
-        await refreshOrderHistory();
-      }
-      showToast("归档记录已永久删除");
+      const item = findOrderEntry(orderId);
+      if (!item) return;
+      const active = item.status !== "archived";
+      const message = active
+        ? "永久删除该订单？未归档订单会先自动归档再清除，对话、报价和审计数据都会被删除；如需保留请先导出备份。"
+        : "永久删除这条归档记录？订单、对话、报价和审计数据都会被清除；如需保留请先导出备份。";
+      if (!window.confirm(message)) return;
+      await purgeOrderEntry(item);
+      await teardownIfCurrentOrder(orderId);
+      await refreshOrderHistory();
+      showToast("订单已永久删除");
     }
   } catch (error) {
     showToast(apiErrorText(error, "历史订单操作失败，请重试"), "error");
@@ -474,22 +696,51 @@ function specPresetTitle(fields = {}) {
   return parts.length ? parts.join(" · ") : "未命名规格";
 }
 
-function renderSpecPresets() {
+// The preset drawer expands inside the docked sidebar footer — no popover
+// positioning; the footer's grid row grows and the history area above shrinks.
+function openPresetDrawer() {
+  const drawer = $("#preset-drawer");
+  const toggle = $("#preset-toggle");
+  if (!drawer || !toggle) return;
+  closeHistoryContextMenu();
+  drawer.hidden = false;
+  toggle.setAttribute("aria-expanded", "true");
+  drawer.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest"});
+}
+
+function closePresetDrawer({restoreFocus = false} = {}) {
+  const drawer = $("#preset-drawer");
+  const toggle = $("#preset-toggle");
+  if (!drawer || drawer.hidden) return;
+  drawer.hidden = true;
+  toggle?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && toggle?.getClientRects().length) toggle.focus({preventScroll: true});
+}
+
+function togglePresetDrawer() {
+  const drawer = $("#preset-drawer");
+  if (!drawer) return;
+  if (drawer.hidden) openPresetDrawer();
+  else closePresetDrawer({restoreFocus: true});
+}
+
+function renderSpecPresets(highlightId) {
   const root = $("#preset-list");
   const presets = loadSpecPresets();
-  $("#preset-count").textContent = `${presets.length} 组`;
+  $("#preset-count").textContent = String(presets.length);
   $("#save-preset").disabled = !specPresetHasContent(currentSpecPresetFields(state.order));
   root.innerHTML = "";
   if (!presets.length) {
     const empty = document.createElement("p");
     empty.className = "preset-empty";
-    empty.textContent = "保存后可快速复用。";
+    empty.textContent = "还没有常用规格。点“＋ 保存常用”把当前工艺组合存进来，点击即可复用。";
     root.append(empty);
     return;
   }
   presets.forEach((item) => {
     const row = document.createElement("div");
     row.className = "preset-item";
+    if (highlightId && item.id === highlightId) row.classList.add("is-new");
     const apply = document.createElement("button");
     apply.type = "button";
     apply.className = "preset-apply";
@@ -508,6 +759,7 @@ function renderSpecPresets() {
     row.append(apply, remove);
     root.append(row);
   });
+  root.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest"});
 }
 
 function saveCurrentSpecPreset() {
@@ -520,10 +772,14 @@ function saveCurrentSpecPreset() {
   const signature = JSON.stringify(fields);
   const existingIndex = presets.findIndex((item) => JSON.stringify(item.fields) === signature);
   if (existingIndex >= 0) presets.splice(existingIndex, 1);
-  presets.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, fields, createdAt: Date.now() });
+  const saved = { id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, fields, createdAt: Date.now() };
+  presets.unshift(saved);
   saveSpecPresets(presets);
-  renderSpecPresets();
-  showToast("常用规格已保存");
+  renderSpecPresets(saved.id);
+  // Open the drawer so the flash on the new entry is visible feedback for
+  // what "＋ 保存常用" just stored.
+  openPresetDrawer();
+  showToast("常用规格已保存，点击列表中的组合即可复用");
 }
 
 async function applySpecPreset(presetId) {
@@ -717,6 +973,15 @@ async function changeField(field, action, value) {
   finally { isSending = false; setComposerBusy(false); if (origin === sessionId) focusAfterSave?.focus({preventScroll: true}); }
 }
 
+// A provenance/review entry needs an inline confirm chip when the server
+// marked it pending or its confidence is still below the display threshold.
+function needsConfirmation(meta) {
+  return meta?.status === "pending_confirmation" || Number(meta?.confidence) < .75;
+}
+function confirmFieldButton(field) {
+  return PrintOpsJourney.button("确认此值", () => changeField(field, "confirm"), "field-confirm");
+}
+
 async function undoLastField() {
   const change = undoChange;
   if (!change || change.sessionId !== sessionId || change.revision !== state.revision) { showToast("订单已有其他修改，请重新核对字段后编辑。", "error"); return; }
@@ -773,7 +1038,12 @@ function setSidebarCollapsed(collapsed) {
   }
   if (!DESKTOP_QUERY.matches) {
     if (!sidebarCollapsed) $(".sidebar").querySelector("button, input, summary")?.focus();
-    else if ($(".sidebar").contains(document.activeElement)) button?.focus();
+    // P0-2: collapsing the drawer hides whatever had focus (WebKit never
+    // moves focus on pointer-down), leaving it on <body>; route it back to
+    // the visible toggle — but only when the sidebar owned that focus, so a
+    // breakpoint crossing that hides another pane cannot steal the reclaim.
+    else if ($(".sidebar").contains(document.activeElement)
+      || (document.activeElement === document.body && lastFocusedElement instanceof Element && lastFocusedElement.closest(".sidebar"))) button?.focus();
   }
   localStorage.setItem("printops_sidebar", sidebarCollapsed ? "collapsed" : "expanded");
   updateBackdrop();
@@ -807,6 +1077,7 @@ function activateSettingsView(view = "overview", {focus = false} = {}) {
   if (catalogPanel) catalogPanel.open = next === "products";
   if (toolPanel) toolPanel.open = next === "tools";
   if (toolStatsPanel) toolStatsPanel.open = next === "tools";
+  if (next === "history") refreshSettingsOrders();
   if (focus) nav?.querySelector(`[data-settings-view="${next}"]`)?.focus();
 }
 
@@ -976,6 +1247,10 @@ function setComposerBusy(busy) {
   if (quoteRefresh) quoteRefresh.disabled = busy;
   const platform = $("#platform-select");
   if (platform) platform.disabled = busy;
+  const chatCancel = $("#chat-cancel");
+  // The stop control only makes sense while a chat turn is actually waiting;
+  // other busy callers (field saves, view loads) keep it hidden.
+  if (chatCancel) chatCancel.hidden = !(busy && isSending);
   document.querySelectorAll("#quick-replies button, #tool-list button, #catalog-list button, #parameter-form input, #preview-toggle").forEach((item) => { item.disabled = busy; });
   if (busy) {
     $("#agent-status").innerHTML = '<span class="status-dot thinking"></span>正在处理';
@@ -1163,9 +1438,7 @@ function getFieldValue(key) {
       return sizes.length === 1 ? sizes[0] : sizes.length > 1 ? "各产品尺寸不同（见产品项）" : "各产品分别确认";
     }
   }
-  if (key !== "platform") return state.order[key] || "";
-  const option = [...$("#platform-select").options].find((item) => item.value === state.order.platform);
-  return option?.textContent || state.order.platform || "";
+  return state.order[key] || "";
 }
 
 function dimensionRows(order = {}) {
@@ -1192,20 +1465,6 @@ function isRequiredField(key) {
 
 function fieldProvenance(key) {
   return state.fieldMeta?.[key] || null;
-}
-
-// Compact, keyboard-reachable status/help markers keep the order pane readable
-// while preserving the explanation that used to occupy a full line.
-function makeTooltipIcon(text, className, ariaLabel = text, glyph = "?") {
-  const icon = document.createElement("span");
-  icon.className = `tooltip-icon ${className}`;
-  icon.textContent = glyph;
-  icon.setAttribute("role", "img");
-  icon.setAttribute("tabindex", "0");
-  icon.setAttribute("aria-label", ariaLabel);
-  icon.title = text;
-  icon.dataset.tooltip = text;
-  return icon;
 }
 
 // TD-11: order-pane re-renders rebuild these lists wholesale, so a snapshot
@@ -1247,7 +1506,7 @@ function renderFieldList(selector, keys, editable = false) {
     row.className = `field-row ${missing ? "required-missing" : ""} ${updatedOrderKeys.has(key) ? "updated" : ""}`;
     const label = document.createElement("span");
     label.className = "field-label";
-    if (missing) label.append(makeTooltipIcon("必填，补充后才能生成订单", "field-status-icon", "必填，补充后才能生成订单", "!"));
+    if (missing) label.append(PrintOpsWorkbench.tooltipIcon("必填，补充后才能生成订单", "field-status-icon", "必填，补充后才能生成订单", "!"));
     label.append(document.createTextNode(labels[key]));
     const meta = fieldProvenance(key);
     const valueWrap = document.createElement("span");
@@ -1269,14 +1528,7 @@ function renderFieldList(selector, keys, editable = false) {
       valueNode.textContent = current || (perItem ? "按产品分别设置" : missing ? "待补充" : "未设置");
     }
     valueWrap.append(valueNode);
-    if (meta && (meta.status === "pending_confirmation" || Number(meta.confidence) < .75)) {
-      const confirm = document.createElement("button");
-      confirm.type = "button";
-      confirm.className = "field-confirm";
-      confirm.textContent = "确认此值";
-      confirm.addEventListener("click", () => changeField(reviewField(key), "confirm"));
-      valueWrap.append(confirm);
-    }
+    if (needsConfirmation(meta)) valueWrap.append(confirmFieldButton(reviewField(key)));
     row.append(label, valueWrap);
     list.appendChild(row);
   });
@@ -1317,7 +1569,7 @@ function renderDimensionRows(selector, order = state.order) {
     const valueWrap = document.createElement("span");
     valueWrap.className = "field-value-wrap";
     valueWrap.append(valueNode);
-    if (meta?.status === "pending_confirmation" || Number(meta?.confidence) < .75) valueWrap.append(PrintOpsJourney.button("确认此值", () => changeField(reviewField(`dimensions.${key}`), "confirm"), "field-confirm"));
+    if (needsConfirmation(meta)) valueWrap.append(confirmFieldButton(reviewField(`dimensions.${key}`)));
     row.append(labelNode, valueWrap);
     list.appendChild(row);
   });
@@ -1474,7 +1726,10 @@ function renderMultiProductItems() {
       field.append(name, input);
       const review = reviewField(input.dataset.fieldPath, item.itemId);
       if (review.provenance) field.append(PrintOpsWorkbench.evidence(review.provenance));
-      if (review.status === "pending_confirmation") field.append(PrintOpsJourney.button("确认此值", () => changeField(review, "confirm"), "field-confirm"));
+      // Unlike the single-product rows, the multi-item editor gates on the
+      // server-computed review status alone; low-confidence provenance is
+      // surfaced by the review pane instead of a chip here.
+      if (review.status === "pending_confirmation") field.append(confirmFieldButton(review));
       editorGrid.appendChild(field);
     });
     editor.appendChild(editorGrid);
@@ -1587,16 +1842,8 @@ function renderQuoteStatus() {
     panel.hidden = true;
     return;
   }
-  const labels = {
-    awaiting_human_confirmation: "待人工确认",
-    confirmed: "已确认，待提交",
-    cancelled: "已取消",
-    stale: "已失效",
-    submitted: "已提交",
-    failed: "提交失败"
-  };
   const status = $("#quote-status");
-  status.textContent = labels[request.status] || request.status;
+  status.textContent = QUOTE_STATUS_LABELS[request.status] || request.status;
   status.className = `quote-status status-${request.status}`;
   $("#quote-message").textContent = request.message || (request.status === "stale" ? request.staleReason || "订单已变化，请重新准备询价。" : "");
   $("#quote-request-id").textContent = request.requestId;
@@ -1627,7 +1874,7 @@ function renderPriceEstimate(result) {
   const stale = cached.revision !== state.revision;
   const estimate = cached.result;
   panel.replaceChildren();
-  const title = stale ? "历史示例估算 · 参数已变" : ({ready: "示例估算", partial: "部分费用可算", blocked: "待补充计价依据"}[estimate.status] || "示例估算");
+  const title = stale ? "历史示例估算 · 参数已变" : (ESTIMATE_STATUS_LABELS[estimate.status] || "示例估算");
   panel.append(PrintOpsJourney.el("h3", title));
   panel.append(PrintOpsJourney.el("p", estimate.status === "ready" ? estimate.displayRange : estimate.status === "partial" ? `已知费用小计 ¥${estimate.knownSubtotal || "0.00"}，不代表总价` : "当前不提供完整价格区间", "estimate-total"));
   const item = state.order?.items?.find(item => item.itemId === cached.itemId);
@@ -1729,7 +1976,7 @@ function renderParameterForm(profile) {
     const label = document.createElement("label");
     label.htmlFor = `parameter-${item.key}`;
     const hintText = item.hint || (item.required ? "必填参数" : "可选参数");
-    if (!item.filled && item.required) label.append(makeTooltipIcon("必填，补充后才能生成订单", "field-status-icon", "必填，补充后才能生成订单", "!"));
+    if (!item.filled && item.required) label.append(PrintOpsWorkbench.tooltipIcon("必填，补充后才能生成订单", "field-status-icon", "必填，补充后才能生成订单", "!"));
     label.append(document.createTextNode(item.label));
     if (item.required) {
       const requiredMark = document.createElement("span");
@@ -1737,7 +1984,7 @@ function renderParameterForm(profile) {
       requiredMark.textContent = "*";
       label.append(document.createTextNode(" "), requiredMark);
     }
-    if (item.hint) label.append(makeTooltipIcon(hintText, "parameter-hint-trigger", `${item.label}说明`));
+    if (item.hint) label.append(PrintOpsWorkbench.tooltipIcon(hintText, "parameter-hint-trigger", `${item.label}说明`));
     const input = document.createElement("input");
     input.id = `parameter-${item.key}`;
     input.value = item.value || "";
@@ -1758,7 +2005,7 @@ function renderParameterForm(profile) {
     const provenance = fieldProvenance(`productSpecs.${item.key}`);
     hint.textContent = hintText;
     field.append(label, input, hint, PrintOpsWorkbench.evidence(provenance));
-    if (provenance?.status === "pending_confirmation" || Number(provenance?.confidence) < .75) field.append(PrintOpsJourney.button("确认此值", () => changeField(reviewField(input.dataset.fieldPath), "confirm"), "field-confirm"));
+    if (needsConfirmation(provenance)) field.append(confirmFieldButton(reviewField(input.dataset.fieldPath)));
     root.appendChild(field);
   });
   restoreFieldFocus(root);
@@ -2196,7 +2443,27 @@ function renderProgress() {
 }
 
 async function sendMessage(text, patch) {
-  if (!text?.trim() || isSending) return;
+  if (!text?.trim() || isSending || chatSettleWait) return;
+  const requestSession = sessionId;
+  // A stopped turn keeps running on the server and holds the session lock,
+  // and its response is the only reliable carrier of the post-turn revision
+  // (reads are lock-free and can race the turn). Let it land before the next
+  // request, or the server's CAS check rejects the request as a conflict.
+  if (stoppedChatSettling && activeChatSettle) {
+    chatSettleWait = true;
+    const settle = activeChatSettle;
+    stoppedChatSettling = false;
+    activeChatSettle = null;
+    $("#agent-trace").textContent = "正在等待上一条回复完成…";
+    const send = $("#message-form button[type='submit']");
+    if (send) send.disabled = true;
+    try { await settle; } catch { /* its own error path already ran */ }
+    chatSettleWait = false;
+    setComposerBusy(isSending || viewLoading);
+    // The wait can straddle an order switch or reset; the queued text must
+    // not be posted into whatever session is current afterwards.
+    if (sessionId !== requestSession) return;
+  }
   const requestSeq = ++chatRequestSeq;
   const controller = new AbortController();
   activeChatController?.abort();
@@ -2208,29 +2475,42 @@ async function sendMessage(text, patch) {
   renderComposerPreview();
   setComposerBusy(true);
   pendingMessage = addPendingMessage();
-  try {
-    const request = api("/api/chat", { sessionId, text, patch }, "POST", { signal: controller.signal });
-    const [result] = await Promise.all([request, new Promise((resolve) => setTimeout(resolve, 220))]);
-    if (requestSeq !== chatRequestSeq) return;
-    removePendingMessage();
-    render(result);
-  } catch (error) {
-    if (error?.name === "AbortError" || requestSeq !== chatRequestSeq) return;
-    removePendingMessage();
-    const suffix = error?.requestId ? `（请求号 ${error.requestId}）` : "";
-    addMessage("assistant", `${error?.message || "智能体暂时无法连接，请确认本地服务已启动。"}${suffix}`);
-    $("#agent-status").textContent = error.status === 409 ? "需要核对最新版本" : "操作尚未完成";
-    $("#message-input").value = text;
-    autoGrowComposer();
-    showToast("未完成的输入已保留；恢复连接后可修改并重新发送", "error");
-  }
-  finally {
-    if (requestSeq !== chatRequestSeq) return;
-    activeChatController = null;
-    isSending = false;
-    setComposerBusy(false);
-    if (!patch) $("#message-input").focus();
-  }
+  const settle = (async () => {
+    try {
+      const request = api("/api/chat", { sessionId, text, patch }, "POST", { signal: controller.signal });
+      const [result] = await Promise.all([request, new Promise((resolve) => setTimeout(resolve, 220))]);
+      if (requestSeq !== chatRequestSeq) return;
+      removePendingMessage();
+      render(result);
+    } catch (error) {
+      if (error?.name === "AbortError" || requestSeq !== chatRequestSeq) return;
+      removePendingMessage();
+      const suffix = error?.requestId ? `（请求号 ${error.requestId}）` : "";
+      addMessage("assistant", `${error?.message || "智能体暂时无法连接，请确认本地服务已启动。"}${suffix}`);
+      $("#agent-status").textContent = error.status === 409 ? "需要核对最新版本" : "操作尚未完成";
+      // A stopped turn must not clobber whatever the user typed afterwards.
+      if (!stoppedChatSettling) {
+        $("#message-input").value = text;
+        autoGrowComposer();
+        renderComposerPreview();
+        showToast("未完成的输入已保留；恢复连接后可修改并重新发送", "error");
+      }
+    } finally {
+      const stopped = stoppedChatSettling;
+      stoppedChatSettling = false;
+      if (requestSeq !== chatRequestSeq) return;
+      activeChatController = null;
+      isSending = false;
+      // Recompute instead of clearing: a stopped turn can land while a view
+      // load or field write is keeping other controls busy.
+      setComposerBusy(viewLoading || orderWritePending);
+      // A late response from a stopped turn must not steal focus the user
+      // has moved elsewhere while waiting.
+      if (!patch && (!stopped || document.activeElement === document.body || document.activeElement === $("#message-input"))) $("#message-input").focus();
+    }
+  })();
+  activeChatSettle = settle;
+  settle.catch(() => {});
 }
 
 function autoGrowComposer() {
@@ -2263,14 +2543,15 @@ async function callTool(toolName, payload = {}) {
 // rest of the page fully wired. Scripts load at the end of <body>, so this
 // runs after the DOM is parsed and before any user interaction.
 const BINDING_TARGET_IDS = [
-  "message-form", "message-input", "preview-toggle", "generate-order", "confirm-order",
+  "message-form", "message-input", "preview-toggle", "chat-cancel", "generate-order", "confirm-order",
   "quote-refresh", "quote-cancel", "copy-order", "toggle-draft-groups", "upload-button",
   "drop-zone", "file-input", "platform-select", "sidebar-toggle", "order-toggle",
   "mobile-back", "workspace-backdrop", "history-context-menu", "history-list",
   "theme-toggle", "settings-nav", "history-include-archived", "save-preset",
-  "preset-list", "reset-order", "confirm-reset-dialog", "settings-test",
+  "preset-toggle", "preset-list", "reset-order", "confirm-reset-dialog", "settings-test",
   "settings-button", "settings-cancel", "settings-dialog", "settings-cancel-secondary",
-  "settings-form", "settings-clear"
+  "settings-form", "settings-clear", "settings-history-list",
+  "settings-history-select-all", "settings-history-toolbar"
 ];
 const missingBindingIds = new Set(BINDING_TARGET_IDS.filter((id) => !document.getElementById(id)));
 function on(id, type, listener, options) {
@@ -2303,6 +2584,20 @@ on("preview-toggle", "click", () => {
 on("message-input", "keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#message-form").requestSubmit(); }
+});
+on("chat-cancel", "click", () => {
+  if ((!isSending && !activeChatController) || stoppedChatSettling) return;
+  // Stop waiting only. The server finishes and commits the turn regardless
+  // (the session lock serializes any follow-up request behind it), so the
+  // fetch stays alive: when the response lands it renders normally and
+  // refreshes the local revision, keeping the next request clear of the
+  // server's CAS revision check.
+  stoppedChatSettling = true;
+  removePendingMessage();
+  isSending = false;
+  setComposerBusy(false);
+  $("#message-input").focus();
+  showToast("已停止等待回复；这条消息仍会被处理，结果稍后显示在对话和订单里");
 });
 on("generate-order", "click", async () => { try { render(await api("/api/generate", { sessionId })); } catch (error) { showToast(apiErrorText(error, "订单生成失败，请重试"), "error"); } });
 on("confirm-order", "click", async () => {
@@ -2370,6 +2665,60 @@ async function currentHandoff() {
   return document;
 }
 
+// Pure serializer for the handoff CSV audit export. Wording is pinned by the
+// journey_edges "csv audit" case (headers, status labels, formula escaping):
+// move this code, never reword it.
+function handoffCsvDocument(document) {
+  const escape = (value) => {
+    let text = String(value ?? "");
+    if (/^[\s\uFEFF]*[=+@-]|^[\t\r\n]/.test(text)) text = "'" + text;
+    return '"' + text.replaceAll('"', '""') + '"';
+  };
+  const rows = [];
+  const add = (group, item, path, label, value, status = "", fieldId = "") => rows.push([
+    group, item?.itemId || "", item ? (item.itemIndex == null ? "整单" : item.itemIndex + 1) : "", item?.title || "",
+    path, fieldId, label, value == null ? "未记录" : typeof value === "boolean" ? (value ? "是" : "否") : value, status
+  ]);
+  for (const [path, label, value] of [
+    ["schemaVersion", "交接文档结构版本", document.schemaVersion], ["documentType", "文档类型", document.documentType],
+    ["orderId", "订单", document.orderId], ["revision", "订单版本", document.revision],
+    ["status", "交接状态", EXPORT_DOCUMENT_STATUS_LABELS[document.status] || "待核对"], ["exportable", "允许导出", document.exportable],
+    ["unitSystem", "尺寸单位", document.unitSystem], ["generatedAt", "生成时间", document.generatedAt],
+    ["confirmedAt", "确认时间", document.confirmedAt ?? "尚未确认"], ["confirmedRevision", "确认版本", document.confirmedRevision ?? "无"],
+    ["confirmation.status", "人工确认状态", EXPORT_DOCUMENT_STATUS_LABELS[document.confirmation?.status] || "待核对"],
+    ["confirmation.scope", "确认范围", document.confirmation?.scope], ["sent", "供应商发送", document.sent ? "已发送" : "尚未发送"]
+  ]) add("交接信息", null, path, label, value);
+  for (const item of document.items || []) {
+    for (const [path, label] of [["itemId", "产品标识"], ["itemIndex", "产品索引（从0开始）"], ["title", "产品名称"]]) add("产品信息", item, path, label, item[path]);
+    for (const field of item.fields || []) {
+      add("生产规格", item, field.key, field.label, field.value ?? "待补充", EXPORT_FIELD_STATUS_LABELS[field.status] || "待核对", field.fieldId);
+      if (field.aliases) add("字段依据", item, `${field.key}.aliases`, `${field.label}同义字段`, JSON.stringify(field.aliases), "", field.fieldId);
+      if (field.semanticConflict != null) add("字段依据", item, `${field.key}.semanticConflict`, `${field.label}同义字段冲突`, field.semanticConflict, "", field.fieldId);
+    }
+    add("工艺方案", item, "selectedOption", "已选方案标识", item.selectedOption ?? "未选择");
+    if (item.selectedOptionDetails) {
+      for (const [key, label] of [["id", "方案标识"], ["title", "方案名称"], ["printMode", "印刷方式"], ["composition", "方案组成"]]) {
+        add("工艺方案", item, `selectedOptionDetails.${key}`, label, item.selectedOptionDetails[key]);
+      }
+    } else add("工艺方案", item, "selectedOptionDetails", "工艺方案详情", "未选择");
+    const file = item.file || {};
+    for (const [key, label] of [["fileName", "文件名"], ["itemId", "文件所属产品"], ["checkedAt", "文件检查时间"], ["version", "文件检查记录版本"], ["scope", "文件检查范围"], ["limitations", "文件检查限制"]]) {
+      add("印刷文件", item, `file.${key}`, label, file[key]);
+    }
+    add("印刷文件", item, "file.status", "文件检查状态", EXPORT_FILE_STATUS_LABELS[file.status] || "待核对");
+    add("印刷文件", item, "file.inspectionLevel", "文件检查级别", {basic: "文件基本属性检查", metadata: "文件基本属性与已提供的 PDF 元数据检查"}[file.inspectionLevel] || "未执行基础检查");
+    (file.checks || []).forEach((check, index) => add("文件基础检查", item, `file.checks.${index}`, check.label, check.detail, EXPORT_CHECK_STATUS_LABELS[check.status] || "未确认"));
+    (file.warnings || []).forEach((warning, index) => add("文件复核提醒", item, `file.warnings.${index}`, "提醒", warning));
+  }
+  const issueLabels = {id: "事项标识", kind: "事项类型", field: "关联字段", fieldId: "字段标识", fieldPath: "字段路径", label: "事项名称", itemId: "产品标识", itemIndex: "产品索引（从0开始）", blocking: "是否阻断", section: "处理阶段", message: "事项说明", action: "处理动作"};
+  (document.issues || []).forEach((issue, index) => {
+    const item = document.items?.find(item => item.itemId === issue.itemId);
+    for (const [key, value] of Object.entries(issue)) add("交接待办", item, `issues.${index}.${key}`, issueLabels[key] || key, value);
+  });
+  (document.notes || []).forEach((note, index) => add("交接时说明", null, `notes.${index}`, "说明", note));
+  return [["分组", "产品标识", "产品序号", "产品项", "字段路径", "字段标识", "字段", "内容", "状态"], ...rows].map(row => row.map(escape).join(",")).join("\n");
+}
+
 async function exportOrder(format) {
   try {
     const document = await currentHandoff();
@@ -2378,58 +2727,7 @@ async function exportOrder(format) {
     if (format === "json") {
       content = JSON.stringify(document, null, 2); extension = "json"; contentType = "application/json";
     } else if (format === "csv") {
-      const escape = (value) => {
-        let text = String(value ?? "");
-        if (/^[\s\uFEFF]*[=+@-]|^[\t\r\n]/.test(text)) text = "'" + text;
-        return '"' + text.replaceAll('"', '""') + '"';
-      };
-      const documentStatuses = {blocked: "需求整理中，禁止作为生产交接单导出", stale: "已失效，请重新生成", draft: "未确认草稿", confirmed: "已本地确认", unconfirmed: "未确认"};
-      const fieldStatuses = {missing: "待补充", pending_confirmation: "候选待核对", confirmed: "已核对", filled: "已填写", observed: "已填写", inferred: "推断待核对", stale: "已失效"};
-      const fileStatuses = {pending_delivery: "文件待交付", stale: "检查已过期", checked: "已完成基础检查", needs_review: "需核对"};
-      const checkStatuses = {ok: "通过", warn: "需关注", error: "未通过", info: "信息", unknown: "未确认"};
-      const rows = [];
-      const add = (group, item, path, label, value, status = "", fieldId = "") => rows.push([
-        group, item?.itemId || "", item ? (item.itemIndex == null ? "整单" : item.itemIndex + 1) : "", item?.title || "",
-        path, fieldId, label, value == null ? "未记录" : typeof value === "boolean" ? (value ? "是" : "否") : value, status
-      ]);
-      for (const [path, label, value] of [
-        ["schemaVersion", "交接文档结构版本", document.schemaVersion], ["documentType", "文档类型", document.documentType],
-        ["orderId", "订单", document.orderId], ["revision", "订单版本", document.revision],
-        ["status", "交接状态", documentStatuses[document.status] || "待核对"], ["exportable", "允许导出", document.exportable],
-        ["unitSystem", "尺寸单位", document.unitSystem], ["generatedAt", "生成时间", document.generatedAt],
-        ["confirmedAt", "确认时间", document.confirmedAt ?? "尚未确认"], ["confirmedRevision", "确认版本", document.confirmedRevision ?? "无"],
-        ["confirmation.status", "人工确认状态", documentStatuses[document.confirmation?.status] || "待核对"],
-        ["confirmation.scope", "确认范围", document.confirmation?.scope], ["sent", "供应商发送", document.sent ? "已发送" : "尚未发送"]
-      ]) add("交接信息", null, path, label, value);
-      for (const item of document.items || []) {
-        for (const [path, label] of [["itemId", "产品标识"], ["itemIndex", "产品索引（从0开始）"], ["title", "产品名称"]]) add("产品信息", item, path, label, item[path]);
-        for (const field of item.fields || []) {
-          add("生产规格", item, field.key, field.label, field.value ?? "待补充", fieldStatuses[field.status] || "待核对", field.fieldId);
-          if (field.aliases) add("字段依据", item, `${field.key}.aliases`, `${field.label}同义字段`, JSON.stringify(field.aliases), "", field.fieldId);
-          if (field.semanticConflict != null) add("字段依据", item, `${field.key}.semanticConflict`, `${field.label}同义字段冲突`, field.semanticConflict, "", field.fieldId);
-        }
-        add("工艺方案", item, "selectedOption", "已选方案标识", item.selectedOption ?? "未选择");
-        if (item.selectedOptionDetails) {
-          for (const [key, label] of [["id", "方案标识"], ["title", "方案名称"], ["printMode", "印刷方式"], ["composition", "方案组成"]]) {
-            add("工艺方案", item, `selectedOptionDetails.${key}`, label, item.selectedOptionDetails[key]);
-          }
-        } else add("工艺方案", item, "selectedOptionDetails", "工艺方案详情", "未选择");
-        const file = item.file || {};
-        for (const [key, label] of [["fileName", "文件名"], ["itemId", "文件所属产品"], ["checkedAt", "文件检查时间"], ["version", "文件检查记录版本"], ["scope", "文件检查范围"], ["limitations", "文件检查限制"]]) {
-          add("印刷文件", item, `file.${key}`, label, file[key]);
-        }
-        add("印刷文件", item, "file.status", "文件检查状态", fileStatuses[file.status] || "待核对");
-        add("印刷文件", item, "file.inspectionLevel", "文件检查级别", {basic: "文件基本属性检查", metadata: "文件基本属性与已提供的 PDF 元数据检查"}[file.inspectionLevel] || "未执行基础检查");
-        (file.checks || []).forEach((check, index) => add("文件基础检查", item, `file.checks.${index}`, check.label, check.detail, checkStatuses[check.status] || "未确认"));
-        (file.warnings || []).forEach((warning, index) => add("文件复核提醒", item, `file.warnings.${index}`, "提醒", warning));
-      }
-      const issueLabels = {id: "事项标识", kind: "事项类型", field: "关联字段", fieldId: "字段标识", fieldPath: "字段路径", label: "事项名称", itemId: "产品标识", itemIndex: "产品索引（从0开始）", blocking: "是否阻断", section: "处理阶段", message: "事项说明", action: "处理动作"};
-      (document.issues || []).forEach((issue, index) => {
-        const item = document.items?.find(item => item.itemId === issue.itemId);
-        for (const [key, value] of Object.entries(issue)) add("交接待办", item, `issues.${index}.${key}`, issueLabels[key] || key, value);
-      });
-      (document.notes || []).forEach((note, index) => add("交接时说明", null, `notes.${index}`, "说明", note));
-      content = [["分组", "产品标识", "产品序号", "产品项", "字段路径", "字段标识", "字段", "内容", "状态"], ...rows].map(row => row.map(escape).join(",")).join("\n");
+      content = handoffCsvDocument(document);
       extension = "csv"; contentType = "text/csv";
     } else { content = document.markdown; extension = "md"; contentType = "text/markdown"; }
     const url = URL.createObjectURL(new Blob([(format === "csv" ? "\ufeff" : "") + content], {type: contentType + ";charset=utf-8"}));
@@ -2548,9 +2846,12 @@ on("order-toggle", "click", () => {
   layout.orderCollapsed = !layout.orderCollapsed;
   applyLayout();
   saveLayout();
+  // WebKit never focuses buttons on pointer-down, so collapsing can hide
+  // the pane that still owns focus.
+  restoreFocusAfterViewportChange();
 });
 on("mobile-back", "click", () => { closeHistoryContextMenu(); $("#workspace").dataset.mobilePane = "work"; updateOrderToggle(); $("#order-toggle").focus(); });
-on("workspace-backdrop", "click", () => setSidebarCollapsed(true));
+on("workspace-backdrop", "click", () => { setSidebarCollapsed(true); $("#sidebar-toggle").focus(); });
 on("history-context-menu", "click", (event) => {
   const control = event.target.closest("[data-history-menu-action]");
   if (!control) return;
@@ -2580,6 +2881,12 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "End") { event.preventDefault(); moveHistoryMenuFocus("last"); return; }
     if (event.key === "Tab") { event.preventDefault(); moveHistoryMenuFocus(event.shiftKey ? -1 : 1); return; }
   }
+  const presetDrawer = $("#preset-drawer");
+  if (presetDrawer && !presetDrawer.hidden && event.key === "Escape") {
+    event.preventDefault();
+    closePresetDrawer({restoreFocus: true});
+    return;
+  }
   const focusedHistoryItem = document.activeElement?.closest?.(".history-item");
   if (focusedHistoryItem && ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu" || event.key === "Apps")) {
     event.preventDefault();
@@ -2602,6 +2909,20 @@ document.addEventListener("keydown", (event) => {
     }
   }
 });
+// P0-2: hand focus to a visible entry when the pane that owned it is hidden.
+function restoreFocusAfterViewportChange() {
+  if (document.activeElement !== document.body || !lastFocusedElement) return;
+  if (document.querySelector("dialog[open]")) return;
+  const last = lastFocusedElement;
+  if (!(last instanceof Element)) return;
+  const pane = last.closest(".sidebar, .order-section, .chat-section");
+  // The pane must actually be hidden now; a visible pane whose focused
+  // element was merely re-rendered away belongs to the TD-11 machinery.
+  if (!pane || pane.getClientRects().length) return;
+  if (pane.classList.contains("sidebar")) { $("#sidebar-toggle")?.focus(); return; }
+  if (pane.classList.contains("order-section")) { $("#order-toggle")?.focus(); return; }
+  if (pane.classList.contains("chat-section")) { $("#mobile-back")?.focus(); return; }
+}
 let wasDesktop = DESKTOP_QUERY.matches;
 function syncPaneViewport() {
   closeHistoryContextMenu();
@@ -2609,6 +2930,12 @@ function syncPaneViewport() {
   wasDesktop = DESKTOP_QUERY.matches;
   updateOrderToggle();
   updateBackdrop();
+  restoreFocusAfterViewportChange();
+  // Chromium may run the resize/media-change events before the media-query
+  // style recalc lands: the focus owner is not blurred yet and its pane still
+  // reports visible, so the synchronous restore above bails out. Re-check
+  // after the next layout frame so the stranded focus is still handed off.
+  requestAnimationFrame(() => requestAnimationFrame(restoreFocusAfterViewportChange));
 }
 window.addEventListener("resize", syncPaneViewport);
 DESKTOP_QUERY.addEventListener("change", syncPaneViewport);
@@ -2632,15 +2959,51 @@ on("history-list", "click", (event) => {
 on("history-list", "pointerdown", (event) => {
   if (event.target.closest(".history-item")) closeHistoryContextMenu();
 });
+on("settings-history-list", "click", async (event) => {
+  const action = event.target.closest("[data-history-action]");
+  if (action) {
+    const kind = action.dataset.historyAction;
+    await historyAction(kind, action.dataset.orderId);
+    if (kind === "archive" || kind === "purge") await refreshSettingsOrders();
+    return;
+  }
+  const view = event.target.closest(".settings-history-view");
+  if (view && view.dataset.orderId) {
+    closeSettingsDialog();
+    switchOrder(view.dataset.orderId);
+  }
+});
+on("settings-history-list", "change", (event) => {
+  const check = event.target.closest(".settings-history-check");
+  if (!check) return;
+  if (check.checked) settingsHistorySelection.add(check.dataset.orderId);
+  else settingsHistorySelection.delete(check.dataset.orderId);
+  syncSettingsHistoryToolbar();
+});
+on("settings-history-select-all", "change", (event) => {
+  settingsHistorySelection.clear();
+  if (event.currentTarget.checked) settingsOrders.forEach((item) => settingsHistorySelection.add(item.id));
+  renderSettingsOrders();
+});
+on("settings-history-toolbar", "click", (event) => {
+  const control = event.target.closest("[data-history-bulk]");
+  if (control) settingsHistoryBulk(control.dataset.historyBulk);
+});
 document.addEventListener("pointerdown", (event) => {
   const menu = $("#history-context-menu");
-  if (!menu || menu.hidden) return;
-  if (!menu.contains(event.target)) closeHistoryContextMenu();
+  if (menu && !menu.hidden && !menu.contains(event.target)) closeHistoryContextMenu();
+  const drawer = $("#preset-drawer");
+  const toggle = $("#preset-toggle");
+  if (drawer && !drawer.hidden && !drawer.contains(event.target) && !toggle?.contains(event.target)) closePresetDrawer();
 });
 on("save-preset", "click", saveCurrentSpecPreset);
+on("preset-toggle", "click", togglePresetDrawer);
 on("preset-list", "click", (event) => {
   const apply = event.target.closest(".preset-apply");
-  if (apply) applySpecPreset(apply.dataset.presetId);
+  if (apply) {
+    closePresetDrawer();
+    applySpecPreset(apply.dataset.presetId);
+  }
   const remove = event.target.closest(".preset-remove");
   if (remove) removeSpecPreset(remove.dataset.presetId);
 });
@@ -2663,6 +3026,9 @@ on("confirm-reset-dialog", "close", () => {
     chatRequestSeq += 1;
     activeChatController?.abort();
     activeChatController = null;
+    stoppedChatSettling = false;
+    activeChatSettle = null;
+    chatSettleWait = false;
     removePendingMessage();
     isSending = false;
     state.status = null;

@@ -238,3 +238,29 @@ for (const direction of ['backward', 'forward']) {
     expect(active.tag).not.toBe('BODY');
   });
 }
+
+test('hiding the focused pane across the breakpoint routes focus to a visible entry', async ({page, appURL}) => {
+  await page.setViewportSize({width:1440, height:844});
+  await boot(page, appURL);
+  await showOrder(page);
+  await page.locator('#platform-select').focus();
+  await expect(page.locator('#platform-select')).toBeFocused();
+  await page.setViewportSize({width:390, height:844});
+  await settled(page);
+  await expect(page.locator('.order-section')).toBeHidden();
+  await expect(page.locator('#order-toggle')).toBeFocused();
+});
+
+test('closing the mobile drawer via the backdrop restores the sidebar entry focus', async ({page, appURL}) => {
+  await page.setViewportSize({width:390, height:844});
+  await boot(page, appURL);
+  await openSidebar(page);
+  await expect(page.locator('#workspace-backdrop')).toBeVisible();
+  await page.locator('#settings-button').focus();
+  await expect(page.locator('#settings-button')).toBeFocused();
+  // The drawer (min(288px, 84vw) wide) overlays the backdrop's centre, so
+  // click a point on the scrim to the right of the drawer.
+  await page.locator('#workspace-backdrop').click({position: {x: 350, y: 400}});
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await expect(page.locator('#sidebar-toggle')).toBeFocused();
+});

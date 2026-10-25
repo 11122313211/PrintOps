@@ -140,7 +140,7 @@ PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.
 
 严格发布门槛：合成字段准确率 ≥90%、可完成用例完整率 ≥80%；真实脱敏订单至少 20 例且字段准确率 ≥95%。真实语料缺失、为空、格式错误、不足或低准确率均以退出码 1 阻断。当前真实库为空；不加 `--release-gate` 的开发命令成功不能证明发布通过。
 
-2026-10-24（1.3.0 候选基线）本轮 Python 单测 **544 项通过**，dev_check 六步全绿；Chromium 浏览器四套件 journey **34**、UI 位置 **16**、UI 焦点 **15**、基础冒烟 **13** 项通过。111 条合成用例字段准确率 100%，不代表真人交接成功率。严格发布检查因真实语料 0 例而按预期失败（组织性阻断，不属于本轮阻塞项）。完整证据见 [浏览器记录](docs/BROWSER_JOURNEY.md) 与 [开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)；Firefox 在本机启动环境阻断，真实手机、真人走查与真实 dsh/模型仍待独立验证。
+2026-10-25（1.3.0 候选基线）本轮 Python 单测 **555 项通过**，dev_check 六步全绿；Chromium 浏览器四套件 journey **38**、UI 位置 **16**、UI 焦点 **17**、基础冒烟 **13** 项通过。111 条合成用例字段准确率 100%，不代表真人交接成功率。严格发布检查因真实语料 0 例而按预期失败（组织性阻断，不属于本轮阻塞项）。完整证据见 [浏览器记录](docs/BROWSER_JOURNEY.md) 与 [开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)；Firefox 在本机启动环境阻断，真实手机、真人走查与真实 dsh/模型仍待独立验证。
 
 ## 进阶：模型、MCP 与运行边界
 

@@ -40,8 +40,9 @@
   }
   function init(actions) {
     callbacks = actions;
-    $("#phase-compare").append($("#estimate-panel"), $("#recommendations"));
-    $("#phase-review").append($(".order-actions"), $("#order-export"));
+    // The estimate/recommendation panels and the generate/confirm/export
+    // actions are declared inside the compare/review panes directly in
+    // index.html; no runtime re-parenting is needed or allowed.
     for (const pane of document.querySelectorAll(".journey-pane")) pane.tabIndex = -1;
     for (const tab of document.querySelectorAll("[data-view]")) tab.addEventListener("click", () => {
       if (tab.closest(".order-section") && $("#workspace").dataset.mobilePane === "order") $("#mobile-back").click();
@@ -189,7 +190,13 @@
     $("#active-item-context").textContent = context;
     $("#drop-zone").setAttribute("aria-label", `${context}，拖拽或点击上传 PDF 文件`);
     $("#starter-panel").hidden = Boolean(data.order?.productType || data.order?.quantity || items.length);
-    $("#compare-empty").hidden = Boolean(data.options?.length);
+    const hasProduct = Boolean(data.order?.productType || items.length);
+    const compareEmpty = $("#compare-empty");
+    compareEmpty.textContent = hasProduct
+      ? "参数还没齐：先补必要参数，或直接点“生成本项方案”。未标定的费用会明确列出。"
+      : "这里会比较同一产品的不同工艺方案；先在对话里说明要印什么，再回来比较。";
+    if (!hasProduct) compareEmpty.append(button("回对话补充", () => { view("intake"); $("#message-input").focus(); }));
+    compareEmpty.hidden = Boolean(data.options?.length);
     $("#request-options").textContent = data.options?.length ? "重新生成本项方案" : "生成本项方案";
     renderReview(data);
     if (newOrder || !data.orderGenerated) $("#review-checklist-section").open = !data.orderGenerated;
