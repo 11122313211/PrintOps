@@ -104,7 +104,7 @@ The local confirmation note is `仅核对本地交接内容；文件待交付，
 
 ## Interface previews
 
-These are historical Chromium screenshots from the **2026-10-15 uncommitted development workspace on the 1.2.0 candidate baseline**, using synthetic demonstration orders; the current UI-position tuning is represented by the live page and browser suites. The stages are intake, comparison, and review/handoff. The 390px image is a desktop narrow viewport, not real mobile/touch acceptance.
+These are Chromium screenshots from the **2026-10-25 NewUI branch (blueprint drafting visual language) on the 1.3.0.1 candidate baseline**, using synthetic demonstration orders; the current UI-position tuning is represented by the live page and browser suites. The stages are intake, comparison, and review/handoff. The 390px image is a desktop narrow viewport, not real mobile/touch acceptance.
 
 | Option comparison | 390px narrow viewport |
 | --- | --- |
