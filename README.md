@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.3.0--candidate-blue)
+![Version](https://img.shields.io/badge/version-1.3.0.1--candidate-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python 标准库运行时 · 本地优先 · 可选模型 · 人工核对与确认**
@@ -26,7 +26,7 @@ PrintOps 面向市场、设计、采购等非印刷专业用户。先描述用�
 
 ## 当前能力与边界
 
-- `VERSION` 为 **1.3.0 候选基线**（随发布收口 bump），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
+- `VERSION` 为 **1.3.0.1 候选基线（NewUI 分支：蓝晒制版视觉语言）**（随发布收口 bump），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
 - 它是订单前置整理工具。当前没有真实供应商授权、HTTP transport 或 live 工具入口；确认、导出和打印都不代表供应商已接收。
 - 参考估算来自版本化的 **illustrative 人工示例参数**，不是市场价、供应商报价或交期承诺。PDF 检查只提供基础线索，不能证明文件可直接生产。
 - 真实脱敏语料目前为 **0**，严格发布门槛保持阻断。开发评测、演示输入、可用性任务和示例报价不能替代真实订单。

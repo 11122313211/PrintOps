@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.3.0--candidate-blue)
+![Version](https://img.shields.io/badge/version-1.3.0.1--candidate-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python standard-library runtime · Local first · Optional models · Human review and confirmation**
@@ -26,7 +26,7 @@ The initial study assigns one primary task to each of 8 non-expert participants 
 
 ## Current capabilities and boundaries
 
-- `VERSION` is the **1.3.0 candidate baseline** (bumped at release finalization). See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- `VERSION` is the **1.3.0.1 candidate baseline (NewUI branch: blueprint drafting visual language)** (bumped at release finalization). See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
 - This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
 - Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
 - The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
