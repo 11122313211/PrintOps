@@ -533,6 +533,49 @@ test('csv audit: real downloads preserve authoritative handoff details and prote
   }
 });
 
+test('work card: preview dialog renders the handoff and downloads a named PNG', async ({page, appURL}, info) => {
+  await boot(page, appURL);
+  await send(page, card);
+  await openCompare(page);
+  await posted(page, '/api/choose', () => page.locator('.choose-option').first().click());
+  await openHandoff(page);
+  await posted(page, '/api/generate', () => page.locator('#generate-order').click());
+  const confirmed = await posted(page, '/api/confirm', () => page.locator('#confirm-order').click());
+  expect(confirmed.handoffDocument.exportable).toBe(true);
+  await page.locator('.export-option[data-format="card"]').click();
+  await expect(page.locator('#workcard-dialog')).toBeVisible();
+  // 预览画布即导出内容；同字段下多产品布局必然高于单产品布局。
+  const heights = await page.evaluate(() => {
+    const build = (itemCount) => ({
+      orderId: 'TEST', revision: 1, status: 'confirmed', generatedAt: '2026-11-01T10:00:00',
+      items: Array.from({length: itemCount}, (_, index) => ({
+        itemId: `i${index}`, itemIndex: index, title: '名片',
+        fields: [
+          {key: 'quantity', label: '数量', value: '500张'}, {key: 'size', label: '成品尺寸', value: '90×54mm'},
+          {key: 'paper', label: '纸张/材料', value: '300g铜版纸'}, {key: 'printing', label: '印刷颜色', value: '双面四色'}
+        ], file: {status: 'checked'}
+      }))
+    });
+    return {
+      preview: document.querySelector('#workcard-preview canvas').height,
+      single: PrintOpsWorkCard.renderCard(build(1)).height,
+      multi: PrintOpsWorkCard.renderCard(build(3)).height
+    };
+  });
+  expect(heights.preview).toBeGreaterThan(0);
+  expect(heights.multi, '每增加一个产品项卡面必然增高').toBeGreaterThan(heights.single);
+  const event = page.waitForEvent('download');
+  await page.locator('#workcard-download').click();
+  const download = await event;
+  const document = confirmed.handoffDocument;
+  expect(download.suggestedFilename()).toBe(`printops-workcard-${document.orderId}-r${document.revision}.png`);
+  const path = info.outputPath('work-card.png');
+  await download.saveAs(path);
+  await info.attach('work-card', {path, contentType: 'image/png'});
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#workcard-dialog')).not.toBeVisible();
+});
+
 for (const handoffState of ['ready', 'pending', 'confirmed']) test(`control availability: a delayed estimate preserves the ${handoffState} handoff controls of another order`, async ({page, appURL}) => {
   await boot(page, appURL);
   const a = await send(page, card);

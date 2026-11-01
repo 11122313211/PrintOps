@@ -147,7 +147,7 @@ ACCESS_TOKEN = secrets.token_urlsafe(24)
 # docs, .git or runtime data. Non-API paths outside this set return 404.
 STATIC_FILES = {
     "": "index.html", "/": "index.html", "/index.html": "index.html",
-    "/app.js": "app.js", "/markdown.js": "markdown.js", "/workbench.js": "workbench.js", "/journey.js": "journey.js", "/styles.css": "styles.css",
+    "/app.js": "app.js", "/markdown.js": "markdown.js", "/workbench.js": "workbench.js", "/journey.js": "journey.js", "/workcard.js": "workcard.js", "/styles.css": "styles.css",
 }
 STATIC_CONTENT_TYPES = {
     "index.html": "text/html; charset=utf-8",
@@ -155,6 +155,7 @@ STATIC_CONTENT_TYPES = {
     "workbench.js": "text/javascript; charset=utf-8",
     "journey.js": "text/javascript; charset=utf-8",
     "markdown.js": "text/javascript; charset=utf-8",
+    "workcard.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
 # Windows reports a browser that disappeared mid-request as ConnectionAbortedError

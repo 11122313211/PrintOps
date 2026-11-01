@@ -105,7 +105,13 @@
           else drafts[key] = {value: input.value, baseValue: draft?.baseValue ?? display ?? null};
           persistDrafts();
         });
-        edit.append(input, button("保存修改", () => callbacks.field(field, input.value.trim() ? "set" : "clear", input.value.trim())));
+        edit.append(input);
+        // 尺寸解析只接受两/三轴 mm 值（tools.validate_order 会拒绝单轴写法），
+        // 在编辑器里直接给出可抄写的格式，避免“已确认却仍被校验拒绝”的无从下手。
+        if (field.key === "size" || field.key.startsWith("dimensions.")) {
+          edit.append(el("small", "格式：宽×高 mm，如 50×50mm；圆形直径也请写成两轴；A4 等标准纸名可直接写。", "review-field-hint"));
+        }
+        edit.append(button("保存修改", () => callbacks.field(field, input.value.trim() ? "set" : "clear", input.value.trim())));
         if (display != null && display !== "") edit.append(button("清空此字段", () => callbacks.field(field, "clear")));
         row.append(edit);
         if (draft) row.append(el("p", draft.baseValue !== (display ?? null) ? "尚未保存的修改；服务器值已变化，请核对后保存。" : "尚未保存的修改", "review-draft-status"));

@@ -44,6 +44,7 @@ stateDiagram-v2
 - 控件高度分两档：桌面端（>1050px）按钮刻意做扁（纵向内边距约 0.3em，渲染高约 22–26px）以利用纵向空间；≤1050px（指针/触屏布局）在 styles.css 末尾的触控基线块统一恢复高频输入、导航、确认、上传与主动作的 44px 最小目标（含快捷建议、聊天输入框与各摘要行）。小屏顶部使用两行布局保留触控空间。
 - 面板分隔条画为居中单条 1px 细线（hover/拖动/聚焦时变主题红），命中宽度保持 `--splitter-w` 不变。
 - 明显键盘焦点；深色顶栏使用浅色焦点框。屏幕阅读器只播报短任务状态，不重播整段对话。
+- 工单小卡预览对话框沿用 settings-dialog 的视觉签名（纸底、1px 描边、4px 红顶边、软投影）；卡面由 `workcard.js` 零依赖 Canvas 手绘，颜色一律运行时读取同一批令牌（自动继承令牌二次覆盖与高对比主题），预览与导出 PNG 共用同一张画布。
 - 打印使用白底黑字、A4、15mm页边距、产品分组、可重复表头和页码；不打印工作台控件。
 
 核心正常主题令牌抽检：正文11.94:1，深纸底辅助/次要文字4.79:1，主按钮文字5.60:1，输入边框4.41:1，深色顶栏控件边框3.31:1，绿色/候选状态文字4.85/4.79:1；计算记录位于 `reports/next-stage-acceptance/contrast-token-samples.json`。此抽检不覆盖所有实际混合背景、悬停和禁用状态。
@@ -110,3 +111,12 @@ stateDiagram-v2
 | 批量操作一次确认 | 归档/导出/删除所选各弹一次 confirm 后逐单串行执行；删除走 purgeOrderEntry（未归档先 archive、用响应新 revision 链 purge），单条 409 失败跳过并 toast 汇总；选中含当前会话时批量收尾统一 teardown 一次 | journey_edges 新增用例：两单勾选 → 已选 2 → 一次 dialog → 两行归零 + API 复核均无 + 侧栏条目消失 + 恰好 1 次 confirm |
 | 永久删除统一链 | historyAction purge 分支不再静默拒绝未归档订单：confirm 文案区分状态（明示"先自动归档再清除"），purgeOrderEntry 与批量共用；teardownIfCurrentOrder 提取当前会话清理序列供单删/批量复用；侧栏右键菜单进行中订单新增「永久删除」（排归档之后，键盘用例 ArrowDown 聚焦不变）。悬停快捷钮维持两钮——历史行仅约 160px 宽，第三个悬停钮浮层会盖住行中心点吞掉整行点击（实测 elementFromPoint 复现），故侧栏一键删除只走右键菜单 | journey 38 全量回归（含 smoke 菜单计数/聚焦钉死项）；hover 拦截问题以几何探针用例复现后修复 |
 | 常用规格沉底底栏 | 侧栏改三行 grid（品牌/滚动区/底栏），preset 面板钉死在最底边（收起约 30px：小号「＋ 保存常用」+ 放大主控「常用 N ▾」），不随历史列表滚动；点「常用」在左栏内部展开（底栏随内容增高、上方滚动区等量收窄，max-height min(300px,45vh) 内滚，无浮层），条目点击沿用 sendMessage("沿用常用规格", patch) 复用并收起，× 删除；保存后自动展开 + is-new 闪亮（field-flash 沿用）；外点/Escape 收起并归还焦点到 #preset-toggle（aria-expanded 同步）；与右键菜单互斥；存储键与 8 条上限不变 | journey_edges preset 用例：贴底不随滚动断言（scrollTop 前后 bottom 不变）、展开仍在侧栏内的断言、保存自动开+闪亮 → 应用发 /api/chat 且收起 → 重开删除归零 + 空态 → Escape 收起；几何探针实测收起 gap=0、展开 drawerInside=true 且滚动区收窄；截图人工核验按钮大小对比 |
+
+## 2026-11-01 补记：工单小卡导出（PNG 预览 + 复制图片）
+
+| 变更 | 状态语义 | 验证 |
+| --- | --- | --- |
+| 导出区第五入口「工单小卡」 | `.export-option[data-format="card"]` 通栏一行，与上方"即下载"的数据格式导出（JSON/CSV/Markdown/打印 PDF）视觉区隔——它先打开预览对话框再决定下载/复制；入口显隐仍由 `handoffDocument.exportable` 统一控制 | journey_edges 新增 work card 用例：确认后点入口 → `#workcard-dialog` 打开 → 下载文件名 `printops-workcard-{orderId}-r{revision}.png` |
+| 零依赖 Canvas 卡面（workcard.js） | 新模块 `PrintOpsWorkCard.renderCard/open`（UMD 同 markdown.js）：卡面 = 红色印条 + 不对称铅字圆角品牌块 + 状态徽章（已本地确认/未确认草稿/已失效）+ mono 单号与确认信息行 + 双细线分隔 + 每产品项衬线标题与**全字段** 2 列参数格（与交接单同详：含尺寸明细与品类参数，空缺值显示"待确认/待补充"，格角带字段状态角标，待确认候选不上数值只显占位）+ 工艺方案/印刷文件/文件基础检查表/文件复核提醒各节 + 黄铜交期条（多产品交期不一致显示"以各产品项约定为准"，不替用户拍板）+ 交接说明（notes + 交接阶段事项）+ "本地交接资料 · 尚未发送供应商"页脚；颜色一律运行时读取 styles.css 令牌，预览与导出共用同一张画布（度量/绘制单一路径，2x 导出），画布高度随内容自适应 | work card 用例内以合成单直接驱动渲染器断言：多产品布局必然高于同字段单产品；卡面 PNG 人工核验（纸底、徽章、全字段格、工艺/文件/检查表/交接说明各节） |
+| 复制图片能力探测 | 「复制图片」按钮在 `ClipboardItem`/`navigator.clipboard.write` 不可用时自动隐藏（沿用 settings-capabilities 探测模式），仅保留「下载 PNG」；复制失败提示改用下载 | 按钮存在性随环境断言；journey 39 / browser_smoke 13 / ui_positions 16 / ui_focus 17 / dev_check 全量回归 |
+| 核对页底部操作台（动作 + 导出统一面板） | `#phase-review .order-actions` 与 `.order-export` 共用同底色/描边/圆角/内距的面板外观；按钮分级但同级等高：主按钮满行 42px、次动作两列 38px、导出选项 5 列等宽 36px（≤1050px 恢复 44px 触控基线）。状态层级：交接单生成后主按钮降为安静状态条（纸深底弱字），焦点让给红底「确认交接单」；确认完成后转绿底（同 `.draft-status.ready` 语义）。工单小卡与其它导出格式同尺寸等宽（预览先行交互不变），通栏特置规则删除 | journey_edges 22 / ui_positions 16 / ui_focus 17 / browser_smoke 13 复跑通过；实景截图核验状态条 + 红/描边动作并排 + 五枚等宽导出钮 |

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20261025-history-batch-3" />
+    <link rel="stylesheet" href="styles.css?v=20261101-review-desk-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -184,6 +184,7 @@
                 <button class="export-option" type="button" data-format="csv">CSV</button>
                 <button class="export-option" type="button" data-format="markdown">Markdown</button>
                 <button class="export-option" type="button" data-format="print">打印 / PDF</button>
+                <button class="export-option" type="button" data-format="card">工单小卡</button>
               </div>
             </div>
           </section>
@@ -422,10 +423,29 @@
       </form>
     </dialog>
 
+    <dialog class="workcard-dialog" id="workcard-dialog" aria-labelledby="workcard-title">
+      <div class="workcard-card">
+        <div class="settings-heading workcard-heading">
+          <div>
+            <p class="eyebrow">WORK CARD</p>
+            <h2 id="workcard-title">工单小卡预览</h2>
+            <p>卡面即下载内容，与交接单同详：确认无误后下载 PNG 或复制图片，可直接粘贴到聊天工具发给同事或供应商。</p>
+          </div>
+          <button class="settings-close" id="workcard-close" type="button" aria-label="关闭工单小卡预览" title="关闭">×</button>
+        </div>
+        <div class="workcard-preview" id="workcard-preview" aria-label="工单小卡画面"></div>
+        <div class="workcard-actions">
+          <button class="secondary-action" id="workcard-copy" type="button">复制图片</button>
+          <button class="primary-action" id="workcard-download" type="button">下载 PNG</button>
+        </div>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" role="status"></div>
     <script src="markdown.js?v=20260918-1"></script>
     <script src="workbench.js?v=20261025-tooltip-export-1"></script>
-    <script src="journey.js?v=20261025-static-panes-1"></script>
-    <script src="app.js?v=20261025-history-batch-3"></script>
+    <script src="journey.js?v=20261101-size-hint-1"></script>
+    <script src="workcard.js?v=20261101-workcard-detail-1"></script>
+    <script src="app.js?v=20261101-workcard-1"></script>
   </body>
 </html>

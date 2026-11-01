@@ -969,7 +969,54 @@ html[data-theme="high-contrast"] .integration-grid article small { color: #222; 
 .review-editor summary { min-height: 44px; display: flex; align-items: center; color: var(--red-deep); cursor: pointer; font-size: 13px; }
 .review-editor input { width: 100%; border: 1px solid var(--line-strong); background: var(--paper-light); border-radius: 4px; padding: 10px; font: inherit; }
 .review-editor button, .field-review-actions button { margin: 8px 8px 0 0; width: auto; }
-#phase-review .order-actions { position: static; background: var(--paper); padding: 12px; border: 1px solid var(--rule); border-radius: 8px; max-width: none; }
+/* 核对与交接的底部操作台：动作区与导出区是同一套面板——同底色、同描边、
+   同圆角与内距；按钮分级但同级严格等高（红底主动作 → 描边次动作 → 等宽导出条）。
+   交接单生成后主按钮降为安静状态条，把视觉焦点让给下一步“确认交接单”；
+   确认完成后转绿底，与 .draft-status.ready 的完成语义一致。 */
+#phase-review .order-actions {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  max-width: none;
+}
+#phase-review .order-actions .primary-action {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  padding: 9px var(--space-3);
+  font-size: var(--font-sm);
+}
+#phase-review .order-actions .primary-action:disabled { color: var(--ink-soft); background: var(--paper-deep); border: 1px solid var(--rule-light); }
+#phase-review .order-actions .secondary-action { min-height: 38px; padding: 8px var(--space-3); font-size: var(--font-sm); }
+#phase-review .order-actions .secondary-action:disabled { color: var(--ink-faint); background: var(--paper-deep); border-color: var(--rule-light); }
+#phase-review .order-actions #confirm-order:not([hidden]) { color: var(--paper-light); background: var(--red); border-color: var(--line-red); }
+#phase-review .order-actions #confirm-order:hover:not(:disabled) { background: var(--red-deep); }
+#phase-review .order-actions #confirm-order:disabled { color: var(--green); background: var(--green-pale); border-color: var(--line-green); }
+#phase-review .order-export {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+#phase-review .order-export #export-label { line-height: 1; letter-spacing: .1em; }
+#phase-review .export-options { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#phase-review .export-option { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px var(--space-2); font-size: var(--font-sm); font-weight: 700; white-space: nowrap; }
+@media (max-width: 1050px) {
+  #phase-review .order-actions .primary-action,
+  #phase-review .order-actions .secondary-action,
+  #phase-review .export-option { min-height: 44px; }
+}
+@media (max-width: 700px) {
+  #phase-review .export-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .handoff-document { background: #fffdf8; color: #292722; border: 1px solid var(--rule); border-radius: 4px; padding: 24px; margin: 20px 0; box-shadow: var(--shadow-soft); }
 .handoff-document pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
 .handoff-document h1 { font-size: 24px; color: var(--ink); }
@@ -1078,8 +1125,7 @@ html[data-theme="high-contrast"] .integration-grid article small { color: #222; 
 @media (max-width: 700px) {
   .chat-section, .workspace[data-mobile-pane="order"] .order-section { height: 100dvh; }
 }
-.export-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media(max-width:700px) { .export-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* 导出网格列数由 #phase-review 面板统一管理（5 列等宽，≤700px 收两列）。 */
 .compare-filter { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
 .different-option-value > th { color: var(--red-deep); }
 .file-state-heading > small { display: block; color: var(--ink-soft); line-height: 1.6; }
@@ -1104,3 +1150,22 @@ html[data-theme="high-contrast"] .integration-grid article small { color: #222; 
   .composer textarea { min-height: 44px; }
   .field-evidence details summary, .compare-filter, #review-checklist-section > summary { min-height: 44px; }
 }
+
+/* 工单小卡：预览对话框沿用 settings-dialog 的视觉签名（纸底 + 红顶边 + 软投影），
+   预览画布即导出内容（workcard.js 手绘，颜色读同一批令牌）。入口按钮与其它导出
+   选项同尺寸等宽排列（见 #phase-review 导出面板）——先开预览再决定下载/复制。 */
+.workcard-dialog { width: min(640px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); padding: 0; color: var(--ink); background: var(--paper-light); border: 1px solid var(--rule); border-top: 4px solid var(--red); border-radius: var(--radius-lg); box-shadow: var(--shadow-soft); }
+.workcard-dialog::backdrop { background: rgba(45, 35, 24, .48); }
+.workcard-card { display: flex; flex-direction: column; gap: var(--space-3); width: 100%; max-height: calc(100dvh - 64px); min-height: 0; padding: var(--space-5) 23px 19px; }
+.workcard-card .settings-heading { flex: 0 0 auto; }
+.workcard-preview { display: flex; justify-content: center; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 2px 4px; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.workcard-preview canvas { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: var(--radius-sm); box-shadow: var(--shadow-hard); background: var(--paper-light); }
+.workcard-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: var(--space-2); }
+.workcard-actions .primary-action, .workcard-actions .secondary-action { padding: 9px var(--space-3); }
+@media (max-width: 1050px) { .workcard-actions button { min-height: 44px; } }
+
+/* 评审编辑器内的尺寸格式提示：单轴/无单位写法会被生产校验拒绝，
+   在输入处直接给出可抄写的格式（文案与 tools.validate_order 的阻塞说明一致）。 */
+.review-field-hint { display: block; margin-top: 6px; color: var(--quiet); font-size: var(--font-xs); line-height: 1.5; }
+
+

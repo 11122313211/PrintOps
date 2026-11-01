@@ -2551,7 +2551,7 @@ const BINDING_TARGET_IDS = [
   "preset-toggle", "preset-list", "reset-order", "confirm-reset-dialog", "settings-test",
   "settings-button", "settings-cancel", "settings-dialog", "settings-cancel-secondary",
   "settings-form", "settings-clear", "settings-history-list",
-  "settings-history-select-all", "settings-history-toolbar"
+  "settings-history-select-all", "settings-history-toolbar", "workcard-dialog"
 ];
 const missingBindingIds = new Set(BINDING_TARGET_IDS.filter((id) => !document.getElementById(id)));
 function on(id, type, listener, options) {
@@ -2722,6 +2722,12 @@ function handoffCsvDocument(document) {
 async function exportOrder(format) {
   try {
     const document = await currentHandoff();
+    // 小卡走预览对话框（视觉产物需先确认），其余格式直接下载。
+    if (format === "card") {
+      if (typeof PrintOpsWorkCard === "undefined") throw new Error("工单小卡组件未加载，请刷新页面后重试。");
+      PrintOpsWorkCard.open(document, {notify: showToast});
+      return;
+    }
     if (format === "print") { PrintOpsJourney.view("review"); window.print(); return; }
     let content, extension, contentType;
     if (format === "json") {

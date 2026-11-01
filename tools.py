@@ -661,11 +661,14 @@ def validate_order(order: dict[str, Any]) -> dict[str, Any]:
     required_keys = required_order_keys(order)
     missing = [LABELS[key] for key in required_keys if not order.get(key)]
     # A numeric dimension without a unit, or conflicting alternatives, is not
-    # production-ready even if its legacy display string is nonempty.
+    # production-ready even if its legacy display string is nonempty. The
+    # parser refuses single-axis values (a bare diameter/length is ambiguous),
+    # so the message must teach the accepted format instead of leaving the
+    # user to guess why a filled field still blocks.
     dimensional_values = {"size": order.get("size"), **(order.get("dimensions") or {})}
     for key, value in dimensional_values.items():
         if value and _parse_size_mm(str(value)) is None:
-            label = DIMENSION_LABELS.get(key, "成品尺寸") + "（需明确 mm 数值）"
+            label = DIMENSION_LABELS.get(key, "成品尺寸") + "（需明确 mm 数值，请写成 宽×高，如 50×50mm；直径等单边尺寸也请补成两轴）"
             if label not in missing:
                 missing.append(label)
     warnings = []

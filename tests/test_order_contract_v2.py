@@ -95,6 +95,14 @@ class OrderContractV2Test(unittest.TestCase):
         self.assertFalse(self.agent.generate()["orderGenerated"])
         self.assertIn("需明确 mm", " ".join(self.agent.snapshot()["validation"]["missing"]))
 
+    def test_single_axis_size_blocker_teaches_the_expected_format(self):
+        # A bare diameter like "50mm" is deliberately ambiguous; the blocker
+        # must show the accepted two-axis format so the user can retype it.
+        self.agent.chat("做600个徽章，马口铁，下周内", {"size": "50mm"})
+        missing = " ".join(self.agent.snapshot()["validation"]["missing"])
+        self.assertIn("需明确 mm", missing)
+        self.assertIn("如 50×50mm", missing)
+
     def test_item_view_does_not_inherit_item_one_material(self):
         self.agent.chat("500张300g白卡纸名片和1000本宣传册")
         self.assertFalse(self.agent._item_order(1)["paper"])
