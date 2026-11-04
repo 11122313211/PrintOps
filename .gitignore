@@ -67,6 +67,7 @@ htmlcov/
 .mypy_cache/
 .tox/
 .hypothesis/
+test-results/
 node_modules/
 .pnpm-store/
 npm-debug.log*

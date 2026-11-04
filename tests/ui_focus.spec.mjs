@@ -132,7 +132,7 @@ for (const width of [390, 1440]) {
       try {
         await keyboardActivate(page.locator('.choose-option').first(), 'Space');
         await received.promise;
-        const back = page.locator('#phase-compare [data-view="intake"]');
+        const back = page.locator('#phase-back');
         if (userAction === 'change-view') {
           await keyboardActivate(back);
           await page.locator('#sidebar-toggle').focus();

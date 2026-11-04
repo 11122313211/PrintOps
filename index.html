@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20261101-review-desk-1" />
+    <link rel="stylesheet" href="styles.css?v=20261103-provider-flat-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -103,7 +103,7 @@
             </div>
           </div>
 
-          <div class="journey-meta"><strong id="active-item-context">当前订单</strong><span id="save-status" role="status">正在读取保存状态</span></div>
+          <div class="journey-meta"><strong id="active-item-context">当前订单</strong><span id="save-status" role="status">正在读取保存状态</span><button id="phase-back" class="tool-button phase-back" type="button" data-view="intake">← 返回对话</button></div>
           <section id="operation-error" class="operation-error" role="alert" hidden>
             <strong id="operation-error-title"></strong><p id="operation-error-message"></p>
             <div id="operation-error-diff"></div><div class="recovery-actions" id="operation-error-actions"></div>
@@ -128,12 +128,13 @@
           <div class="quick-replies" id="quick-replies" aria-label="快捷回答"></div>
 
           <form class="composer" id="message-form">
+            <div class="composer-resize" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="调整输入框高度：拖动、双击恢复默认、上下方向键微调" aria-valuemin="44" aria-valuemax="280" aria-valuenow="44"></div>
             <div class="composer-preview" id="composer-preview" hidden>
               <span class="composer-preview-label">发送预览</span>
               <div class="bubble markdown-body" id="composer-preview-body"></div>
             </div>
             <label class="sr-only" for="message-input">输入印刷需求</label>
-            <textarea id="message-input" rows="2" placeholder="例如：门店开业发给路人，想印 500 张，下周要用……"></textarea>
+            <textarea id="message-input" rows="2" placeholder="我们想印刷什么"></textarea>
             <div class="composer-footer">
               <div class="composer-tools">
                 <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
@@ -150,7 +151,6 @@
           </form>
           </div>
           <section id="phase-compare" class="journey-pane" aria-label="比较工艺方案" hidden>
-            <button class="tool-button" type="button" data-view="intake">← 返回对话</button>
             <div class="phase-intro"><h3>按用途选择合适的方案</h3><p>对比同一产品与数量。差异来自材料、工艺和印刷方式；费用均为示例估算。</p></div>
             <p id="compare-empty">先补充必要参数，再生成方案。未标定的费用会明确列出。</p>
             <button id="request-options" class="secondary-action" type="button">生成本项方案</button>
@@ -168,7 +168,6 @@
             </div>
           </section>
           <section id="phase-review" class="journey-pane" aria-label="核对与交接" hidden>
-            <button class="tool-button" type="button" data-view="intake">← 返回对话</button>
             <div class="phase-intro"><h3>核对每个产品，再生成交接单</h3><p>检查数量、尺寸、材料与文件归属。当前只准备本地交接资料，尚未发送供应商。</p></div>
             <details id="review-checklist-section" open><summary>查看与修改生产参数</summary><div id="review-checklist"></div></details>
             <article id="handoff-preview" class="handoff-document" aria-label="交接单预览"></article>
@@ -283,8 +282,7 @@
           </div>
 
           <section class="provider-status" aria-label="供应商连接状态">
-            <h3>供应商接口</h3>
-            <label class="platform-control">目标平台
+            <label class="platform-control"><span>目标平台</span>
               <select id="platform-select" aria-label="选择目标印刷平台">
                 <option value="generic">通用印刷平台</option>
               </select>

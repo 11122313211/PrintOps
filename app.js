@@ -116,9 +116,10 @@ let settingsAbort = null;
 let settingsProbeUsedCache = false;
 const specPresetKey = "printops_spec_presets";
 const layoutKey = "printops_layout";
-const LAYOUT_DEFAULTS = { sidebarW: 192, orderW: 335, orderCollapsed: false };
+const LAYOUT_DEFAULTS = { sidebarW: 192, orderW: 335, orderCollapsed: false, composerH: 44 };
 const SIDEBAR_RANGE = [180, 280];
 const ORDER_RANGE = [300, 480];
+const COMPOSER_RANGE = [44, 280];
 const DESKTOP_QUERY = window.matchMedia("(min-width: 1051px)");
 
 function loadLayout() {
@@ -127,7 +128,8 @@ function loadLayout() {
     return {
       sidebarW: clampLayoutWidth(Number(stored.sidebarW) || LAYOUT_DEFAULTS.sidebarW, SIDEBAR_RANGE),
       orderW: clampLayoutWidth(Number(stored.orderW) || LAYOUT_DEFAULTS.orderW, ORDER_RANGE),
-      orderCollapsed: Boolean(stored.orderCollapsed)
+      orderCollapsed: Boolean(stored.orderCollapsed),
+      composerH: clampLayoutWidth(Number(stored.composerH) || LAYOUT_DEFAULTS.composerH, COMPOSER_RANGE)
     };
   } catch {
     return { ...LAYOUT_DEFAULTS };
@@ -140,7 +142,7 @@ function clampLayoutWidth(value, [min, max]) {
 
 function saveLayout() {
   try {
-    localStorage.setItem(layoutKey, JSON.stringify({ sidebarW: layout.sidebarW, orderW: layout.orderW, orderCollapsed: layout.orderCollapsed }));
+    localStorage.setItem(layoutKey, JSON.stringify({ sidebarW: layout.sidebarW, orderW: layout.orderW, orderCollapsed: layout.orderCollapsed, composerH: layout.composerH }));
   } catch { /* 布局是增强项，存储失败不影响使用 */ }
 }
 
@@ -217,6 +219,58 @@ function setupSplitters() {
       applyLayout();
       saveLayout();
     });
+  });
+}
+
+/* 输入框高度手柄：拖动输入框上边缘调整高度，双击恢复默认，上下方向键微调。
+   手调高度作为 autoGrow 的下限持久化在 printops_layout 里。 */
+function applyComposerHeight() {
+  const input = $("#message-input");
+  if (!input) return;
+  input.style.height = `${layout.composerH}px`;
+  $(".composer-resize")?.setAttribute("aria-valuenow", String(layout.composerH));
+}
+
+function setupComposerResize() {
+  const handle = $(".composer-resize");
+  if (!handle || !$("#message-input")) return;
+  handle.setAttribute("aria-valuenow", String(layout.composerH));
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("is-dragging");
+    document.body.classList.add("is-resizing-rows");
+    const startY = event.clientY;
+    const startH = layout.composerH;
+    const onMove = (moveEvent) => {
+      layout.composerH = clampLayoutWidth(startH + (startY - moveEvent.clientY), COMPOSER_RANGE);
+      applyComposerHeight();
+    };
+    const finish = () => {
+      handle.classList.remove("is-dragging");
+      document.body.classList.remove("is-resizing-rows");
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", finish);
+      handle.removeEventListener("pointercancel", finish);
+      saveLayout();
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", finish);
+  });
+  handle.addEventListener("dblclick", () => {
+    layout.composerH = LAYOUT_DEFAULTS.composerH;
+    applyComposerHeight();
+    autoGrowComposer();
+    saveLayout();
+  });
+  handle.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowUp" ? 16 : event.key === "ArrowDown" ? -16 : 0;
+    if (!step) return;
+    event.preventDefault();
+    layout.composerH = clampLayoutWidth(layout.composerH + step, COMPOSER_RANGE);
+    applyComposerHeight();
+    saveLayout();
   });
 }
 
@@ -705,7 +759,7 @@ function openPresetDrawer() {
   closeHistoryContextMenu();
   drawer.hidden = false;
   toggle.setAttribute("aria-expanded", "true");
-  drawer.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest"});
+  drawer.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest", behavior: scrollBehavior()});
 }
 
 function closePresetDrawer({restoreFocus = false} = {}) {
@@ -759,7 +813,7 @@ function renderSpecPresets(highlightId) {
     row.append(apply, remove);
     root.append(row);
   });
-  root.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest"});
+  root.querySelector(".preset-item.is-new .preset-apply")?.scrollIntoView({block: "nearest", behavior: scrollBehavior()});
 }
 
 function saveCurrentSpecPreset() {
@@ -1070,7 +1124,11 @@ function activateSettingsView(view = "overview", {focus = false} = {}) {
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   });
-  panels.forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== next; });
+  panels.forEach((panel) => {
+    const show = panel.dataset.settingsPanel === next;
+    panel.hidden = !show;
+    if (show) revealPanel(panel);
+  });
   const catalogPanel = $("#settings-panel-products .catalog-panel");
   const toolPanel = $("#settings-panel-tools .tool-panel");
   const toolStatsPanel = $("#tool-stats-panel");
@@ -1101,9 +1159,22 @@ function isFeedNearBottom() {
   return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
 }
 
+/* 动效共享：JS 侧滚动同样尊重系统的"减少动态效果"设置。 */
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const scrollBehavior = () => (prefersReducedMotion.matches ? "auto" : "smooth");
+
+/* 面板显现动效：仅在实际从隐藏变可见时触发一次，动画结束后移除类以便下次重放。 */
+function revealPanel(el) {
+  if (!el || el.hidden) return;
+  el.classList.remove("reveal");
+  void el.offsetWidth;
+  el.classList.add("reveal");
+  el.addEventListener("animationend", () => el.classList.remove("reveal"), { once: true });
+}
+
 function scrollFeedToBottom() {
   const feed = $("#chat-feed");
-  feed.scrollTop = feed.scrollHeight;
+  feed.scrollTo({ top: feed.scrollHeight, behavior: scrollBehavior() });
 }
 
 let markdownFallbackReported = false;
@@ -1850,7 +1921,9 @@ function renderQuoteStatus() {
   const canCancel = ["awaiting_human_confirmation", "confirmed"].includes(request.status);
   $("#quote-cancel").disabled = !canCancel;
   $("#quote-refresh").disabled = false;
+  const quoteWasHidden = panel.hidden;
   panel.hidden = false;
+  if (quoteWasHidden) revealPanel(panel);
 }
 
 function renderProviderStatus() {
@@ -1882,7 +1955,9 @@ function renderPriceEstimate(result) {
   if (stale) panel.append(PrintOpsJourney.el("p", "原金额已过期，不能作为当前订单估算。"));
   panel.append(PrintOpsJourney.button(stale ? "重新估算" : "更新估算", () => callTool("estimate_price")));
   panel.append(PrintOpsWorkbench.priceDetails(estimate));
+  const estimateWasHidden = panel.hidden;
   panel.hidden = false;
+  if (estimateWasHidden) revealPanel(panel);
 }
 
 function renderRunTrace() {
@@ -1959,7 +2034,9 @@ function renderValidation() {
 
 function renderParameterForm(profile) {
   const context = $("#product-context");
+  const contextWasHidden = context.hidden;
   context.hidden = !state.order?.productType;
+  if (contextWasHidden && !context.hidden) revealPanel(context);
   $("#product-profile-summary").textContent = profile.summary || "先按通用字段收集订单信息。";
   $("#product-profile-readiness").textContent = profile.missing?.length ? `还有 ${profile.missing.length} 项待补充` : "品类参数已填写";
   const root = $("#parameter-form");
@@ -2517,7 +2594,7 @@ function autoGrowComposer() {
   const input = $("#message-input");
   if (!input) return;
   input.style.height = "auto";
-  input.style.height = `${Math.min(120, Math.max(38, input.scrollHeight))}px`;
+  input.style.height = `${Math.max(layout.composerH, Math.min(120, Math.max(38, input.scrollHeight)))}px`;
 }
 
 async function callTool(toolName, payload = {}) {
@@ -3239,6 +3316,7 @@ PrintOpsJourney.init({
   syncControls: () => { if (isSending || orderWritePending || viewLoading) setComposerBusy(true); else applyArchivedState(); }
 });
 setupSplitters();
+setupComposerResize();
 applyLayout();
 autoGrowComposer();
 // TD-06: every listed id was checked before wiring; report whatever is still

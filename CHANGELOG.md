@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased - 2026-11-03（供应商接口扁平化）
+
+- **供应商接口压成一行扁平控件**：此前该块是"标题 + label + 44px 选择器 + 两句状态长文"的卡片（实测高约 166px），其中标题"供应商接口"与 label"目标平台"语义重复、状态长文与选中 option 文案几乎逐字重复。现删除 `<h3>`（section 的 aria-label 保留语义），label 文本包 span 后与选择器并排一行（`grid-template-columns: auto minmax(0,1fr)`），整块去卡片外壳（透明底、无边框阴影、零内距），`#provider-status` 状态文压成单行省略（11px 弱字色，悬停经既有 title 看全文；**DOM 文本逐字保留**，browser_smoke 四处 `toContainText` 断言不受影响）。实测高度 166→65px；390px 移动端同一行布局自然成立（label 50px + 选择器占满余宽），无需媒体查询。选择器 44px 触控高度与 12px label 字号红线（ui_focus/ui_positions 断言）不变。
+- **验收**：Chromium journey 39 / browser_smoke 13 / ui_positions 16 / ui_focus 17 全部通过；1440px 与 390px 实景截图人工核验（一行控件 + 单行省略状态文）；styles.css 版本号 bump 为 `20261103-provider-flat-1`。
+
+## Unreleased - 2026-11-03（右栏卡片堆叠）
+
+- **订单草稿栏由通栏列表重塑为卡片堆叠**：右栏自身改为纵向 flex（块间距统一由 gap 驱动），上传区、三张填写组（概览/规格/工艺）、待处理清单、供应商接口、询价全部成为独立卡片——纸底 + 1px --rule 描边 + --radius-md 圆角 + --shadow-hard 印刷偏移阴影；hairline 通栏分隔线（`.draft-groups` border-top、`.draft-group` border-bottom）删除。填写组走表面阶梯：闭卡 --paper-light → 悬停弹簧上浮 1px（--ease-spring-fine）→ 展开 --paper-raise + --shadow-soft + 边加深（"open = lift, not color"）；summary 按压微缩放（scale .99）。待处理清单/询价保留金/黄铜语义左竖线并并入同一卡签名；`estimate-panel`（中栏）样式拆分不受影响。
+- **非线性动效（纯 CSS，零 JS）**：面板每次从折叠态展开时卡片按「排字落位」次序入场（`card-deal` keyframes，emphasized 曲线 + 50/110/170/230ms 递增延迟，fill-mode backwards 保证动画结束后 hover 弹簧不被锁死）；文档链接与上传区仅做淡入——ui_positions 会在动画窗口内读取它们的 boundingBox，这两块不允许 transform 位移。填写组新增**编辑聚焦高亮**：卡内任一控件获得焦点（含点击 summary）时整卡描边转品牌红，展开卡叠加强度光环（`:focus-within`，纯 CSS）。卡片不加 `overflow: hidden`，字段 tooltip 仍可溢出卡缘；动态重渲染节点（field rows / 多产品条目）不参与动画；全部新动画被既有 `prefers-reduced-motion` 熔断覆盖。明确不做 `::details-content` 高度展开动画（需 overflow 裁切，会裁掉 tooltip）。`app.js` 逐字未动；styles.css 版本号 bump 为 `20261103-card-stack-1`。
+- **验收**：Chromium journey 39 / browser_smoke 13 / ui_positions 16 / ui_focus 17 全部通过；dev_check 六步全绿；1440px 实景截图人工核验卡片堆叠、focus-within 红描边、闭卡悬停、待处理清单/供应商并栈观感；390px 移动端抽屉核验堆叠正常（顶部白块为既有 sticky 返回钮，非回归）。
+
+## Unreleased - 2026-11-02（输入框高度手柄与返回导航统一）
+
+- **输入框高度可手调**：composer 顶边新增 `.composer-resize` 手柄（role=separator，44–280px 区间）——拖动调高、双击复位 44px、上下方向键 ±16px 微调；手调值持久化到 `printops_layout.composerH`，自动长高（autoGrow）以手调高度为下限。`#phase-back` 统一返回按钮进驻 journey-meta 行，替代 compare/review 两 pane 各自的返回钮（`data-view="intake"` 语义保留，测试 fixture 同步走 `#phase-back`）。占位文案改为「我们想印刷什么」。
+- **动效与减少动态**：设置面板切换与询价/估算/品类上下文显现时触发一次 reveal 动画；聊天滚动改 `scrollBehavior()`（尊重 `prefers-reduced-motion`）；设置弹窗入场过渡配套 `dialogSettled` 测试等待，避免几何测量拿到 scale 中间值。`.gitignore` 补 Playwright 产物目录 `test-results/`。
+
 ## Unreleased - 2026-11-01（核对页底部操作台重排）
 
 - **动作区与导出区统一为一套面板，消除"大大小小"**：此前交接单下方的三个动作按钮（主/次各 11–12px 字号、约 21px 高、三种内距）与无面板的导出区（4 列小按钮 + 通栏工单小卡）视觉互不隶属。现 `#phase-review .order-actions` 与 `.order-export` 共用同底色（--paper）+ 1px --rule 描边 + --radius-md 圆角 + 统一内距的"操作台"面板；按钮分级但同级严格等高——主按钮满行 42px/12px 字，次动作两列 38px/12px 字，导出选项 5 列等宽 36px（≤1050px 全部恢复 44px 触控基线）。

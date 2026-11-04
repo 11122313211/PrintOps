@@ -33,7 +33,7 @@ for (const width of [390, 768, 1280, 1440]) {
       await control.click();
       await expect(page.locator(`#phase-${phase}`)).toBeVisible();
       await expect(page.locator('.task-bar')).toBeVisible();
-      await page.locator(`#phase-${phase} [data-view="intake"]`).click();
+      await page.locator('#phase-back').click();
       await expect(page.locator('.task-bar')).toBeHidden();
       await expect(page.locator('#message-input')).toHaveValue(draft);
     }

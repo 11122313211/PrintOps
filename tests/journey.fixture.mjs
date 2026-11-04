@@ -108,7 +108,7 @@ export async function returnToChat(page) {
   if (await page.locator('#workspace-backdrop').isVisible()) await page.keyboard.press('Escape');
   if (await page.locator('#mobile-back').isVisible()) await page.locator('#mobile-back').click();
   if (await page.locator('#phase-intake').isVisible()) return;
-  const back = page.locator('.journey-pane:not([hidden]) [data-view="intake"]');
+  const back = page.locator('#phase-back');
   if (await back.isVisible()) await back.click();
   await expect(page.locator('#phase-intake')).toBeVisible();
 }

@@ -434,7 +434,7 @@ test('supplemental: keyboard activation completes one product through confirmed 
   await expect(page.locator('.option-card')).toHaveCount(3);
   const chosen = await posted(page, '/api/choose', () => activate(page.locator('.choose-option').first(), 'Space'));
   expect(chosen.selectedOption).toBeTruthy();
-  await activate(page.locator('#phase-compare [data-view="intake"]'));
+  await activate(page.locator('#phase-back'));
   await activate(page.locator('.order-document-links [data-view="review"]'));
   const generated = await posted(page, '/api/generate', () => activate(page.locator('#generate-order')));
   expect(generated.handoffDocument.exportable).toBe(true);

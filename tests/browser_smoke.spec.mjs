@@ -3,6 +3,11 @@ import {expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 import {test, boot, send, currentOrder, expand, openOrder, openCompare, openHandoff, openTools, openSidebar, openHistoryMenu, reviewInput, returnToChat, switchHistory} from './journey.fixture.mjs';
 const field = (page, path) => page.locator(`.review-field[data-field-id="${path}"]`);
+// 弹窗有入场过渡（scale + fade）；测量几何尺寸前先等过渡结束，避免拿到 scale 中间值。
+const dialogSettled = (page) => page.locator('#settings-dialog').evaluate((el) => Promise.race([
+  new Promise((resolve) => el.addEventListener('transitionend', resolve, {once: true})),
+  new Promise((resolve) => setTimeout(resolve, 700)),
+]));
 
 const syntheticCard = '我要印1200张名片，成品尺寸9×5.4cm，250g铜版纸，双面四色，无特殊工艺，无需装订';
 
@@ -112,6 +117,7 @@ test('settings consolidates low-frequency sidebar controls without hiding integr
   await expect(page.locator('.sidebar .catalog-panel, .sidebar .tool-panel')).toHaveCount(0);
   await page.locator('#settings-button').click();
   await expect(page.locator('#settings-dialog')).toBeVisible();
+  await dialogSettled(page);
   const fixedDialog = await page.locator('#settings-dialog').boundingBox();
   await expect(page.locator('#settings-panel-overview')).toBeVisible();
   await expect(page.locator('.integration-grid article')).toHaveCount(6);
@@ -147,6 +153,7 @@ test('settings consolidates low-frequency sidebar controls without hiding integr
   await page.setViewportSize({width: 390, height: 844});
   await openSidebar(page);
   await page.locator('#settings-button').click();
+  await dialogSettled(page);
   const dialogBox = await page.locator('#settings-dialog').boundingBox();
   expect(dialogBox.width).toBeLessThanOrEqual(390);
   expect(dialogBox.height).toBeLessThanOrEqual(812);
