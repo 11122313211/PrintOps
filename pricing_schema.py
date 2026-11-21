@@ -119,7 +119,7 @@ def validate_rate_card(card: dict[str, Any]) -> None:
                 raise ValueError(f"{name} 必须声明计数单位")
             # Base drivers are order-supplied. The cup family prices a
             # calibrated capacity band instead of a flat dimension.
-            base = {"quantity", "material", "printing"} | ({"dimensions"} if family != "cup" else {"cupSize"})
+            base = {"quantity", "material", "printing"} | ({"dimensions"} if family != "cup" else {"cupVolume"})
             if not base.issubset(category["requiredDrivers"]):
                 raise ValueError(f"{name} 缺少基础成本驱动")
             if family == "cup":
@@ -131,9 +131,12 @@ def validate_rate_card(card: dict[str, Any]) -> None:
                             or decimal_value(blank.get("blankAreaM2")) <= 0):
                         raise ValueError(f"{name}.cupSizes.{size_name} 必须声明正数 blankAreaM2")
             if family == "form":
-                parts = category.get("formParts")
-                if not isinstance(parts, list) or not parts or any(not str(item).strip() for item in parts):
-                    raise ValueError(f"{name} 必须声明 formParts 联数档")
+                parts = category.get("paperParts")
+                if (not isinstance(parts, dict) or not parts
+                        or any(not str(label).strip() or isinstance(count, bool)
+                               or not isinstance(count, int) or not 2 <= count <= 8
+                               for label, count in parts.items())):
+                    raise ValueError(f"{name} 必须声明 paperParts 联数档（标签到 2-8 联的映射）")
             if "boardThickness" in category["requiredDrivers"] or category.get("boardThicknesses") is not None:
                 thicknesses = category.get("boardThicknesses")
                 if not isinstance(thicknesses, dict) or not thicknesses:

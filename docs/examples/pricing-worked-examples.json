@@ -1,7 +1,7 @@
 {
   "kind": "synthetic_manual_worked_examples",
   "rateCardId": "cn-local-reference",
-  "version": "2026.11.01",
+  "version": "2026.12.01",
   "asOf": "2026-11-15",
   "currency": "CNY",
   "isMarketData": false,
@@ -30,6 +30,21 @@
       "id": "missing_gsm_blocked",
       "order": {"productType": "名片", "quantityValue": 500, "quantityUnit": "张", "size": "90×54 mm", "paper": "铜版纸", "printing": "双面四色", "finishing": "无", "printMode": "合版"},
       "expected": {"status": "blocked", "lineItems": {}, "range": null}
+    },
+    {
+      "id": "cup_10k",
+      "order": {"productType": "纸杯", "quantityValue": 10000, "quantityUnit": "个", "paper": "280g淋膜纸", "printing": "单面四色", "finishing": "无", "printMode": "合版", "productSpecs": {"cupVolume": "250ml"}},
+      "expected": {"status": "ready", "lineItems": {"material": "361.28", "print_setup": "50.00", "print_run": "66.00", "batch_setup": "150.00", "packing": "400.00"}, "knownSubtotal": "1027.28", "range": {"low": "873.19", "mid": "1027.28", "high": "1284.10"}}
+    },
+    {
+      "id": "form_3part_numbered",
+      "order": {"productType": "联单", "quantityValue": 500, "quantityUnit": "本", "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色", "finishing": "无", "binding": "胶头装订", "printMode": "合版", "productSpecs": {"paperParts": "三联", "numbering": "需要"}},
+      "expected": {"status": "ready", "lineItems": {"material": "21.60", "print_setup": "50.00", "print_run": "8.80", "binding:胶头装订": "75.00", "binding:打号": "130.00", "packing": "5.00"}, "knownSubtotal": "290.40", "range": {"low": "246.84", "mid": "290.40", "high": "363.00"}}
+    },
+    {
+      "id": "pvc_board",
+      "order": {"productType": "PVC", "quantityValue": 12, "quantityUnit": "块", "size": "600×900 mm", "printing": "单面四色", "finishing": "无", "printMode": "合版", "productSpecs": {"displayMaterial": "PVC板", "boardThickness": "5mm", "install": "自行安装"}},
+      "expected": {"status": "ready", "lineItems": {"material": "179.16", "print_setup": "50.00", "print_run": "3.24", "tier_processing": "6.00", "packing": "3.60"}, "knownSubtotal": "242.00", "range": {"low": "205.70", "mid": "242.00", "high": "302.50"}}
     }
   ]
 }

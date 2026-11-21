@@ -21,7 +21,7 @@ DRIVER_LABELS = {"quantity": "数量（有效正整数和单位）", "dimensions
                  "boxStructure": "已标定盒型", "labelShape": "标签形状",
                  "adhesive": "标签胶型", "labelFormat": "标签交付形式（张装/卷装）",
                  "install": "安装加工方式", "categoryRates": "此品类的成本参数",
-                 "cupSize": "纸杯容量档", "formParts": "联单联数", "boardThickness": "板材厚度档"}
+                 "cupVolume": "纸杯容量档", "paperParts": "联单联数", "boardThickness": "板材厚度档"}
 
 
 def load_rate_card(path: str | Path | None = None) -> dict[str, Any]:
@@ -163,17 +163,17 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
         quantity = None
     dims: tuple[Decimal, Decimal] | None = None
     blank_area: Decimal | None = None
-    cup_size = str(specs.get("cupSize") or "")
+    cup_volume = str(specs.get("cupVolume") or "")
     if family == "cup":
         # Cups price a calibrated capacity band: the blank area per cup is a
         # hand-maintained rate-card fact, never inferred from a diameter.
-        blank = (category.get("cupSizes") or {}).get(cup_size)
+        blank = (category.get("cupSizes") or {}).get(cup_volume)
         if blank is not None:
-            covered.add("cupSize")
+            covered.add("cupVolume")
             blank_area = decimal_value(blank["blankAreaM2"])
         else:
             missing.append(f"纸杯容量须为{' / '.join((category.get('cupSizes') or {}).keys())}；"
-                           f"收到“{cup_size or '未填写'}”，请确认实际容量，不自动换算")
+                           f"收到“{cup_volume or '未填写'}”，请确认实际容量，不自动换算")
     else:
         dims = _dimensions(order, family)
         if dims:
@@ -262,15 +262,15 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
             unknown.append(f"板材厚度未标定：{thickness_text or '未填写'}")
     form_parts = 0
     if family == "form":
-        parts_text = str(specs.get("formParts") or "")
-        if parts_text in (category.get("formParts") or []):
-            covered.add("formParts")
-            form_parts = int(re.sub(r"\D", "", parts_text) or 0)
+        parts_text = str(specs.get("paperParts") or "")
+        form_parts = (category.get("paperParts") or {}).get(parts_text) or 0
+        if parts_text and form_parts:
+            covered.add("paperParts")
         else:
             unknown.append(f"联单联数未标定：{parts_text or '未填写'}")
     core = {"quantity", "dimensions", "material", "printing"}
     if family == "cup":
-        core = {"quantity", "cupSize", "material", "printing"}
+        core = {"quantity", "cupVolume", "material", "printing"}
     if (not core.issubset(covered)
             or (family == "booklet" and "pages" not in covered)
             or (family == "form" and not form_parts)
@@ -291,7 +291,7 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
                          "areaM2PerSheet": str(area), "sheetsPerUnit": str(sheets), "printingSides": str(sides),
                          "pages": str(pages) if family == "booklet" else None, "printMode": mode, "wasteFactor": str(waste)}
     if family == "cup":
-        result["drivers"]["cupSize"] = cup_size
+        result["drivers"]["cupVolume"] = cup_volume
     else:
         result["drivers"]["widthMm"] = str(width)
         result["drivers"]["heightMm"] = str(height)
@@ -368,6 +368,8 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
     post = []
     if binding and binding not in {"无需装订", "无", "无需"}:
         post.append(binding)
+    if family == "form" and str(specs.get("numbering") or "") not in {"", "无需", "无", "不需要", "否", "不打号"}:
+        post.append("打号")
     if family == "folded" and "folding" in covered:
         post.append(str(specs["folding"]))
     if family == "box":

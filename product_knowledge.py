@@ -23,13 +23,13 @@ CATALOG_SOURCE = "https://www.sd2000.com/"
 # Keep the knowledge revision independent from the application release.  An
 # order response carries this manifest so a later rule/catalog change can be
 # traced without storing or exposing any model credentials.
-KNOWLEDGE_VERSION = "2026.09.05"
+KNOWLEDGE_VERSION = "2026.11.21"
 KNOWLEDGE_MANIFEST: dict[str, Any] = {
     "version": KNOWLEDGE_VERSION,
     "schemaVersion": "1.0",
-    "lastReviewed": "2026-09-05",
+    "lastReviewed": "2026-11-21",
     "reviewCadenceDays": 90,
-    "nextReviewAt": "2026-12-04",
+    "nextReviewAt": "2027-02-19",
     "sources": [
         {
             "id": "sd2000-navigation",
@@ -258,7 +258,7 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "aliases": ["联单", "无碳联单", "送货单", "出库单", "票据"],
         "summary": "多联连续使用的办公单据，联数、复写顺序、编号和装订方式比普通宣传品更关键。",
         "parameters": [
-            {"key": "paperParts", "label": "联数", "required": True, "question": "需要二联、三联还是更多联？", "hint": "联数决定无碳纸组合和每联颜色。"},
+            {"key": "paperParts", "label": "联数", "required": True, "question": "需要二联、三联还是四联？", "hint": "联数决定无碳纸层数与计价展开，须为已标定联数档（二联/三联/四联），不自动换算。"},
             {"key": "numbering", "label": "流水号", "required": False, "question": "是否需要连续编号或打号码？", "hint": "编号需要确认起始号、位数和每联是否同步。"},
             {"key": "binding", "label": "装订方式", "required": False, "question": "需要胶头、装订线还是撕边？", "hint": "联单常见胶头或针式装订，不按书刊骑马钉处理。"},
         ],
@@ -318,7 +318,7 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "aliases": ["纸杯", "咖啡杯", "饮料杯", "杯套"],
         "summary": "接触饮品的包装印刷品，容量、杯身材料、内淋膜和食品接触要求优先。",
         "parameters": [
-            {"key": "cupVolume", "label": "容量", "required": True, "question": "纸杯容量是多少毫升？", "hint": "常见 250ml、350ml、500ml，容量决定杯身刀模。"},
+            {"key": "cupVolume", "label": "容量", "required": True, "question": "纸杯容量是多少毫升？", "hint": "常见 250ml、350ml、500ml；计价按已标定容量档进行，不自动换算，容量决定杯身刀模。"},
             {"key": "cupMaterial", "label": "杯身材料", "required": True, "question": "需要单 PE、双 PE 或其他纸杯材料？", "hint": "食品接触场景要向供应商确认材料合规证明。"},
             {"key": "innerCoating", "label": "内淋膜", "required": True, "question": "内层是否需要防水淋膜？", "hint": "饮品纸杯通常需要内淋膜，具体以供应商规格为准。"},
         ],
@@ -353,7 +353,7 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "aliases": ["PVC", "PVC板", "雪弗板", "KT板", "展板"],
         "summary": "板材类展示品，板材厚度、尺寸、画面覆面和安装方式决定最终效果。",
         "parameters": [
-            {"key": "boardThickness", "label": "板材厚度", "required": True, "question": "板材需要 3mm、5mm 还是其他厚度？", "hint": "厚度影响挺度、重量和安装方式。"},
+            {"key": "boardThickness", "label": "板材厚度", "required": True, "question": "板材需要 3mm、5mm 还是 10mm？", "hint": "厚度影响挺度、重量和安装方式；计价按已标定厚度档（3mm/5mm/10mm）。"},
             {"key": "install", "label": "安装方式", "required": True, "question": "需要背胶、挂装、支架还是裱框？", "hint": "先定安装方式才能匹配板材和背面加工。"},
         ],
         "defaultBinding": "裁切 / 裱面",

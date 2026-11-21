@@ -1,7 +1,7 @@
 {
   "schemaVersion": "3.0",
   "rateCardId": "cn-local-reference",
-  "version": "2026.11.01",
+  "version": "2026.12.01",
   "region": "CN-reference-only",
   "currency": "CNY",
   "unitSystem": "mm",
@@ -343,31 +343,91 @@
       "supportedStructures": []
     },
     "PVC": {
-      "supported": false,
-      "family": "uncalibrated",
+      "supported": true,
+      "family": "display",
       "requiredDrivers": [
-        "categoryRates"
+        "quantity",
+        "dimensions",
+        "boardThickness",
+        "material",
+        "printing",
+        "install"
       ],
-      "reason": "展板类板材厚度与裱板加工驱动未标定，display 介质清单未含板材",
-      "sourceId": "industry-standard-flow-2026-10"
+      "minimumTotal": "100",
+      "packingPerUnit": "0.3",
+      "wasteFactor": "1.08",
+      "sourceId": "industry-standard-flow-2026-10",
+      "units": [
+        "块"
+      ],
+      "boardThicknesses": {
+        "3mm": {"materialFactor": "1"},
+        "5mm": {"materialFactor": "1.6"},
+        "10mm": {"materialFactor": "2.2"}
+      },
+      "quantityTiers": [
+        {"upTo": 49, "perUnit": "0.5"},
+        {"upTo": 199, "perUnit": "0.35"},
+        {"upTo": null, "perUnit": "0.25"}
+      ],
+      "supportedStructures": []
     },
     "联单": {
-      "supported": false,
-      "family": "uncalibrated",
+      "supported": true,
+      "family": "form",
       "requiredDrivers": [
-        "categoryRates"
+        "quantity",
+        "dimensions",
+        "paperParts",
+        "material",
+        "printing"
       ],
-      "reason": "引擎暂无联数成本驱动，多联无碳纸用量与打号成本无法按联数展开",
-      "sourceId": "industry-standard-flow-2026-10"
+      "minimumTotal": "50",
+      "packingPerUnit": "0.01",
+      "wasteFactor": "1.1",
+      "sourceId": "industry-standard-flow-2026-10",
+      "units": [
+        "本",
+        "份"
+      ],
+      "paperParts": {
+        "二联": 2,
+        "三联": 3,
+        "四联": 4
+      },
+      "imposition": {
+        "perSheetUp": 4,
+        "sheetWidthMm": "600",
+        "sheetHeightMm": "400",
+        "sheetName": "无碳纸大纸",
+        "sourceId": "industry-standard-flow-2026-10"
+      }
     },
     "纸杯": {
-      "supported": false,
-      "family": "uncalibrated",
+      "supported": true,
+      "family": "cup",
       "requiredDrivers": [
-        "categoryRates"
+        "quantity",
+        "cupVolume",
+        "material",
+        "printing"
       ],
-      "reason": "引擎暂不支持三维结构（杯身锥面成型、卷口），见 1.4 规划",
-      "sourceId": "industry-standard-flow-2026-10"
+      "minimumTotal": "800",
+      "packingPerUnit": "0.04",
+      "wasteFactor": "1.15",
+      "sourceId": "industry-standard-flow-2026-10",
+      "units": [
+        "个"
+      ],
+      "cupSizes": {
+        "250ml": {"blankAreaM2": "0.0132"},
+        "350ml": {"blankAreaM2": "0.0165"},
+        "500ml": {"blankAreaM2": "0.0208"}
+      },
+      "batchSetup": {
+        "amount": "150",
+        "sourceId": "industry-standard-flow-2026-10"
+      }
     }
   },
   "materials": {
@@ -394,6 +454,18 @@
     "PVC卡基": {
       "sourceId": "industry-standard-flow-2026-10",
       "perM2": "9.5"
+    },
+    "淋膜纸": {
+      "sourceId": "industry-standard-flow-2026-10",
+      "perKg": "8.5"
+    },
+    "无碳纸": {
+      "sourceId": "industry-standard-flow-2026-10",
+      "perKg": "6"
+    },
+    "PVC板": {
+      "sourceId": "industry-standard-flow-2026-10",
+      "perM2": "16"
     },
     "铜版不干胶": {
       "sourceId": "industry-standard-flow-2026-10",
@@ -541,6 +613,16 @@
     "圆角": {
       "sourceId": "industry-standard-flow-2026-10",
       "setup": "30",
+      "perUnit": "0.03"
+    },
+    "打号": {
+      "sourceId": "industry-standard-flow-2026-10",
+      "setup": "120",
+      "perUnit": "0.02"
+    },
+    "胶头装订": {
+      "sourceId": "industry-standard-flow-2026-10",
+      "setup": "60",
       "perUnit": "0.03"
     }
   },

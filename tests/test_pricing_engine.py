@@ -122,9 +122,24 @@ class PricingEngineTest(unittest.TestCase):
                              "productSpecs": {"boxStructure": "手提袋"}})
         self.assertEqual(bag["status"], "ready")
         self.assertIn("binding:穿绳", [row["code"] for row in bag["lineItems"]])
-        for blocked in ("联单", "PVC", "纸杯"):
-            value = self.estimate({"productType": blocked})
-            self.assertEqual(value["reason"], "category_uncalibrated")
+        # Schema 3.0 unblocked the last three categories: each now estimates
+        # ready once its calibrated drivers are supplied.
+        cup = self.estimate({"productType": "纸杯", "quantity": "10000 个", "quantityUnit": "个",
+                             "paper": "280g淋膜纸", "printing": "单面四色",
+                             "productSpecs": {"cupVolume": "250ml"}})
+        self.assertEqual(cup["status"], "ready")
+        self.assertIn("batch_setup", [row["code"] for row in cup["lineItems"]])
+        form = self.estimate({"productType": "联单", "quantity": "500 本", "quantityUnit": "本",
+                              "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色",
+                              "productSpecs": {"paperParts": "三联", "numbering": "需要"}})
+        self.assertEqual(form["status"], "ready")
+        self.assertIn("binding:打号", [row["code"] for row in form["lineItems"]])
+        board = self.estimate({"productType": "PVC", "quantity": "12 块", "quantityUnit": "块",
+                               "size": "600×900 mm", "printing": "单面四色",
+                               "productSpecs": {"displayMaterial": "PVC板", "boardThickness": "5mm",
+                                                "install": "自行安装"}})
+        self.assertEqual(board["status"], "ready")
+        self.assertIn("tier_processing", [row["code"] for row in board["lineItems"]])
 
     def test_category_coverage_is_independent_and_packaging_requires_flat_area(self):
         box = self.estimate({"productType": "包装盒", "quantity": "1200 个", "quantityUnit": "个", "size": "600×400×200 mm", "productSpecs": {"boxStructure": "折叠盒"}})
@@ -134,8 +149,8 @@ class PricingEngineTest(unittest.TestCase):
         self.assertEqual(ready["status"], "ready")
         self.assertTrue({"binding:模切", "binding:糊盒"}.issubset({row["code"] for row in ready["lineItems"]}))
         cup = self.estimate({"productType": "纸杯"})
-        self.assertEqual(cup["reason"], "category_uncalibrated")
-        self.assertEqual(cup["coverage"]["ratio"], 0)
+        self.assertEqual(cup["status"], "blocked")
+        self.assertIn("cupVolume", cup["coverage"]["missingDrivers"])
         self.assertEqual(self.estimate()["coverage"]["ratio"], 1)
 
     def test_structured_measurements_and_centimeters_have_same_cost(self):
@@ -302,16 +317,16 @@ def synthetic_card() -> dict:
         "colorFactors": {"四色": "1", "单色": "0.65"},
         "categories": {
             "纸杯": {"supported": True, "family": "cup",
-                      "requiredDrivers": ["quantity", "cupSize", "material", "printing"],
+                      "requiredDrivers": ["quantity", "cupVolume", "material", "printing"],
                       "minimumTotal": "300", "packingPerUnit": "0.02", "wasteFactor": "1.1",
                       "sourceId": "synthetic-source", "units": ["个"],
-                      "cupSizes": {"9oz": {"blankAreaM2": "0.0132"}},
+                      "cupSizes": {"250ml": {"blankAreaM2": "0.0132"}},
                       "batchSetup": {"amount": "120", "sourceId": "synthetic-source"}},
             "联单": {"supported": True, "family": "form",
-                      "requiredDrivers": ["quantity", "dimensions", "formParts", "material", "printing"],
+                      "requiredDrivers": ["quantity", "dimensions", "paperParts", "material", "printing"],
                       "minimumTotal": "50", "packingPerUnit": "0.01", "wasteFactor": "1.1",
                       "sourceId": "synthetic-source", "units": ["本", "份"],
-                      "formParts": ["2联", "3联", "4联"],
+                      "paperParts": {"二联": 2, "三联": 3, "四联": 4},
                       "imposition": {"perSheetUp": 4, "sheetWidthMm": "600", "sheetHeightMm": "400",
                                      "sheetName": "无碳纸大纸", "sourceId": "synthetic-source"}},
             "PVC": {"supported": True, "family": "display",
@@ -328,7 +343,7 @@ class PricingSchema3ComponentTest(unittest.TestCase):
     def test_cup_family_prices_capacity_band_and_batch_setup(self):
         order = {"productType": "纸杯", "quantityValue": 10000, "quantityUnit": "个",
                  "paper": "280g淋膜纸", "printing": "单面四色", "finishing": "无", "printMode": "合版",
-                 "productSpecs": {"cupSize": "9oz"}}
+                 "productSpecs": {"cupVolume": "250ml"}}
         result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
         self.assertEqual(result["status"], "ready")
         amounts = {row["code"]: row["amount"] for row in result["lineItems"]}
@@ -336,7 +351,7 @@ class PricingSchema3ComponentTest(unittest.TestCase):
         self.assertEqual(amounts, {"material": "325.25", "print_setup": "50.00", "print_run": "66.00",
                                    "batch_setup": "120.00", "packing": "200.00"})
         self.assertEqual(result["range"], {"low": "647.06", "mid": "761.25", "high": "951.56"})
-        self.assertEqual(result["drivers"]["cupSize"], "9oz")
+        self.assertEqual(result["drivers"]["cupVolume"], "250ml")
         self.assertNotIn("widthMm", result["drivers"])
 
     def test_cup_without_calibrated_capacity_is_blocked_not_inferred(self):
@@ -350,7 +365,7 @@ class PricingSchema3ComponentTest(unittest.TestCase):
         order = {"productType": "联单", "quantityValue": 500, "quantityUnit": "本",
                  "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色",
                  "finishing": "无", "binding": "打号", "printMode": "合版",
-                 "productSpecs": {"formParts": "3联"}}
+                 "productSpecs": {"paperParts": "三联"}}
         result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
         self.assertEqual(result["status"], "ready")
         amounts = {row["code"]: row["amount"] for row in result["lineItems"]}
@@ -367,7 +382,7 @@ class PricingSchema3ComponentTest(unittest.TestCase):
     def test_form_without_calibrated_part_count_is_blocked(self):
         order = {"productType": "联单", "quantityValue": 500, "quantityUnit": "本",
                  "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色", "printMode": "合版",
-                 "productSpecs": {"formParts": "5联"}}
+                 "productSpecs": {"paperParts": "5联"}}
         result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
         self.assertEqual(result["status"], "blocked")
         self.assertIn("联单联数", result["missing"])
@@ -391,7 +406,9 @@ class PricingSchema3ComponentTest(unittest.TestCase):
         cases = [
             {**card, "schemaVersion": "2.0"},
             {**card, "categories": {**card["categories"], "纸杯": {**card["categories"]["纸杯"], "cupSizes": {}}}},
-            {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"], "formParts": []}}},
+            {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"], "paperParts": {}}}},
+            {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"],
+                                                                   "paperParts": {"二联": 1}}}},
             {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"],
                                                                    "family": "booklet"}}},
             {**card, "categories": {**card["categories"], "PVC": {**card["categories"]["PVC"],

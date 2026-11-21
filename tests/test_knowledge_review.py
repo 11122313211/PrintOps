@@ -47,12 +47,12 @@ class KnowledgeReviewStatusTest(unittest.TestCase):
         self.assertEqual(overdue["daysSinceReview"], CADENCE + GRACE)
 
     def test_next_review_date_matches_manifest_schedule(self):
-        # 2026-09-05 + 90 days must be 2026-12-04, and the manifest's declared
+        # 2026-11-21 + 90 days must be 2027-02-19, and the manifest's declared
         # value must agree with the derivation.
-        self.assertEqual(str(LAST_REVIEWED), "2026-09-05")
+        self.assertEqual(str(LAST_REVIEWED), "2026-11-21")
         self.assertEqual(CADENCE, 90)
-        status = knowledge_review_status(date(2026, 11, 15))
-        self.assertEqual(status["nextReviewAt"], "2026-12-04")
+        status = knowledge_review_status(date(2026, 12, 15))
+        self.assertEqual(status["nextReviewAt"], "2027-02-19")
         self.assertEqual(status["declaredNextReviewAt"], status["nextReviewAt"])
         self.assertEqual(status["knowledgeVersion"], KNOWLEDGE_MANIFEST["version"])
 
