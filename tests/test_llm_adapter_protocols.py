@@ -175,6 +175,36 @@ class LlmAdapterProtocolTest(unittest.TestCase):
         user = next(item for item in body["messages"] if item.get("role") == "user")
         self.assertTrue(json.loads(user["content"]).get("_contextTruncated"))
 
+    def test_retry_backoff_is_class_based(self) -> None:
+        # TD-12: 429 backs off exponentially, other retryable HTTP codes keep
+        # short linear spacing, connection failures back off exponentially.
+        backoff = OpenAICompatiblePlanner._retry_backoff_seconds
+        rate_limited = HTTPError("https://example.test/v1", 429, "rate limited", {}, None)
+        server_error = HTTPError("https://example.test/v1", 503, "unavailable", {}, None)
+        network_error = TimeoutError("connect timed out")
+        self.assertEqual(backoff(rate_limited, 0), 0.5)
+        self.assertEqual(backoff(rate_limited, 1), 1.0)
+        self.assertEqual(backoff(server_error, 0), 0.15)
+        self.assertEqual(backoff(server_error, 1), 0.3)
+        self.assertEqual(backoff(network_error, 0), 0.3)
+        self.assertEqual(backoff(network_error, 1), 0.6)
+
+    def test_rate_limited_retry_sleeps_through_deadline_budget(self) -> None:
+        delays: list[float] = []
+
+        def fake_urlopen(request, timeout):
+            raise HTTPError(request.full_url, 429, "rate limited", {}, None)
+
+        planner = _planner()
+        with patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen), \
+                patch("llm_adapter.deadline_sleep", side_effect=lambda seconds, deadline: delays.append(seconds)):
+            plan = planner.plan("继续", {}, TOOLS)
+        self.assertIsNone(plan)
+        # Both payload variants get one rate-limit backoff at attempt 0; the
+        # deadline-aware sleep receives the value instead of a bare time.sleep.
+        self.assertEqual(delays, [0.5, 0.5])
+        self.assertIn("429", planner.last_error)
+
 
 class LlmAdapterCapabilityTest(unittest.TestCase):
     def _assert_no_order_payload(self, requests: list[dict]) -> None:

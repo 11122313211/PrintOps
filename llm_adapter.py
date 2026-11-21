@@ -293,7 +293,14 @@ def _system_proxy_hint() -> str:
 class OpenAICompatiblePlanner:
     MAX_ATTEMPTS = 2
     RETRYABLE_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
-    RETRY_BACKOFF_SECONDS = 0.08
+    # TD-12: per-class deterministic backoff. A rate-limit reply (429) gets
+    # exponential spacing; the remaining retryable HTTP codes keep short
+    # linear spacing; connection failures back off exponentially. Values stay
+    # small so the retries never eat the shared request deadline, and every
+    # sleep goes through deadline_sleep so the deadline still wins.
+    RETRY_BACKOFF_RATE_LIMIT_SECONDS = 0.5
+    RETRY_BACKOFF_SERVER_SECONDS = 0.15
+    RETRY_BACKOFF_NETWORK_SECONDS = 0.3
     PATCH_FIELDS = {
         "productType", "purpose", "quantity", "quantityValue", "quantityUnit", "size", "dimensions", "pages", "orientation", "paper",
         "printing", "finishing", "binding", "deadline", "budget", "platform", "productSpecs",
@@ -1189,6 +1196,15 @@ class OpenAICompatiblePlanner:
         # budgets this is guaranteed by the branch above.
         return payload
 
+    @staticmethod
+    def _retry_backoff_seconds(error: Exception | None, attempt: int) -> float:
+        """TD-12: deterministic per-class backoff before a retry attempt."""
+        if isinstance(error, HTTPError) and error.code == 429:
+            return OpenAICompatiblePlanner.RETRY_BACKOFF_RATE_LIMIT_SECONDS * (2 ** attempt)
+        if isinstance(error, HTTPError):
+            return OpenAICompatiblePlanner.RETRY_BACKOFF_SERVER_SECONDS * (attempt + 1)
+        return OpenAICompatiblePlanner.RETRY_BACKOFF_NETWORK_SECONDS * (2 ** attempt)
+
     def plan(self, text: str, order: dict[str, Any], tools: list[dict[str, Any]],
              history: list[dict[str, str]] | None = None,
              tool_result: dict[str, Any] | None = None,
@@ -1337,6 +1353,7 @@ class OpenAICompatiblePlanner:
             )
             for attempt in range(self.MAX_ATTEMPTS):
                 retryable = False
+                backoff_error: Exception | None = None
                 try:
                     result = self._request_json(request, request_deadline, self.MAX_PLAN_RESPONSE_BYTES)
                     native_plan = self._native_tool_plan(result) if variant_index == 0 and provider_tools else None
@@ -1390,10 +1407,12 @@ class OpenAICompatiblePlanner:
                     if variant_index == 0 and error.code in {400, 404, 405, 422}:
                         break
                     retryable = error.code in self.RETRYABLE_HTTP_CODES
-                except (URLError, TimeoutError, OSError):
+                    backoff_error = error
+                except (URLError, TimeoutError, OSError) as error:
                     self.last_error = "模型接口连接失败"
                     self.last_protocol = "error"
                     retryable = True
+                    backoff_error = error
                 except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
                     self.last_error = "模型接口返回格式异常"
                     self.last_protocol = "error"
@@ -1401,7 +1420,7 @@ class OpenAICompatiblePlanner:
                         break
                 if retryable and attempt + 1 < self.MAX_ATTEMPTS:
                     try:
-                        deadline_sleep(self.RETRY_BACKOFF_SECONDS * (attempt + 1), request_deadline)
+                        deadline_sleep(self._retry_backoff_seconds(backoff_error, attempt), request_deadline)
                     except DeadlineExceeded:
                         self.last_error, self.last_protocol = "请求总时限已到，模型结果未应用", "timeout"
                         return None
