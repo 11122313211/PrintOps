@@ -31,6 +31,32 @@ class ChatItemContextTest(unittest.TestCase):
         self.assertIn('300', result['order']['paper'])
         self.assertIn('白卡纸', result['order']['paper'])
 
+    def test_focus_turn_negation_clears_item_value_and_mirror(self):
+        # TD-23: "第1项不要300g铜版纸" carries focus plus a negation. The
+        # focus-only shortcut used to swallow it entirely.
+        self.agent.chat('500张名片和1000张标签')
+        setup = self.agent.chat('第1项改成300g铜版纸')
+        self.assertIn('300', setup['order']['items'][0]['paper'])
+        self.assertIn('cardStock', setup['order']['items'][0].get('productSpecs', {}))
+        result = self.agent.chat('第1项不要300g铜版纸')
+        item = result['order']['items'][0]
+        self.assertEqual(item['paper'], '')
+        self.assertNotIn('cardStock', item.get('productSpecs', {}))
+        self.assertNotIn('items.item-1.paper', result['fieldMeta'])
+        self.assertNotIn('items.item-1.productSpecs.cardStock', result['fieldMeta'])
+        rejected = [c for c in result['fieldCandidates'] if c['negated'] and c['field'] == 'items.item-1.paper']
+        self.assertTrue(rejected)
+
+    def test_active_focus_negation_clears_focused_item_value(self):
+        # TD-23: with focus already active, fieldMeta was cleared but the item
+        # value survived because the negation block held a stale items list.
+        self.agent.chat('500张名片和1000张标签')
+        self.agent.chat('第1项改成300g铜版纸')
+        result = self.agent.chat('不要300g铜版纸')
+        self.assertEqual(result['order']['items'][0]['paper'], '')
+        self.assertEqual(result['order']['items'][1].get('paper') or '', '')
+        self.assertNotIn('items.item-1.paper', result['fieldMeta'])
+
     def test_new_explicit_item_focus_drives_category_specific_perception(self):
         self.agent.chat('500张名片和1000张标签')
         result = self.agent.chat('第2项改成可移胶')

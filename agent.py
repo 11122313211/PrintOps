@@ -1656,8 +1656,11 @@ class Agent:
             self.state["activeItemIndex"] = requested_index
             # A focus-only command should not trigger a second perception pass
             # or overwrite any product fields. Action turns continue below in
-            # the newly selected item's context.
-            if not perceived and not patch and not explicit_action:
+            # the newly selected item's context. A negation ("第1项不要300g铜版纸")
+            # produces no positive perception but must still reach the negation
+            # block below instead of being swallowed by this shortcut (TD-23).
+            if not perceived and not patch and not explicit_action \
+                    and not any(candidate.get("negated") for candidate in candidates):
                 self._remember("user", text)
                 product = items[requested_index].get("productType") if isinstance(items[requested_index], dict) else ""
                 message = f"已切换到第 {requested_index + 1} 项{f'：{product}' if product else ''}。请继续补充或确认这一项的参数。"
@@ -1687,6 +1690,11 @@ class Agent:
             if patch:
                 changed |= self._update_order(patch, source="user", confidence=1.0)
             changed_fields = list(changed)
+        # _update_item/_update_order rebuild the items list with fresh dicts
+        # via normalize_order_items, so the reference captured above is stale
+        # by now. Re-read before negation clears values, or the writes land on
+        # an orphaned copy and are silently lost (TD-23).
+        items = self.state["order"].get("items")
         # Negation can remove a previously accepted value, but must not delete
         # the replacement supplied in this same turn ("不要A4，改B5").
         target = items[active_item] if target_item else self.state["order"]
@@ -1719,7 +1727,7 @@ class Agent:
                             target["dimensions"][dimension] = ""
                             self.state.get("fieldMeta", {}).pop(prefix + "dimensions." + dimension, None)
                     normalize_order_dimensions(target)
-                self._clear_process_options()
+                self._clear_process_options(active_item if target_item else None)
                 self.state["selectedOption"] = None
                 self._invalidate_delivery_state()
         if "items" in perceived:
