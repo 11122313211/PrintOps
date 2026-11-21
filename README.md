@@ -192,6 +192,6 @@ v1.3.0 仍为候选基线；先完成本地订单闭环与独立验收。真实�
 
 ## 贡献与许可证
 
-欢迎 Issue 与 PR；提交前运行相关 Python/浏览器回归、开发评测与敏感扫描，发布时额外运行严格门槛并保存证据。[MIT](LICENSE) © PrintOps contributors。
+欢迎 Issue 与 PR；提交前运行相关 Python/浏览器回归、开发评测与敏感扫描，发布时额外运行严格门槛并保存证据（操作手册见 [RELEASING](docs/RELEASING.md)，门槛判定见 [发布门槛与验收清单](docs/RELEASE_CHECKLIST.md)）。[MIT](LICENSE) © PrintOps contributors。
 
 品类目录参考盛大印刷公开产品导航（[sd2000.com](https://www.sd2000.com/)）等公开信息，仅用于参数整理，不代表供应商实时价格、产能或交期。
