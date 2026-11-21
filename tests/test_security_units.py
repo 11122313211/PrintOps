@@ -112,6 +112,17 @@ class SecretScanTest(unittest.TestCase):
         generic = 'config = {"api_' + 'key": "' + _fixture("generic") + '"};'
         self.assertTrue(self.scan({"file.txt": generic}), "通用凭据字段应被识别")
 
+    def test_bearer_and_authorization_header_forms_are_detected(self):
+        # TD-07: credentials without a provider prefix travel as header values.
+        self.assertTrue(self.scan({"file.txt": "curl -H 'Authorization: Bearer " + FILLER[:24] + "'"}),
+                        "Bearer 令牌应被识别")
+        self.assertTrue(self.scan({"file.txt": 'headers = {"Authorization": "' + FILLER[:24] + '"}'}),
+                        "Authorization 头取值应被识别")
+        # The repository's own interpolation shape stays clean: an f-string
+        # placeholder or a too-short value is not a leaked credential.
+        self.assertFalse(secret_scan.scan_text('{"Authorization": f"Bearer {self.api_key}"}'))
+        self.assertFalse(secret_scan.scan_text("Authorization: Bearer short"))
+
     def test_designed_plaintext_key_file_does_not_trip_but_leaked_copies_do(self):
         secret = _fixture("openai")
         allowed = self.scan({"data/llm_config.json":

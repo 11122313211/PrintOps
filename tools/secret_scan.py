@@ -30,6 +30,13 @@ SECRET_PATTERNS = {
     "AWS Access Key": re.compile(r"AKIA[0-9A-Z]{16}"),
     "通用凭据字段": re.compile(
         r"(?i)[\"']?(?:api[_-]?key|secret[_-]?key|access[_-]?token|password)[\"']?\s*[:=]\s*[\"'][^\"']{20,}[\"']"),
+    # TD-07: credentials that carry no provider prefix travel as header
+    # values. The Authorization shape must match a quoted literal — the
+    # repository's own f-string interpolation (``f"Bearer {self.api_key}"``)
+    # starts with an identifier or a brace, not a quote, and stays clean.
+    "Bearer 令牌": re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}"),
+    "Authorization 头取值": re.compile(
+        r"(?i)[\"']?authorization[\"']?\s*[:=]\s*[\"'][^\"']{15,}[\"']"),
 }
 SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".zcode", ".mimosa",
