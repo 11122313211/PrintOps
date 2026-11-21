@@ -860,6 +860,30 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(invoice["productSpecs"]["paperParts"], "三联")
         self.assertEqual(invoice["productSpecs"]["numbering"], "需要连续编号")
 
+    def test_cup_form_and_board_materials_reach_the_pricing_fields(self):
+        # Schema 3.0 prices these categories from generic paper /
+        # displayMaterial; perception must fill them or estimates stay
+        # blocked even though the engine itself is calibrated.
+        cup = Agent._perceive("做10000个250ml的纸杯，280g淋膜纸，单面四色")
+        self.assertEqual(cup["paper"], "280 g/m² 淋膜纸")
+        self.assertEqual(cup["productSpecs"]["cupVolume"], "250ml")
+        self.assertEqual(cup["productSpecs"]["innerCoating"], "需要内淋膜")
+        form = Agent._perceive("做500本190×95mm的三联单，40g无碳纸，单面单色，需要打号")
+        self.assertEqual(form["paper"], "40 g/m² 无碳纸")
+        self.assertEqual(form["productSpecs"]["paperParts"], "三联")
+        self.assertEqual(form["productSpecs"]["numbering"], "需要连续编号")
+        denied = Agent._perceive("500本三联单，不打号")
+        self.assertEqual(denied["productSpecs"]["numbering"], "不需要编号")
+        board = Agent._perceive("做12块600×900mm的PVC展板，PVC板，单面四色")
+        self.assertEqual(board["productSpecs"]["displayMaterial"], "PVC板")
+
+    def test_pvc_paper_mirrors_to_display_material(self):
+        result = self.agent.chat("做12块600×900mm的PVC展板，PVC板，单面四色")
+        self.assertEqual(result["order"]["productSpecs"].get("displayMaterial"), "PVC板")
+        # The paperSpec mirror backfills the generic field from the profile
+        # parameter, so both spellings stay in lockstep (order_model mirror).
+        self.assertEqual(result["order"]["paper"], "PVC板")
+
     def test_label_recommendations_keep_label_material(self):
         result = self.agent.chat("做 2000 张圆形透明不干胶标签，50*50mm，四色印刷，下周内")
         self.assertTrue(all("透明不干胶" in item["description"] for item in result["options"]))

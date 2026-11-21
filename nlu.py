@@ -19,7 +19,7 @@ from unit_normalizer import normalize_dimension, dimension_values
 from domain_vocab import normalize_print_term
 
 NEGATION = r"(?:不要|不需要|无需|不用|去掉|取消|不是|不)"
-NEGATABLE = r"(?:\d{2,3}\s*(?:g|克)\s*)?(?:铜版纸|哑粉纸|白卡纸|牛皮纸|特种纸|胶版纸|骑马钉|锁线胶装|胶装|装订|[AB]\s*-?\s*[0-6]|烫金|烫银|覆膜|哑膜|亮膜|双面|单面|四色|黑白)"
+NEGATABLE = r"(?:\d{2,3}\s*(?:g|克)\s*)?(?:铜版纸|哑粉纸|白卡纸|牛皮纸|特种纸|胶版纸|淋膜纸|无碳纸|骑马钉|锁线胶装|胶装|装订|[AB]\s*-?\s*[0-6]|烫金|烫银|覆膜|哑膜|亮膜|双面|单面|四色|黑白)"
 
 
 def _positive_text(text):
@@ -192,12 +192,12 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
         data["orientation"] = "横版"; confidence["orientation"] = 0.85
     elif re.search(r"竖版|竖向|纵向|直式", text):
         data["orientation"] = "竖版"; confidence["orientation"] = 0.85
-    paper_match = re.search(r"(\d{2,3})\s*(?:g|克)\s*(哑粉纸|铜版纸|白卡纸|牛皮纸|胶版纸)", text, re.I)
+    paper_match = re.search(r"(\d{2,3})\s*(?:g|克)\s*(哑粉纸|铜版纸|白卡纸|牛皮纸|胶版纸|淋膜纸|无碳纸)", text, re.I)
     if paper_match:
         data["paper"] = f"{paper_match.group(1)}g {paper_match.group(2)}"
         confidence["paper"] = 0.9
     else:
-        for item in ["特种纸", "牛皮纸", "白卡纸", "铜版纸", "哑粉纸", "胶版纸"]:
+        for item in ["特种纸", "牛皮纸", "白卡纸", "铜版纸", "哑粉纸", "胶版纸", "淋膜纸", "无碳纸"]:
             if item in text:
                 data["paper"] = item
                 confidence["paper"] = 0.75
@@ -337,7 +337,7 @@ def perceive(text: str, allow_multi: bool = True, product_hint: str = "") -> tup
                         if re.search(r"还是|或者|或是|二选一|待定", part)]
         uncertain_fields = set()
         for part in alternatives:
-            papers = set(re.findall(r"特种纸|牛皮纸|白卡纸|铜版纸|哑粉纸|胶版纸", part))
+            papers = set(re.findall(r"特种纸|牛皮纸|白卡纸|铜版纸|哑粉纸|胶版纸|淋膜纸|无碳纸", part))
             weights = set(re.findall(r"\d{2,3}\s*(?:g|克)", part, re.I))
             if len(papers) > 1 or len(weights) > 1 or re.search(r"纸.*待定", part):
                 uncertain_fields.add("paper")
@@ -391,10 +391,11 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
     parts = re.search(r"([二三四五六])\s*联", text)
     if parts:
         specs["paperParts"] = f"{parts.group(1)}联"
-    if re.search(r"流水号|连续编号|打号码|编号", text):
-        specs["numbering"] = "需要连续编号"
-    if re.search(r"(?:不要|不需要|无需|不用).{0,4}(?:编号|流水号)", text):
+    # Negative first: "不打号" must not fall through to the positive trigger.
+    if re.search(r"(?:不要|不需要|无需|不用|不).{0,4}(?:编号|流水号|打号)", text):
         specs["numbering"] = "不需要编号"
+    elif re.search(r"流水号|连续编号|打号码?|编号", text):
+        specs["numbering"] = "需要连续编号"
 
     structure = re.search(r"(天地盖|抽屉盒|折叠盒|飞机盒|书型盒|开窗盒|异型盒)", text)
     if structure:
@@ -454,8 +455,8 @@ def _extract_product_specs(text: str, product: str, size: str) -> dict[str, str]
     elif product == "纸杯" and "淋膜" in text:
         specs["innerCoating"] = "需要内淋膜"
 
-    display_material = next((term for term in ["背胶", "灯片", "车贴", "灯布", "相纸", "写真布", "KT板", "刀刮布", "PVC"] if term.lower() in text.lower()), "")
-    if display_material and product in {"海报", "喷画"}:
+    display_material = next((term for term in ["背胶", "灯片", "车贴", "灯布", "相纸", "写真布", "KT板", "刀刮布", "PVC板", "PVC"] if term.lower() in text.lower()), "")
+    if display_material and product in {"海报", "喷画", "PVC"}:
         specs["displayMaterial"] = display_material
     if product == "PVC":
         thickness = re.search(r"(?:板材厚度|厚度|PVC)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)", text, re.I)

@@ -352,6 +352,7 @@ PRODUCT_CATALOG: dict[str, dict[str, Any]] = {
         "category": "广告物料",
         "aliases": ["PVC", "PVC板", "雪弗板", "KT板", "展板"],
         "summary": "板材类展示品，板材厚度、尺寸、画面覆面和安装方式决定最终效果。",
+        "paperSpec": "displayMaterial",
         "parameters": [
             {"key": "boardThickness", "label": "板材厚度", "required": True, "question": "板材需要 3mm、5mm 还是 10mm？", "hint": "厚度影响挺度、重量和安装方式；计价按已标定厚度档（3mm/5mm/10mm）。"},
             {"key": "install", "label": "安装方式", "required": True, "question": "需要背胶、挂装、支架还是裱框？", "hint": "先定安装方式才能匹配板材和背面加工。"},
