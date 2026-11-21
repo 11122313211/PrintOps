@@ -248,5 +248,23 @@ class StoreFactoryTest(unittest.TestCase):
                 register_store("sqlite", lambda: InMemoryOrderStore())
 
 
+class ToolCallLogRetentionTest(unittest.TestCase):
+    def test_sqlite_tool_call_log_keeps_only_the_newest_rows(self):
+        # TD-13: telemetry is a bounded ring on disk. The LIMIT binds inside a
+        # subquery, so this runs on any SQLite build; audit_log and
+        # order_events are outside the prune statement entirely.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "telemetry.sqlite3"
+            with patch("storage_sqlite.TOOL_CALL_LOG_DISK_LIMIT", 5):
+                store = SQLiteOrderStore(path)
+                for index in range(8):
+                    store.record_tool_call({"tool_name": f"t{index}", "status": "ok", "duration_ms": index})
+                store.record_tool_call({"tool_name": "t8", "status": "ok", "duration_ms": 8})
+            SQLiteOrderStore(path)  # reopening re-prunes at init, a no-op here
+            with closing(sqlite3.connect(path)) as db:
+                names = [row[0] for row in db.execute("SELECT tool_name FROM tool_call_log ORDER BY id").fetchall()]
+            self.assertEqual(names, ["t4", "t5", "t6", "t7", "t8"])
+
+
 if __name__ == "__main__":
     unittest.main()

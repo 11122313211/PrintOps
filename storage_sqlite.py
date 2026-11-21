@@ -11,9 +11,10 @@ import time
 import uuid
 from typing import Any
 
-from storage_contract import (STORE_CONTRACT_VERSION, StoreConflictError, aggregate_tool_calls,
-                              change_event, json_text, message_delta, normalize_tool_call_entry,
-                              prepare_record, summary, timestamp, tool_stats_cutoff)
+from storage_contract import (STORE_CONTRACT_VERSION, StoreConflictError, TOOL_CALL_LOG_DISK_LIMIT,
+                              aggregate_tool_calls, change_event, json_text, message_delta,
+                              normalize_tool_call_entry, prepare_record, summary, timestamp,
+                              tool_stats_cutoff)
 from request_runtime import DeadlineExceeded, check_deadline, current_deadline, remaining
 
 
@@ -84,13 +85,17 @@ class SQLiteOrderStore:
                     audit_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, revision INTEGER NOT NULL,
                     action TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)""")
             # v1.3.0 tool-call telemetry. Create-if-not-exists only: no data
-            # migration, no retention pruning (local single-operator volume).
+            # migration. Retention (1.4.0, TD-13): the newest
+            # TOOL_CALL_LOG_DISK_LIMIT rows survive, mirroring the memory
+            # backend's bounded ring. Only this telemetry table prunes —
+            # audit_log and order_events never do.
             db.execute("""CREATE TABLE IF NOT EXISTS tool_call_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL,
                     status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
                     duration_ms INTEGER NOT NULL DEFAULT 0, session_id TEXT, run_id TEXT,
                     item_index INTEGER, created_at TEXT NOT NULL)""")
             db.execute("CREATE INDEX IF NOT EXISTS tool_call_log_tool ON tool_call_log(tool_name, created_at)")
+            self._prune_tool_call_log(db)
             for row in db.execute("SELECT id, state FROM sessions WHERE id NOT IN (SELECT session_id FROM orders)").fetchall():
                 try:
                     state = json.loads(row["state"])
@@ -315,6 +320,19 @@ class SQLiteOrderStore:
                        "session_id,run_id,item_index,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                        (record["tool_name"], record["status"], record["reason"], record["duration_ms"],
                         record["session_id"], record["run_id"], record["item_index"], record["created_at"]))
+            self._prune_tool_call_log(db)
+
+    def _prune_tool_call_log(self, db) -> None:
+        """Keep only the newest TOOL_CALL_LOG_DISK_LIMIT telemetry rows (TD-13).
+
+        Telemetry is a bounded ring on disk, not business history: audit_log
+        and order_events are never touched by this statement. The LIMIT sits
+        inside a subquery, so it works on any SQLite build without the
+        optional DELETE...LIMIT compile flag and takes no SQL assembly.
+        """
+        db.execute("DELETE FROM tool_call_log WHERE id NOT IN"
+                   " (SELECT id FROM tool_call_log ORDER BY id DESC LIMIT ?)",
+                   (TOOL_CALL_LOG_DISK_LIMIT,))
 
     def load_tool_stats(self, window_days: int) -> dict[str, Any]:
         with self._db() as db:

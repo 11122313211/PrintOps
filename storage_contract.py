@@ -17,6 +17,9 @@ ORDER_STATUSES = frozenset({"draft", "collecting", "ready_for_review", "confirme
 # check. The bundled SQLite and memory stores both implement it.
 TOOL_CALL_STATUSES = ("ok", "failed", "blocked", "rejected")
 TOOL_CALL_LOG_LIMIT = 1000
+# TD-13 (1.4.0): the persistent backend keeps a larger but still bounded
+# telemetry ring; business history (audit_log, order_events) never prunes.
+TOOL_CALL_LOG_DISK_LIMIT = 5000
 MAX_TOOL_NAME_LOG_LENGTH = 64
 MAX_TOOL_REASON_LENGTH = 128
 TOOL_STATS_SCOPE = "local-only"
@@ -61,7 +64,8 @@ class ToolCallRecorder(Protocol):
     Implementations must normalize malformed fields instead of raising —
     telemetry must never break the order workflow — and may cap how many rows
     are retained (the memory backend keeps TOOL_CALL_LOG_LIMIT entries; the
-    SQLite backend persists history for the local operator).
+    SQLite backend keeps TOOL_CALL_LOG_DISK_LIMIT rows — only telemetry
+    prunes, never audit or event history).
 
     load_tool_stats(window_days) aggregates the recorded calls whose
     created_at falls inside the trailing window (1..365 days, clamped) and
