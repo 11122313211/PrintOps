@@ -144,6 +144,10 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
         return finish("blocked")
     if not category.get("supported"):
         result["reason"] = "category_uncalibrated"
+        # Surface the card's own explanation for an uncalibrated category so
+        # users see the concrete gap instead of a bare engine reason code.
+        if isinstance(category.get("reason"), str) and category["reason"].strip():
+            result["reasonDetail"] = category["reason"]
         return finish("blocked")
     family = category["family"]
     specs = order.get("productSpecs") if isinstance(order.get("productSpecs"), dict) else {}
@@ -385,13 +389,32 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
         price = decimal_value(rate["perUnit"])
         add(f"binding:{process}", f"{process}后道费", decimal_value(rate["setup"]) + quantity * price,
             f"准备费 {rate['setup']} + {quantity} × {price}", rate, quantity, unit, price)
-    tier = next((entry for entry in (category.get("quantityTiers") or [])
-                 if entry.get("upTo") is None or quantity <= Decimal(entry["upTo"])), None)
-    if tier:
-        per_unit = decimal_value(tier["perUnit"])
-        add("tier_processing", "数量阶梯加工费", quantity * per_unit,
-            f"数量 {quantity} 落入{' ≤' + str(tier['upTo']) if tier.get('upTo') is not None else '不限量'}档；{quantity} × {per_unit}",
-            tier, quantity, unit, per_unit)
+    tier_rows = category.get("quantityTiers") or []
+    if tier_rows:
+        # Progressive accumulation: each tier prices only the quantity inside
+        # its span, so a lower per-unit rate in a higher band can never make
+        # the total drop when quantity crosses a boundary (数量单调性不变量).
+        amount = Decimal(0)
+        prior_cap = Decimal(0)
+        parts: list[str] = []
+        first_source = None
+        for entry in tier_rows:
+            cap = entry.get("upTo")
+            upper = Decimal(cap) if cap is not None else None
+            span = max(Decimal(0), (min(quantity, upper) if upper is not None else quantity) - prior_cap)
+            if span > 0:
+                per_unit = decimal_value(entry["perUnit"])
+                amount += span * per_unit
+                parts.append(f"{span} × {per_unit}")
+                first_source = first_source or entry
+            if upper is not None:
+                prior_cap = upper
+            if quantity <= (upper if upper is not None else quantity):
+                break
+        if amount > 0:
+            add("tier_processing", "数量阶梯加工费", amount,
+                f"数量阶梯累进：{' + '.join(parts)}", first_source, quantity, unit,
+                amount / quantity if quantity else Decimal(0))
     pack = decimal_value(category["packingPerUnit"])
     add("packing", "常规包装费", quantity * pack, f"{quantity} × {pack}", category, quantity, unit, pack)
     # Sum rounded lines so the user can reproduce the displayed total exactly.

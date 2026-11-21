@@ -400,6 +400,35 @@ class PricingSchema3ComponentTest(unittest.TestCase):
         self.assertEqual(amounts["tier_processing"], "4.20")
         self.assertEqual(result["range"]["mid"], "278.13")
 
+    def test_quantity_tiers_stay_monotonic_across_boundaries(self):
+        base = {"productType": "PVC", "quantityUnit": "块", "size": "600×900 mm",
+                "printing": "单面四色", "finishing": "无", "printMode": "合版",
+                "productSpecs": {"displayMaterial": "PVC板", "boardThickness": "5mm", "install": "自行安装"}}
+        totals = []
+        for count in (49, 50, 199, 200):
+            result = estimate_order({**base, "quantityValue": count}, rate_card=synthetic_card(), as_of=TODAY)
+            self.assertEqual(result["status"], "ready")
+            totals.append(Decimal(result["range"]["mid"]))
+        self.assertEqual(totals, sorted(totals))
+        tier_basis = next(row["basis"] for row in
+                          estimate_order({**base, "quantityValue": 200}, rate_card=synthetic_card(), as_of=TODAY)["lineItems"]
+                          if row["code"] == "tier_processing")
+        self.assertIn("数量阶梯累进", tier_basis)
+
+    def test_uncalibrated_category_carries_card_reason_detail(self):
+        card = synthetic_card()
+        card["categories"]["烫画"] = {"supported": False, "family": "uncalibrated",
+                                      "requiredDrivers": ["categoryRates"],
+                                      "reason": "烫画工艺的介质与转印驱动未标定",
+                                      "sourceId": "synthetic-source"}
+        result = estimate_order({"productType": "烫画"}, rate_card=card, as_of=TODAY)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "category_uncalibrated")
+        self.assertEqual(result["reasonDetail"], "烫画工艺的介质与转印驱动未标定")
+        # A category the card does not list at all has nothing to quote.
+        unknown = estimate_order({"productType": "不存在的品类"}, rate_card=card, as_of=TODAY)
+        self.assertNotIn("reasonDetail", unknown)
+
     def test_schema3_rejects_broken_component_declarations(self):
         card = synthetic_card()
         validate_rate_card(card)
