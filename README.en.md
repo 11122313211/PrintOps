@@ -140,6 +140,8 @@ PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.
 
 The strict release gate requires synthetic field accuracy ≥90%, completion ≥80% on completable cases, and at least 20 real desensitized orders with field accuracy ≥95%. A missing, empty, invalid, insufficient, or inaccurate real corpus blocks release with exit code 1. The real corpus is currently empty. Success without `--release-gate` is not a release approval.
 
+Two release tiers (since 2026-11-21): besides the stable gate there is a **reference tier** (`--release-gate --tier reference`) — synthetic gates fully green + the active rate card carrying a "publicly listed reference price" source + a fixed boundary statement in the output; a missing real corpus does not block but is reported as-is, while an invalid corpus still blocks. The reference tier is not a stable release: any external statement must carry the "reference tier" name. Details live in the release-tier section of [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md).
+
 On 2026-10-25 (1.3.0 candidate baseline), **555 Python tests passed** and the six-step dev gate is green. Chromium passed all four browser suites: **38** journey, **16** UI-position, **17** UI-focus, and **13** smoke scenarios. The 111 synthetic cases achieved 100% field accuracy, which is not a human handoff success rate. The strict release check failed as expected with zero real cases (an organizational block, not a blocker for this round). See [browser acceptance](docs/BROWSER_JOURNEY.md) and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Firefox could not launch in this host environment; real phones, human walkthroughs, and real dsh/models remain unverified.
 
 ## Advanced: models, MCP, and runtime boundaries

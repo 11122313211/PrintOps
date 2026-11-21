@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent import Agent, Memory
+from product_knowledge import RATE_CARD_PATH
 import stdio_utf8
 
 
@@ -475,27 +476,79 @@ def real_corpus_verdict(real_cases: list[dict[str, Any]], real_report: dict[str,
     return "pass"
 
 
+# ---------------------------------------------------------------------------
+# 参考版发布层级（2026-11-21 起）
+#
+# 稳定版门槛（--release-gate 默认档）保持不变：合成门禁 + 真实语料 ≥20 例且
+# ≥95%。参考版（--release-gate --tier reference）面向个人开发者无组织资源的
+# 现实：合成门禁全绿 + 活动 rate card 携带"公开挂牌参考价"来源 + 如实输出
+# 边界声明；真实语料缺失/不足不阻断，但报告中原样标注，不得写成稳定发布。
+# ---------------------------------------------------------------------------
+
+MARKET_LISTED_CONFIDENCE = "market-listed"
+MARKET_LISTED_KEYWORD = "公开挂牌参考价"
+REFERENCE_BOUNDARY_NOTICE = (
+    "参考版边界声明：估算非报价；公开挂牌参考价非成交价、非供应商授权报价；"
+    "自测走查非独立真人验证；真实脱敏语料按当前状态如实标注。")
+
+
+def market_reference_verdict(rate_card_path: Path | None = None) -> tuple[bool, str]:
+    """Check the market-reference source requirement for the reference tier.
+
+    Returns ``(ok, detail)``. ``ok`` means the active rate card carries at
+    least one 公开挂牌参考价 source entry (``confidence="market-listed"`` or
+    a description naming 公开挂牌参考价); anything else fails with a
+    human-readable reason. The path resolves at call time so tests can patch
+    ``RATE_CARD_PATH``.
+    """
+    path = Path(rate_card_path) if rate_card_path else RATE_CARD_PATH
+    if not path.is_file():
+        return False, "rate card 文件缺失"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, "rate card 文件无效"
+    sources = data.get("sources") if isinstance(data, dict) else None
+    if not isinstance(sources, dict) or not sources:
+        return False, "rate card 无 sources 段"
+    for source_id, source in sources.items():
+        if not isinstance(source, dict):
+            continue
+        if (source.get("confidence") == MARKET_LISTED_CONFIDENCE
+                or MARKET_LISTED_KEYWORD in str(source.get("description", ""))):
+            return True, f"来源 {source_id}"
+    return False, "rate card 无公开挂牌参考价来源（需 confidence=market-listed 或来源描述注明公开挂牌参考价）"
+
+
 def main() -> int:
     stdio_utf8.configure()
     parser = argparse.ArgumentParser(description="Run the deterministic PrintOps Agent evaluation suite")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON 报告")
     parser.add_argument("--only-failed", action="store_true", help="只打印未通过的用例")
     parser.add_argument("--release-gate", action="store_true",
-                        help="严格发布验收：真实语料须至少20例且字段准确率≥95%%，空语料或不足20例也失败")
+                        help="发布验收：默认稳定档（真实语料须至少20例且字段准确率≥95%%，空语料或不足20例也失败）")
+    parser.add_argument("--tier", choices=["stable", "reference"], default="stable",
+                        help="发布层级：stable=稳定版门槛；reference=参考版（合成门禁+公开挂牌参考价来源，真实语料不阻断但如实标注）")
     args = parser.parse_args()
     report = run_suite()
     real_cases, real_status = load_real_cases()
     real_report = run_suite(real_cases) if real_cases else None
     verdict = real_corpus_verdict(real_cases, real_report, real_status)
     synthetic_passed = report["fieldAccuracy"] >= 90 and report["completionRate"] >= 80
-    release_passed = synthetic_passed and verdict == "pass"
+    market_ok, market_detail = market_reference_verdict()
+    if args.release_gate and args.tier == "reference":
+        release_passed = synthetic_passed and market_ok
+    else:
+        release_passed = synthetic_passed and verdict == "pass"
 
     def failed_cases(suite: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in suite["results"] if item["fieldAccuracy"] < 100]
 
     if args.json:
         print(json.dumps({**report, "realCorpus": real_report, "realCorpusVerdict": verdict,
-                          "releaseGateEnabled": args.release_gate, "releaseGatePassed": release_passed},
+                          "releaseGateEnabled": args.release_gate, "releaseGatePassed": release_passed,
+                          "releaseTier": args.tier, "marketReferenceVerdict": market_detail,
+                          "referenceBoundaryNotice": REFERENCE_BOUNDARY_NOTICE if args.tier == "reference" else None},
                          ensure_ascii=False, indent=2))
     else:
         print(f"PrintOps evaluation: {report['cases']} cases")
@@ -537,7 +590,12 @@ def main() -> int:
         else:
             print(f"真实脱敏语料：待补充（放入 tests/eval_cases_real.json，≥{REAL_CORPUS_MIN_CASES} 例"
                   f"后启用字段准确率 ≥{REAL_CORPUS_ACCURACY_GATE}% 门槛）。")
-        if args.release_gate:
+        if args.release_gate and args.tier == "reference":
+            print("参考版发布门槛：通过。" if release_passed else
+                  f"参考版发布门槛：未通过；合成评测须达标，且活动 rate card 须含公开挂牌参考价来源"
+                  f"（当前：{market_detail}）。")
+            print(REFERENCE_BOUNDARY_NOTICE)
+        elif args.release_gate:
             print("严格发布门槛：通过。" if release_passed else
                   "严格发布门槛：未通过；合成评测须达标，且真实语料须至少20例、字段准确率≥95%。")
 

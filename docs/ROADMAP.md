@@ -39,7 +39,7 @@
 - ✅ 工具调用观测：`tool_call_log` 表持久化（memory 后端为 1000 条有界环）、`GET /api/tools/stats`（四态计数 + avg/p95 nearest-rank + blocked 原因分布，scope: local-only）、设置工具箱统计视图、评测 JSON 报告 `toolReport`。
 - ✅ 前端 UI 债（TD-06/11/19）：四个重绘函数补 `data-field-key` 焦点/选区保持；bootstrap 绑定前一次性元素 ID 存在性断言（缺失汇总 + 顶部横幅）；错误文案单一来源 `PrintOpsJourney.ERROR_TEXTS`。
 
-用户目前没有真实脱敏语料。本阶段要求发布门槛可执行且保持阻断，不能用人工合成案例替代真实订单。日常评测保持兼容；正式发布必须运行 `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`，真实样本不足 20 例或字段准确率不足 95% 都失败。
+用户目前没有真实脱敏语料。本阶段要求发布门槛可执行且保持阻断，不能用人工合成案例替代真实订单。日常评测保持兼容；稳定发布必须运行 `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`，真实样本不足 20 例或字段准确率不足 95% 都失败。2026-11-21 起新增**参考版**发布层级（`--release-gate --tier reference`）：合成门禁全绿 + 活动 rate card 携带"公开挂牌参考价"来源 + 固定边界声明，真实语料不阻断但如实标注——参考版不是稳定发布，对外表述必须带层级名（见 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md) "发布层级"节）。
 
 - 已实现订单快照、完整消息、修改事件、报价请求和审计存储，CAS 防并发覆盖，旧 JSON 保留备份；浏览器历史使用后端 API。
 - 已实现 mm / g/m² 归一、独立包装内外尺寸、否定候选和字段证据；低置信候选需确认。交期保留日历文字语义，尚无节假日排期承诺。
@@ -146,7 +146,7 @@ v1.0.0 汇集 v0.9.x–v0.11.x 的全部代码成果：自然语言建单、可�
 
 - **app.js 模块化拆分**：按 [path-02 前端模块化](plan/path-02-frontend-modularization.md) 的任务卡推进。
 - **供应商 sandbox/live 接入**：当前无授权，沿用下述原边界。
-- **真实语料与真人走查门槛**：保持组织性阻断，不视为候选版阻塞项；发布检查按预期失败，见 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md)。
+- **真实语料与真人走查门槛**：保持组织性阻断，不视为候选版阻塞项；稳定版发布检查按预期失败，见 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md)。闭合前的可发布口径为**参考版**层级（合成门禁 + 公开挂牌参考价标定 + 边界声明，市场参考价采集记录见 `docs/plan/sd2000-price-probe-2026-11-21.md` 与 [市场标定采集模板](plan/market-rate-intake-template.md)）。
 
 ### 供应商授权接入与真实价格校准
 
@@ -162,7 +162,7 @@ v1.0.0 汇集 v0.9.x–v0.11.x 的全部代码成果：自然语言建单、可�
 每次发布至少通过：
 
 - Python 单元测试和 API 契约测试
-- `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`：合成字段准确率 ≥90%、完整率 ≥80%；真实订单至少 20 例且字段准确率 ≥95%。缺失、空库、不足样本均阻断
+- `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate`：合成字段准确率 ≥90%、完整率 ≥80%；真实订单至少 20 例且字段准确率 ≥95%。缺失、空库、不足样本均阻断。参考版层级用 `--release-gate --tier reference`：真实语料不阻断但如实标注，改以"rate card 含公开挂牌参考价来源"为阻断条件
 - 多产品隔离测试，确认不同 `itemId` 之间没有字段污染
 - 模型不可用时的规则回退测试
 - 浏览器端加载、等待、错误重试、刷新恢复和窄屏检查；真人 10 分钟任务按 [USER_WALKTHROUGH](USER_WALKTHROUGH.md) 独立评分，自动浏览器不能替代
