@@ -2,7 +2,7 @@
 
 ## Unreleased - 2026-11-21（恢复 CI）
 
-- **恢复 GitHub Actions CI，与本机共用同一条门禁**：2026-09-08 `b0d5b06` 时 Windows runner 的 socket 类单测连续失败（4 次 CI 全红：ubuntu 全绿，windows Python 3.9/3.12 均停在 Unit tests），随后 `e8f5bd9` 移除 CI 改为本机 `tools/dev_check.py` 检查；2026-10-23 的 Windows 兼容修复（SQLite 文件锁、连接排空/RST、408 语义、WSAEINTR 中断写、WinError 5 配置写入根因）落地后，本机 Windows（Python 3.14）复跑 556 项单测全绿（含默认运行的 socket 级 HTTP 测试），恢复条件已具备。新增 `.github/workflows/ci.yml`：push/PR 触发，`ubuntu-latest` + `windows-latest` × Python 3.9/3.14 四组合执行 `python tools/dev_check.py`（编译 + 单测 + 评测 + 知识复核 + secret_scan + repo_guard），零新增 CI 专属脚本；dev_check 自带 `PYTHONUTF8=1` 与 UTF-8 流重配，无需额外 CI 环境变量，job 级 `timeout-minutes: 15` 兜底。
+- **恢复 GitHub Actions CI，与本机共用同一条门禁**：2026-09-08 `b0d5b06` 时 Windows runner 的 socket 类单测连续失败（4 次 CI 全红：ubuntu 全绿，windows Python 3.9/3.12 均停在 Unit tests），随后 `e8f5bd9` 移除 CI 改为本机 `tools/dev_check.py` 检查；2026-10-23 的 Windows 兼容修复（SQLite 文件锁、连接排空/RST、408 语义、WSAEINTR 中断写、WinError 5 配置写入根因）落地后，本机 Windows（Python 3.14）复跑 556 项单测全绿（含默认运行的 socket 级 HTTP 测试），恢复条件已具备。新增 `.github/workflows/ci.yml`：push/PR 触发，`windows-latest`（3.9/3.14）与 ubuntu（3.14 跑 `ubuntu-latest`，3.9 固定 `ubuntu-22.04`——24.04 runner 无 Python 3.9 可装）共四组合执行 `python tools/dev_check.py`（编译 + 单测 + 评测 + 知识复核 + secret_scan + repo_guard），零新增 CI 专属脚本；dev_check 自带 `PYTHONUTF8=1` 与 UTF-8 流重配，无需额外 CI 环境变量，job 级 `timeout-minutes: 15` 兜底。
 - **文档同步**：README 双语“开发与验收”、CONTRIBUTING“开发循环”与 `tools/dev_check.py` docstring 不再宣称“有意不使用 GitHub Actions”，改为说明 CI 与本机跑同一条门禁、发布前仍以本机检查为准；CONTRIBUTING 单测计数更新为 556 项并补上知识复核步。
 - **验收**：本机 `python tools/dev_check.py` 六步全绿；推送后首跑四个 job 需人工观察——若 windows runner 复现 socket 类偶发失败，回退方案是恢复 `PRINTOPS_RUN_SOCKET_TESTS` 式 opt-in 跳过（仅 CI 环境生效，本机不受影响）。
 
