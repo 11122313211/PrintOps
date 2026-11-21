@@ -485,30 +485,57 @@ class MarketReferenceCardTest(unittest.TestCase):
         shapes = {"linear", "base-plus-marginal", "tiered", "batch-setup-dominant"}
         expected_categories = {"名片", "单页", "标签", "画册", "PVC", "包装盒", "海报"}
         found = set()
+
+        def assert_block_wellformed(block, label):
+            self.assertEqual(block["sourceId"], "sd2000-listed-2026-11-21")
+            source = self.card["sources"][block["sourceId"]]
+            self.assertEqual(source["confidence"], "market-listed")
+            self.assertIn(block["shape"], shapes)
+            self.assertGreaterEqual(len(block["points"]), 2)
+            previous = None
+            for point in block["points"]:
+                quantity = point["quantity"]
+                self.assertIsInstance(quantity, int)
+                self.assertGreater(quantity, 0)
+                if previous is not None:
+                    self.assertGreater(quantity, previous)
+                previous = quantity
+                self.assertGreater(Decimal(point["listedTotal"]), Decimal("0"))
+                self.assertGreater(Decimal(point["unitPrice"]), Decimal("0"))
+            self.assertTrue(str(block["basis"]).strip())
+            self.assertTrue(str(block["notes"]).strip())
+
         for name, category in self.card["categories"].items():
             block = category.get("marketReference")
             if block is None:
                 continue
             found.add(name)
             with self.subTest(category=name):
-                self.assertEqual(block["sourceId"], "sd2000-listed-2026-11-21")
-                source = self.card["sources"][block["sourceId"]]
-                self.assertEqual(source["confidence"], "market-listed")
-                self.assertIn(block["shape"], shapes)
-                self.assertGreaterEqual(len(block["points"]), 2)
-                previous = None
-                for point in block["points"]:
-                    quantity = point["quantity"]
-                    self.assertIsInstance(quantity, int)
-                    self.assertGreater(quantity, 0)
-                    if previous is not None:
-                        self.assertGreater(quantity, previous)
-                    previous = quantity
-                    self.assertGreater(Decimal(point["listedTotal"]), Decimal("0"))
-                    self.assertGreater(Decimal(point["unitPrice"]), Decimal("0"))
-                self.assertTrue(str(block["basis"]).strip())
-                self.assertTrue(str(block["notes"]).strip())
+                assert_block_wellformed(block, name)
+            # 变体回采（胶装画册）：与主块同源同契约，basis 不得与主块重复。
+            for variant in category.get("variantReferences") or []:
+                with self.subTest(category=name, variant=variant["basis"][:12]):
+                    assert_block_wellformed(variant, name)
+                    self.assertNotEqual(variant["basis"], block["basis"])
         self.assertEqual(found, expected_categories)
+
+    def test_album_variant_reference_is_the_glue_bound_album(self):
+        album = self.card["categories"]["画册"]
+        variants = album["variantReferences"]
+        self.assertEqual(len(variants), 1)
+        variant = variants[0]
+        self.assertIn("胶装画册", variant["basis"])
+        quantities = [point["quantity"] for point in variant["points"]]
+        self.assertEqual(quantities, [100, 500])
+        # 装订溢价随量摊薄：与骑马订同配置的溢价比例 500 本档低于 100 本档。
+        saddle = {p["quantity"]: Decimal(p["listedTotal"])
+                  for p in album["marketReference"]["points"]}
+        glue = {p["quantity"]: Decimal(p["listedTotal"]) for p in variant["points"]}
+        premium_100 = glue[100] / saddle[100]
+        premium_500 = glue[500] / saddle[500]
+        self.assertGreater(premium_100, premium_500)
+        self.assertGreater(premium_100, Decimal("1.3"))
+        self.assertLess(premium_500, Decimal("1.25"))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "3.0",
   "rateCardId": "cn-local-reference",
-  "version": "2026.12.03",
+  "version": "2026.12.04",
   "region": "CN-reference-only",
   "currency": "CNY",
   "unitSystem": "mm",
@@ -32,7 +32,7 @@
       "isSupplierPrice": false
     },
     "sd2000-listed-2026-11-21": {
-      "description": "公开挂牌参考价：sd2000.com（盛大印刷，河南永城）产品详情页未登录挂牌价，2026-11-21 Computer Use 真实浏览器实测（非爬虫）。口径=自助网络下单价（人工接线价 +4~11%），不含目的地运费（发货地未选照常出价、运费栏空置），含税与否未验证；名片 90×54 精品盒包装为平台强制工艺。覆盖名片/PVC展板/宣传单/不干胶/骑马订画册/卡盒六品类数量阶梯与工艺轴，证据与逐条口径见 docs/plan/sd2000-price-probe-2026-11-21.md",
+      "description": "公开挂牌参考价：sd2000.com（盛大印刷，河南永城）产品详情页未登录挂牌价，2026-11-21 Computer Use 真实浏览器实测（非爬虫）。口径=自助网络下单价（人工接线价 +4~11%），不含目的地运费（发货地未选照常出价、运费栏空置），含税与否未验证；名片 90×54 精品盒包装为平台强制工艺。覆盖名片/PVC展板/宣传单/不干胶/骑马订画册/卡盒/海报七品类数量阶梯与工艺轴（画册另含胶装变体回采），证据与逐条口径见 docs/plan/sd2000-price-probe-2026-11-21.md",
       "enteredBy": "printops-maintainer",
       "effectiveFrom": "2026-11-21",
       "region": "CN-market-listed-sd2000",
@@ -217,7 +217,19 @@
           {"quantity": 500, "listedTotal": "1405.00", "unitPrice": "2.81"}
         ],
         "notes": "制版费摊薄主导（100→500 本总价仅 +49%）；印刷类型轴：100 本时高质量喷墨 505/激光 540 低于胶印 944，500 本时胶印 1405 反超喷墨 2425——数字/胶印交叉点在 100~500 本；截稿 18:30；起订 10 本（平台）vs PrintOps display/booklet MIN_QUANTITY 差异记录在案"
-      }
+      },
+      "variantReferences": [
+        {
+          "sourceId": "sd2000-listed-2026-11-21",
+          "basis": "胶装画册：285×210mm 24P 封皮铜版纸250克单面哑膜+内页铜版纸157克双面彩色 无线胶装 传统胶印",
+          "shape": "batch-setup-dominant",
+          "points": [
+            {"quantity": 100, "listedTotal": "1262.00", "unitPrice": "12.62"},
+            {"quantity": 500, "listedTotal": "1697.00", "unitPrice": "3.394"}
+          ],
+          "notes": "同配置对骑马订的装订溢价随量摊薄：100 本 +33.7%、500 本 +20.8%；书脊厚度 ≤3mm 易开胶（平台提示，工艺咨询口径）；扩展段含添加拉页/添加护封（骑马订无）；数字/胶印交叉同在 100~500 本（智能优选 100 本高质量喷墨 525 标价格最低）"
+        }
+      ]
     },
     "吊牌": {
       "supported": true,
