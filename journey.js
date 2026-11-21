@@ -247,6 +247,7 @@
     client: {title: "这项内容需要调整", hint: FAILURE_HINT},
     offline: {title: "连接中断，保存结果尚未确认", hint: FAILURE_HINT},
     noDetail: {title: "", hint: "请检查本地服务是否运行。"},
+    messageTooLong: {title: "消息过长，请拆分后发送", hint: "请把内容拆成几条消息分别发送。"},
     ADDRESS_VALIDATION_TIMEOUT: {title: "域名解析超时，请检查本机 DNS 或代理后重试", hint: "请检查本机 DNS 或代理后重试。"},
     settingsUrlModel: {title: "URL 和模型名需要同时填写", hint: FAILURE_HINT},
     settingsPrivateHost: {title: "该接口解析到本机或内网地址，当前安全策略不允许", hint: FAILURE_HINT}

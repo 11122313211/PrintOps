@@ -64,6 +64,10 @@ LLM_LOCK = threading.Lock()
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 MAX_BODY_BYTES = 1 * 1024 * 1024
+# A chat turn is conversational text, not bulk import: the body cap governs
+# transport, this cap keeps one message from ballooning the stored message
+# log and the planner context at the same time.
+MAX_CHAT_CHARS = 20000
 # Scratch table used only by the startup write probe; the probe rolls back, so
 # a successful start never persists it. The probe uses literal SQL, so this
 # name must stay in sync with the statements in memory_write_probe().
@@ -533,6 +537,10 @@ def _dispatch_post(path: str, body: dict[str, object], agent: Agent):
                 return focus_snapshot(agent, body)
             return order_history_snapshot(agent.memory, agent.id)
         raise RequestError("已归档订单只读，请新建订单继续编辑", 409, "ORDER_ARCHIVED")
+    if path == "/api/chat" and len(str(body.get("text", ""))) > MAX_CHAT_CHARS:
+        # Payload validity (400) is checked before CAS semantics (409): the
+        # client must fix the message itself; a refresh cannot shrink it.
+        raise RequestError("消息内容过长，请拆分后发送", 400, "MESSAGE_TOO_LONG")
     expected_revision = body.get("expectedRevision")
     payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
     target_body = {key: body[key] for key in ("itemId", "itemIndex") if body.get(key) is not None}

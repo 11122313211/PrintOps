@@ -158,6 +158,16 @@ class HttpGateTest(unittest.TestCase):
         self.assertEqual(status, 413)
         self.assertEqual(payload["code"], "PAYLOAD_TOO_LARGE")
 
+    def test_chat_text_over_limit_returns_400(self):
+        status, payload = self.request("/api/chat", body={"text": "做500张名片，" + "长" * (server.MAX_CHAT_CHARS + 1)})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["code"], "MESSAGE_TOO_LONG")
+
+    def test_chat_text_within_limit_is_accepted(self):
+        status, payload = self.request("/api/chat", body={"text": "做500张名片，90×54mm，300g铜版纸"})
+        self.assertEqual(status, 200)
+        self.assertIn("paper", payload["order"])
+
     def test_wrong_content_type_returns_415(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:
