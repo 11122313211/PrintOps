@@ -54,6 +54,18 @@
 - `tools/printops_local_host.py` 是 dsh 无法安装时的本地 fallback：只用 Python 标准库。它通过同一个 stdio launcher 验证 skill/MCP 契约，再把对话交给确定性 Agent。
 - 两者都只是本地内核的宿主，**不宣称 dsh 运行时存在或正在调用远程模型**。真实 dsh headless、真实模型端到端与 on/off parity 仍是发布门槛（见 `docs/RELEASE_CHECKLIST.md` 门槛 12）。
 
+## 本地安全模型（v0.11.0 起）
+
+单机本地工具的威胁模型：防止本机服务被浏览器侧第三方页面滥用、防止密钥随仓库或截图意外泄露，不针对已拥有本机文件权限的攻击者。
+
+- **本地令牌鉴权**：启动时生成本地 token 并注入页面，除 `/api/health` 外全部接口要求 `X-PrintOps-Token`，缺失或错误一律 401；
+- **同源约束**：带 `Origin` 的跨来源请求返回 403，第三方页面无法借用页面注入的令牌调用本地 API；
+- **静态白名单**：静态路由只放行 `/`（index.html）、`/app.js`、`/markdown.js`、`/workbench.js`、`/journey.js`、`/workcard.js` 与 `/styles.css`（`server.py` 的 `STATIC_FILES`），`/.git`、源码与数据文件一律 404；白名单在进程内存中，新增静态资源须重启服务；
+- **SSRF 校验**：LLM 配置 URL 在保存时校验主机，拒绝环回/私有/CGNAT/保留/链路本地地址（含解析后指向内网的域名）；无法解析的主机名放行、请求时自然失败。配置时校验与实际请求之间存在理论上的 DNS 重绑定窗口（TD-14），在单机威胁模型内可接受；
+- **SQLite 加固**：WAL 模式与 `busy_timeout`；损坏会话自动隔离备份到 `data/corrupted/` 后自愈，不阻塞启动；
+- **Key 明文提醒**：`/api/settings` 保存的 API Key 以明文 JSON 落盘（TD-15），设置面板与响应携带 `keyStorageWarning`；系统凭据库（keyring）方案仍在评估；
+- **未做**：接口限流（ROADMAP P1 排队项）；静态白名单与令牌的常青回归依赖 `tests/test_local_host.py` / `tests/test_http_handler.py`（TD-16）。
+
 ## 前端渲染边界
 
 `markdown.js` 是对话气泡与输入框预览共用的零依赖 Markdown 渲染器，浏览器与测试环境共享同一实现。设计取舍：
