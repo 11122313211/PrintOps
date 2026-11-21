@@ -1,7 +1,7 @@
 {
   "schemaVersion": "3.0",
   "rateCardId": "cn-local-reference",
-  "version": "2026.12.02",
+  "version": "2026.12.03",
   "region": "CN-reference-only",
   "currency": "CNY",
   "unitSystem": "mm",
@@ -383,7 +383,17 @@
         "张",
         "块"
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "海报：铜版纸157克 420×570MM 单面 彩色 默认打包 起订100张",
+        "shape": "tiered",
+        "points": [
+          {"quantity": 100, "listedTotal": "173.30", "unitPrice": "1.733"},
+          {"quantity": 500, "listedTotal": "264.40", "unitPrice": "0.5288"}
+        ],
+        "notes": "阶梯缓降（100→500 边际≈0.228 元/张），与单页同形态；材料轴：铜版纸200克≈157克×1.06~1.22、市场200克铜版跳档最贵且 D+1；印面仅单面（必选）；截稿 18:30；重量 500张=18.8kg"
+      }
     },
     "喷画": {
       "supported": true,

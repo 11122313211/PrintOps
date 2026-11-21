@@ -483,7 +483,7 @@ class MarketReferenceCardTest(unittest.TestCase):
 
     def test_every_market_reference_block_is_wellformed(self):
         shapes = {"linear", "base-plus-marginal", "tiered", "batch-setup-dominant"}
-        expected_categories = {"名片", "单页", "标签", "画册", "PVC", "包装盒"}
+        expected_categories = {"名片", "单页", "标签", "画册", "PVC", "包装盒", "海报"}
         found = set()
         for name, category in self.card["categories"].items():
             block = category.get("marketReference")
