@@ -1,4 +1,4 @@
-"""One-command local gate: this project intentionally has no CI (see README).
+"""One-command gate: runs both locally and in GitHub Actions CI (see README).
 
 Releases are validated on the developer's own machine. This runner chains the
 documented checks into one command with a stable summary:
@@ -46,7 +46,7 @@ def main():
             stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError, OSError):
             pass
-    parser = argparse.ArgumentParser(description="PrintOps 本机一键门禁（替代 CI 的本地发布检查）")
+    parser = argparse.ArgumentParser(description="PrintOps 一键门禁（本机与 GitHub Actions CI 共用）")
     parser.add_argument("--quick", action="store_true",
                         help="跳过单元测试与评测，只做编译与仓库守护")
     args = parser.parse_args()

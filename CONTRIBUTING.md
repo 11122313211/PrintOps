@@ -19,13 +19,13 @@ PrintOps 刻意保持轻量。动手前请先读“核心约束”，它们比�
 ## 开发循环
 
 ```bash
-python3 tools/dev_check.py           # 编译 + 463 项单测 + 评测 + secret_scan + repo_guard
+python3 tools/dev_check.py           # 编译 + 556 项单测 + 评测 + knowledge_review + secret_scan + repo_guard
 python3 tools/dev_check.py --quick   # 只跑编译与守护（快速回路）
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json   # 发布门槛（真实语料不足时必须失败）
 ```
 
-本项目**有意不使用 GitHub Actions**（决策与理由见 README“开发与验收”与 docs/RELEASE_CHECKLIST.md），
-发布前在本机执行上述检查。跨平台代码请同时考虑 Windows（GBK 控制台、SQLite 文件锁、无 SIGTERM）差异，
+GitHub Actions CI（`.github/workflows/ci.yml`）与本机跑**同一条门禁** `tools/dev_check.py`
+（ubuntu + windows × Python 3.9/3.14），发布前仍以本机检查为准。跨平台代码请同时考虑 Windows（GBK 控制台、SQLite 文件锁、无 SIGTERM）差异，
 参考 `stdio_utf8.py` 与 `tests/test_runtime_hardening.py` 的平台处理。
 
 ## 测试与提交

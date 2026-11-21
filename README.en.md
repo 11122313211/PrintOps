@@ -112,7 +112,7 @@ These are Chromium screenshots from the **2026-10-25 uncommitted development wor
 
 ## Development and acceptance
 
-This project intentionally does not use GitHub Actions; release checks run on the local machine. See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for development constraints.
+GitHub Actions CI runs the same one-command gate as the local machine (`tools/dev_check.py`); release checks still run locally before a release. See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for development constraints.
 
 The Python runtime and unit/contract checks use the standard library. **Browser development tests additionally require Node.js 18+, npm, pinned Playwright, and Chromium**. These are not needed to start the product.
 
