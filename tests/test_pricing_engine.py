@@ -282,5 +282,136 @@ class CalibrationTest(unittest.TestCase):
         self.assertIn("活动 rate_cards", result.stderr)
 
 
+def synthetic_card() -> dict:
+    """A minimal schema-3.0 card exercising the cup/form/board components."""
+    return {
+        "schemaVersion": "3.0", "rateCardId": "synthetic-schema3", "version": "2026.12.01",
+        "region": "CN-reference-only", "currency": "CNY", "unitSystem": "mm",
+        "sourceType": "local_reference", "sourceDescription": "单测合成成本表，仅验证计算方法",
+        "effectiveFrom": "2026-01-01", "expiresAt": "2027-12-31",
+        "confidence": "illustrative", "enteredBy": "test", "taxBasis": "exclusive",
+        "deliveryBasis": "ex_works", "isSupplierPrice": False,
+        "sources": {"synthetic-source": {"description": "合成来源", "enteredBy": "test"}},
+        "band": {"low": "0.85", "high": "1.25"},
+        "materials": {"淋膜纸": {"sourceId": "synthetic-source", "perKg": "8"},
+                      "无碳纸": {"sourceId": "synthetic-source", "perKg": "6"},
+                      "PVC板": {"sourceId": "synthetic-source", "perM2": "18"}},
+        "printing": {"合版": {"sourceId": "synthetic-source", "setup": "50", "perM2": "0.5"}},
+        "finishing": {},
+        "binding": {"打号": {"sourceId": "synthetic-source", "setup": "30", "perUnit": "0.02"}},
+        "colorFactors": {"四色": "1", "单色": "0.65"},
+        "categories": {
+            "纸杯": {"supported": True, "family": "cup",
+                      "requiredDrivers": ["quantity", "cupSize", "material", "printing"],
+                      "minimumTotal": "300", "packingPerUnit": "0.02", "wasteFactor": "1.1",
+                      "sourceId": "synthetic-source", "units": ["个"],
+                      "cupSizes": {"9oz": {"blankAreaM2": "0.0132"}},
+                      "batchSetup": {"amount": "120", "sourceId": "synthetic-source"}},
+            "联单": {"supported": True, "family": "form",
+                      "requiredDrivers": ["quantity", "dimensions", "formParts", "material", "printing"],
+                      "minimumTotal": "50", "packingPerUnit": "0.01", "wasteFactor": "1.1",
+                      "sourceId": "synthetic-source", "units": ["本", "份"],
+                      "formParts": ["2联", "3联", "4联"],
+                      "imposition": {"perSheetUp": 4, "sheetWidthMm": "600", "sheetHeightMm": "400",
+                                     "sheetName": "无碳纸大纸", "sourceId": "synthetic-source"}},
+            "PVC": {"supported": True, "family": "display",
+                    "requiredDrivers": ["quantity", "dimensions", "boardThickness", "material", "printing", "install"],
+                    "minimumTotal": "100", "packingPerUnit": "0.02", "wasteFactor": "1.05",
+                    "sourceId": "synthetic-source", "units": ["块"],
+                    "boardThicknesses": {"5mm": {"materialFactor": "1"}, "10mm": {"materialFactor": "1.8"}},
+                    "quantityTiers": [{"upTo": 49, "perUnit": "0.35"}, {"upTo": None, "perUnit": "0.2"}]},
+        },
+    }
+
+
+class PricingSchema3ComponentTest(unittest.TestCase):
+    def test_cup_family_prices_capacity_band_and_batch_setup(self):
+        order = {"productType": "纸杯", "quantityValue": 10000, "quantityUnit": "个",
+                 "paper": "280g淋膜纸", "printing": "单面四色", "finishing": "无", "printMode": "合版",
+                 "productSpecs": {"cupSize": "9oz"}}
+        result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
+        self.assertEqual(result["status"], "ready")
+        amounts = {row["code"]: row["amount"] for row in result["lineItems"]}
+        # 10000 × 0.0132 m² × 损耗 1.1 × 280 g/m² = 40.656 kg × 8 = 325.25
+        self.assertEqual(amounts, {"material": "325.25", "print_setup": "50.00", "print_run": "66.00",
+                                   "batch_setup": "120.00", "packing": "200.00"})
+        self.assertEqual(result["range"], {"low": "647.06", "mid": "761.25", "high": "951.56"})
+        self.assertEqual(result["drivers"]["cupSize"], "9oz")
+        self.assertNotIn("widthMm", result["drivers"])
+
+    def test_cup_without_calibrated_capacity_is_blocked_not_inferred(self):
+        order = {"productType": "纸杯", "quantityValue": 10000, "quantityUnit": "个",
+                 "paper": "280g淋膜纸", "printing": "单面四色", "printMode": "合版"}
+        result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
+        self.assertEqual(result["status"], "blocked")
+        self.assertTrue(any("纸杯容量" in item for item in result["missing"]))
+
+    def test_form_family_imposes_large_sheets_and_skips_waste(self):
+        order = {"productType": "联单", "quantityValue": 500, "quantityUnit": "本",
+                 "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色",
+                 "finishing": "无", "binding": "打号", "printMode": "合版",
+                 "productSpecs": {"formParts": "3联"}}
+        result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
+        self.assertEqual(result["status"], "ready")
+        amounts = {row["code"]: row["amount"] for row in result["lineItems"]}
+        # ceil(500 × 3联 / 每张4部分) = 375 张大纸 × 0.24 m² × 40 g/m² = 3.6 kg × 6 = 21.60（整张开料不再乘损耗）
+        self.assertEqual(amounts["material"], "21.60")
+        self.assertEqual(amounts["print_run"], "8.80")
+        self.assertEqual(amounts["binding:打号"], "40.00")
+        self.assertEqual(result["range"], {"low": "106.59", "mid": "125.40", "high": "156.75"})
+        self.assertEqual(result["drivers"]["sheetsPerUnit"], "3")
+        self.assertTrue(any("整张大纸开料" in item for item in result["assumptions"]))
+        material_basis = next(row["basis"] for row in result["lineItems"] if row["code"] == "material")
+        self.assertIn("共 375 张", material_basis)
+
+    def test_form_without_calibrated_part_count_is_blocked(self):
+        order = {"productType": "联单", "quantityValue": 500, "quantityUnit": "本",
+                 "size": "190×95 mm", "paper": "40g无碳纸", "printing": "单面单色", "printMode": "合版",
+                 "productSpecs": {"formParts": "5联"}}
+        result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("联单联数", result["missing"])
+
+    def test_display_board_thickness_factor_and_quantity_tier(self):
+        order = {"productType": "PVC", "quantityValue": 12, "quantityUnit": "块",
+                 "size": "600×900 mm", "printing": "单面四色", "finishing": "无", "printMode": "合版",
+                 "productSpecs": {"displayMaterial": "PVC板", "boardThickness": "10mm", "install": "自行安装"}}
+        result = estimate_order(order, rate_card=synthetic_card(), as_of=TODAY)
+        self.assertEqual(result["status"], "ready")
+        amounts = {row["code"]: row["amount"] for row in result["lineItems"]}
+        # 12 × 0.54 m² × 损耗 1.05 × 板厚系数 1.8 = 12.2472 m² × 18 = 220.45
+        self.assertEqual(amounts["material"], "220.45")
+        # 数量 12 落入 ≤49 档：12 × 0.35 = 4.20
+        self.assertEqual(amounts["tier_processing"], "4.20")
+        self.assertEqual(result["range"]["mid"], "278.13")
+
+    def test_schema3_rejects_broken_component_declarations(self):
+        card = synthetic_card()
+        validate_rate_card(card)
+        cases = [
+            {**card, "schemaVersion": "2.0"},
+            {**card, "categories": {**card["categories"], "纸杯": {**card["categories"]["纸杯"], "cupSizes": {}}}},
+            {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"], "formParts": []}}},
+            {**card, "categories": {**card["categories"], "联单": {**card["categories"]["联单"],
+                                                                   "family": "booklet"}}},
+            {**card, "categories": {**card["categories"], "PVC": {**card["categories"]["PVC"],
+                                                                  "quantityTiers": [{"upTo": None, "perUnit": "0.2"},
+                                                                                    {"upTo": 49, "perUnit": "0.35"}]}}},
+            {**card, "categories": {**card["categories"], "PVC": {**card["categories"]["PVC"],
+                                                                  "quantityTiers": [{"upTo": 49, "perUnit": "0.35"},
+                                                                                    {"upTo": 10, "perUnit": "0.2"},
+                                                                                    {"upTo": None, "perUnit": "0.1"}]}}},
+            {**card, "categories": {**card["categories"], "PVC": {**card["categories"]["PVC"],
+                                                                  "imposition": {"perSheetUp": 0, "sheetWidthMm": "600",
+                                                                                 "sheetHeightMm": "400",
+                                                                                 "sheetName": "大纸",
+                                                                                 "sourceId": "synthetic-source"}}}},
+        ]
+        for index, broken in enumerate(cases):
+            with self.subTest(case=index):
+                with self.assertRaises(ValueError):
+                    validate_rate_card(broken)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-PRICING_SCHEMA_VERSION = "2.0"
+PRICING_SCHEMA_VERSION = "3.0"
 CENT = Decimal("0.01")
 DISCLAIMER = "示例价格参数表仅用于本地参考估算，不构成供应商报价；实际以供应商回复为准。"
 # The engine only publishes illustrative, hand-maintained reference figures.
@@ -45,7 +45,10 @@ def rate_basis(card: dict[str, Any]) -> dict[str, Any]:
 def validate_rate_card(card: dict[str, Any]) -> None:
     required = ("rateCardId", "version", "region", "currency", "unitSystem",
                 "sourceType", "sourceDescription", "effectiveFrom", "expiresAt",
-                "confidence", "enteredBy", "taxBasis", "deliveryBasis", "categories")
+                "confidence", "enteredBy", "taxBasis", "deliveryBasis", "categories",
+                "schemaVersion")
+    if card.get("schemaVersion") != PRICING_SCHEMA_VERSION:
+        raise ValueError(f"rate card schemaVersion 必须为 {PRICING_SCHEMA_VERSION}")
     if not isinstance(card, dict) or any(key not in card for key in required):
         raise ValueError("rate card 缺少必需来源或版本字段")
     if card["currency"] != "CNY" or card["unitSystem"] != "mm":
@@ -108,18 +111,77 @@ def validate_rate_card(card: dict[str, Any]) -> None:
             raise ValueError(f"{name} 必须声明 requiredDrivers")
         validate_source(category, f"categories.{name}")
         if category.get("supported"):
-            if category.get("family") not in {"flat", "folded", "booklet", "box", "label", "display"}:
+            family = category["family"]
+            if family not in {"flat", "folded", "booklet", "box", "label", "display", "cup", "form"}:
                 raise ValueError(f"{name} 未声明可计算的品类成本驱动")
             if not isinstance(category.get("units"), list) or not category["units"] or any(
                     unit not in {"张", "份", "本", "个", "块", "套"} for unit in category["units"]):
                 raise ValueError(f"{name} 必须声明计数单位")
-            if not {"quantity", "dimensions", "material", "printing"}.issubset(category["requiredDrivers"]):
+            # Base drivers are order-supplied. The cup family prices a
+            # calibrated capacity band instead of a flat dimension.
+            base = {"quantity", "material", "printing"} | ({"dimensions"} if family != "cup" else {"cupSize"})
+            if not base.issubset(category["requiredDrivers"]):
                 raise ValueError(f"{name} 缺少基础成本驱动")
+            if family == "cup":
+                cup_sizes = category.get("cupSizes")
+                if not isinstance(cup_sizes, dict) or not cup_sizes:
+                    raise ValueError(f"{name} 必须声明 cupSizes 容量档")
+                for size_name, blank in cup_sizes.items():
+                    if (not isinstance(blank, dict) or not str(size_name).strip()
+                            or decimal_value(blank.get("blankAreaM2")) <= 0):
+                        raise ValueError(f"{name}.cupSizes.{size_name} 必须声明正数 blankAreaM2")
+            if family == "form":
+                parts = category.get("formParts")
+                if not isinstance(parts, list) or not parts or any(not str(item).strip() for item in parts):
+                    raise ValueError(f"{name} 必须声明 formParts 联数档")
+            if "boardThickness" in category["requiredDrivers"] or category.get("boardThicknesses") is not None:
+                thicknesses = category.get("boardThicknesses")
+                if not isinstance(thicknesses, dict) or not thicknesses:
+                    raise ValueError(f"{name} 必须声明 boardThicknesses 板厚档")
+                for thickness, spec in thicknesses.items():
+                    if (not isinstance(spec, dict) or not str(thickness).strip()
+                            or decimal_value(spec.get("materialFactor")) <= 0):
+                        raise ValueError(f"{name}.boardThicknesses.{thickness} 必须声明正数 materialFactor")
             for key in ("minimumTotal", "packingPerUnit", "wasteFactor"):
                 if decimal_value(category.get(key)) < 0:
                     raise ValueError(f"{name}.{key} 不能为负数")
             if decimal_value(category["wasteFactor"]) < 1:
                 raise ValueError(f"{name}.wasteFactor 不能低于1")
+            # Card-side cost components (schema 3.0). They add cost lines, not
+            # order-supplied drivers, so they never enter requiredDrivers.
+            imposition = category.get("imposition")
+            if imposition is not None:
+                per_sheet_up = imposition.get("perSheetUp")
+                if (not isinstance(imposition, dict) or isinstance(per_sheet_up, bool)
+                        or not isinstance(per_sheet_up, int) or per_sheet_up < 1
+                        or decimal_value(imposition.get("sheetWidthMm")) <= 0
+                        or decimal_value(imposition.get("sheetHeightMm")) <= 0
+                        or not str(imposition.get("sheetName") or "").strip()):
+                    raise ValueError(f"{name}.imposition 必须声明每张出成品数、大纸尺寸与 sheetName")
+                validate_source(imposition, f"{name}.imposition")
+                if family == "booklet":
+                    raise ValueError(f"{name}.imposition 与书刊封面分开计料不兼容")
+            batch = category.get("batchSetup")
+            if batch is not None:
+                if not isinstance(batch, dict) or decimal_value(batch.get("amount")) < 0:
+                    raise ValueError(f"{name}.batchSetup 必须声明非负 amount")
+                validate_source(batch, f"{name}.batchSetup")
+            tiers = category.get("quantityTiers")
+            if tiers is not None:
+                if not isinstance(tiers, list) or not tiers:
+                    raise ValueError(f"{name}.quantityTiers 必须为非空数组")
+                previous: int | None = 0
+                for index, tier in enumerate(tiers):
+                    if not isinstance(tier, dict) or decimal_value(tier.get("perUnit")) < 0:
+                        raise ValueError(f"{name}.quantityTiers[{index}] 必须为含非负 perUnit 的对象")
+                    up_to = tier.get("upTo")
+                    if up_to is None and index != len(tiers) - 1:
+                        raise ValueError(f"{name}.quantityTiers 仅最后档允许 upTo 为空")
+                    if up_to is not None and (isinstance(up_to, bool) or not isinstance(up_to, int) or up_to <= 0):
+                        raise ValueError(f"{name}.quantityTiers[{index}].upTo 必须为正整数")
+                    if up_to is not None and previous is not None and up_to <= previous:
+                        raise ValueError(f"{name}.quantityTiers[{index}].upTo 必须严格递增")
+                    previous = up_to
     band = card.get("band", {})
     if not Decimal("0") < decimal_value(band.get("low")) <= 1 <= decimal_value(band.get("high")):
         raise ValueError("价格区间必须满足 0 < low <= 1 <= high")

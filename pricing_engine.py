@@ -20,7 +20,8 @@ DRIVER_LABELS = {"quantity": "数量（有效正整数和单位）", "dimensions
                  "pages": "页数（含封面）", "binding": "装订方式", "folding": "折页方式",
                  "boxStructure": "已标定盒型", "labelShape": "标签形状",
                  "adhesive": "标签胶型", "labelFormat": "标签交付形式（张装/卷装）",
-                 "install": "安装加工方式", "categoryRates": "此品类的成本参数"}
+                 "install": "安装加工方式", "categoryRates": "此品类的成本参数",
+                 "cupSize": "纸杯容量档", "formParts": "联单联数", "boardThickness": "板材厚度档"}
 
 
 def load_rate_card(path: str | Path | None = None) -> dict[str, Any]:
@@ -160,11 +161,25 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
             result["reason"] = "quantity_unit_incompatible"
             result["quantityValidation"] = {"receivedUnit": unit, "acceptedUnits": list(accepted_units), "converted": False}
         quantity = None
-    dims = _dimensions(order, family)
-    if dims:
-        covered.add("dimensions")
+    dims: tuple[Decimal, Decimal] | None = None
+    blank_area: Decimal | None = None
+    cup_size = str(specs.get("cupSize") or "")
+    if family == "cup":
+        # Cups price a calibrated capacity band: the blank area per cup is a
+        # hand-maintained rate-card fact, never inferred from a diameter.
+        blank = (category.get("cupSizes") or {}).get(cup_size)
+        if blank is not None:
+            covered.add("cupSize")
+            blank_area = decimal_value(blank["blankAreaM2"])
+        else:
+            missing.append(f"纸杯容量须为{' / '.join((category.get('cupSizes') or {}).keys())}；"
+                           f"收到“{cup_size or '未填写'}”，请确认实际容量，不自动换算")
     else:
-        missing.append("展开/刀模平面尺寸（mm）" if family in {"box", "folded"} else "成品平面尺寸（mm）")
+        dims = _dimensions(order, family)
+        if dims:
+            covered.add("dimensions")
+        else:
+            missing.append("展开/刀模平面尺寸（mm）" if family in {"box", "folded"} else "成品平面尺寸（mm）")
     material_text = normalize_print_term("paper", specs.get("labelMaterial") if family == "label" else specs.get("displayMaterial") if family == "display" else order.get("paper"))
     material = _paper(material_text, card)
     if material:
@@ -237,17 +252,49 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
             covered.add("install")
         else:
             unknown.append(f"安装加工未标定：{install or '未填写'}")
+    board_spec: dict[str, Any] | None = None
+    if family == "display" and "boardThickness" in required:
+        thickness_text = str(specs.get("boardThickness") or "")
+        board_spec = (category.get("boardThicknesses") or {}).get(thickness_text)
+        if board_spec is not None:
+            covered.add("boardThickness")
+        else:
+            unknown.append(f"板材厚度未标定：{thickness_text or '未填写'}")
+    form_parts = 0
+    if family == "form":
+        parts_text = str(specs.get("formParts") or "")
+        if parts_text in (category.get("formParts") or []):
+            covered.add("formParts")
+            form_parts = int(re.sub(r"\D", "", parts_text) or 0)
+        else:
+            unknown.append(f"联单联数未标定：{parts_text or '未填写'}")
     core = {"quantity", "dimensions", "material", "printing"}
-    if not core.issubset(covered) or (family == "booklet" and "pages" not in covered) or not print_rate:
+    if family == "cup":
+        core = {"quantity", "cupSize", "material", "printing"}
+    if (not core.issubset(covered)
+            or (family == "booklet" and "pages" not in covered)
+            or (family == "form" and not form_parts)
+            or (family == "display" and "boardThickness" in required and board_spec is None)
+            or not print_rate):
         return finish("blocked")
-    width, height = dims
-    area = width * height / Decimal(1000000)
-    sheets = (pages / sides).to_integral_value(rounding=ROUND_CEILING) if family == "booklet" else Decimal(1)
+    if family == "cup":
+        width, height, area = None, None, blank_area
+        sheets = Decimal(1)
+    else:
+        width, height = dims
+        area = width * height / Decimal(1000000)
+        sheets = (Decimal(form_parts) if family == "form"
+                  else (pages / sides).to_integral_value(rounding=ROUND_CEILING) if family == "booklet" else Decimal(1))
     paper_area = quantity * area * sheets
     waste = decimal_value(category["wasteFactor"])
-    result["drivers"] = {"quantity": str(quantity), "unit": unit, "widthMm": str(width), "heightMm": str(height),
+    result["drivers"] = {"quantity": str(quantity), "unit": unit,
                          "areaM2PerSheet": str(area), "sheetsPerUnit": str(sheets), "printingSides": str(sides),
                          "pages": str(pages) if family == "booklet" else None, "printMode": mode, "wasteFactor": str(waste)}
+    if family == "cup":
+        result["drivers"]["cupSize"] = cup_size
+    else:
+        result["drivers"]["widthMm"] = str(width)
+        result["drivers"]["heightMm"] = str(height)
     rows = result["lineItems"]
 
     def add(code: str, name: str, amount: Decimal, basis: str, rate: dict[str, Any], qty: Decimal, rate_unit: str, unit_price: Decimal) -> None:
@@ -258,28 +305,52 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
         rows.append({"code": code, "name": name, "amount": money(amount), "basis": basis,
                      "quantity": str(qty), "unit": rate_unit, "unitPrice": str(unit_price), "rateSource": source})
 
-    def material_cost(text: str, parsed: tuple, usage: Decimal, code: str = "material") -> None:
+    def material_cost(text: str, parsed: tuple, usage: Decimal, code: str = "material",
+                      area_desc: str | None = None, factor: Decimal | None = None,
+                      apply_waste: bool = True) -> None:
         name, gsm, rate = parsed
-        amount_qty = usage * waste * gsm / 1000 if gsm is not None else usage * waste
+        effective_waste = waste if apply_waste else Decimal(1)
+        amount_qty = usage * effective_waste * gsm / 1000 if gsm is not None else usage * effective_waste
+        if factor is not None:
+            amount_qty *= factor
         price = decimal_value(rate.get("perKg", rate.get("perM2")))
+        desc = area_desc or f"{width}×{height} mm"
+        loss = f"损耗 {waste}" if apply_waste else "整张开料未另计损耗"
         add(code, "封面材料成本" if code == "cover_material" else "材料成本", amount_qty * price,
-            f"{text}；{width}×{height} mm；用量 {usage} m² × 损耗 {waste}", rate, amount_qty, "kg" if gsm is not None else "m²", price)
+            f"{text}；{desc}；用量 {usage} m² × {loss}", rate, amount_qty, "kg" if gsm is not None else "m²", price)
 
     cover_text = normalize_print_term("coverPaper", str(specs.get("coverPaper") or ""))
     cover = _paper(cover_text, card) if cover_text else None
     if family == "booklet" and cover_text and not cover:
         unknown.append(f"封面材料未标定：{cover_text}")
-    if family == "booklet" and cover:
+    board_factor = decimal_value(board_spec["materialFactor"]) if board_spec else None
+    imp = category.get("imposition")
+    if imp:
+        # Imposed large-sheet stock is bought per whole sheet, so the sheet
+        # count carries the layout loss and wasteFactor does not stack on top.
+        sheet_area = (decimal_value(imp["sheetWidthMm"]) * decimal_value(imp["sheetHeightMm"])
+                      / Decimal(1000000))
+        big_sheets = (quantity * sheets / Decimal(imp["perSheetUp"])).to_integral_value(rounding=ROUND_CEILING)
+        assumptions.append("拼版按整张大纸开料计费，纸张损耗已含在开纸张数中，未另乘损耗系数。")
+        material_cost(str(material_text), material, big_sheets * sheet_area,
+                      area_desc=(f"拼版大纸 {imp['sheetName']} {imp['sheetWidthMm']}×{imp['sheetHeightMm']} mm"
+                                 f" 每张出 {imp['perSheetUp']} 个部分，共 {big_sheets} 张"),
+                      factor=board_factor, apply_waste=False)
+    elif family == "booklet" and cover:
         cover_area = quantity * area * (Decimal(4) / sides).to_integral_value(rounding=ROUND_CEILING)
         material_cost(str(material_text), material, max(Decimal(0), paper_area - cover_area))
         material_cost(cover_text, cover, cover_area, "cover_material")
     else:
-        material_cost(str(material_text), material, paper_area)
+        material_cost(str(material_text), material, paper_area, factor=board_factor)
     setup = decimal_value(print_rate["setup"])
     add("print_setup", "印刷准备费", setup, f"{mode}一次开机准备", print_rate, Decimal(1), "次", setup)
-    impressions = quantity * area * (pages if family == "booklet" else sides)
+    impressions = quantity * area * (pages if family == "booklet" else Decimal(form_parts) if family == "form" else sides)
     run_price = decimal_value(print_rate["perM2"]) * colors
     add("print_run", "印刷运行费", impressions * run_price, f"{printing}；计印面积 {impressions} m²", print_rate, impressions, "m²·面", run_price)
+    batch = category.get("batchSetup")
+    if batch:
+        amount = decimal_value(batch["amount"])
+        add("batch_setup", "批次开机费", amount, "专机批次开机，每单一次，与数量无关", batch, Decimal(1), "批", amount)
     finishes, _ = _processes(order.get("finishing"))
     if not order.get("finishing"):
         assumptions.append("未填写表面工艺，当前按无表面工艺模拟；新增工艺会重新计价。")
@@ -312,6 +383,13 @@ def estimate_order(order: dict[str, Any], *, rate_card: dict[str, Any] | None = 
         price = decimal_value(rate["perUnit"])
         add(f"binding:{process}", f"{process}后道费", decimal_value(rate["setup"]) + quantity * price,
             f"准备费 {rate['setup']} + {quantity} × {price}", rate, quantity, unit, price)
+    tier = next((entry for entry in (category.get("quantityTiers") or [])
+                 if entry.get("upTo") is None or quantity <= Decimal(entry["upTo"])), None)
+    if tier:
+        per_unit = decimal_value(tier["perUnit"])
+        add("tier_processing", "数量阶梯加工费", quantity * per_unit,
+            f"数量 {quantity} 落入{' ≤' + str(tier['upTo']) if tier.get('upTo') is not None else '不限量'}档；{quantity} × {per_unit}",
+            tier, quantity, unit, per_unit)
     pack = decimal_value(category["packingPerUnit"])
     add("packing", "常规包装费", quantity * pack, f"{quantity} × {pack}", category, quantity, unit, pack)
     # Sum rounded lines so the user can reproduce the displayed total exactly.
