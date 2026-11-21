@@ -80,3 +80,6 @@ yarn-error.log*
 # Local MCP ops panel state and one-off security-audit scratch (runtime only, never publish).
 .dsh-ops/
 _sec_audit/
+
+# ZCode plugin marker directories (session-local tool state).
+.video_agent/

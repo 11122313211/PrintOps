@@ -188,7 +188,7 @@ python3 tools/printops_local_host.py \
 | [文件管理](docs/FILE_MANAGEMENT.md) / [dsh 集成](docs/plan/dsh-print-agent.md) | 提交边界与可选集成。 |
 | [历史开发计划](docs/DEVELOPMENT_PLAN.md) / [开源选型](docs/OPEN_SOURCE_OPTIONS.md) | 设计参考；历史排期和任务卡不代表当前状态。 |
 
-v1.3.0 仍为候选基线；先完成本地订单闭环与独立验收。真实供应商接入已顺延至 v1.4+，需另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
+v1.4.0 仍为候选基线：18 个目录品类已全部具备条件计价能力，发布门槛（真实语料、真人走查）闭合前不声明稳定发布。真实供应商接入顺延至 v1.5+，需另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
 
 ## 贡献与许可证
 

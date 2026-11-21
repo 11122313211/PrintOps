@@ -18,11 +18,21 @@
 
 模型负责理解和解释，规则负责约束，工具负责执行，人负责核对和确认。当前导出不会自动发送供应商。
 
-## 当前阶段：v1.3.0 代码基线候选版
+## 当前阶段：v1.4.0 代码基线候选版
 
-`VERSION` 为 `1.3.0`（随发布收口 bump）。2026-10 共两轮改造：第一轮把订单、存储、计价与供应商协议分开——业务订单 2.0 视图统一 mm；SQLite/memory 实现统一 OrderStore；Decimal 计价引擎读取版本化 JSON；供应商通过 registry 扩展。第二轮即 1.3.0 四条主线，已全部落地。完整实现证据和未完成验收见 [IMPLEMENTATION_ACCEPTANCE](IMPLEMENTATION_ACCEPTANCE.md)，历史版本测试数字不作为当前结果。
+`VERSION` 为 `1.4.0`（随发布收口 bump）。1.4.0 三主线按 B → C → A 执行并全部落地：G03 项级否定语义（TD-23）、债务与卫生批量清偿（TD-07/12/13/17/18 加单条消息长度上限）、计价引擎 schema 3.0（纸杯/联单/PVC 解禁，18 类目录全部条件计价）；2026-11 的 CI 恢复与界面轮次折叠入同版。登记册未偿债务只剩 TD-24。发布门槛（真实脱敏语料 ≥20 例、8 人真人走查、真实 dsh/模型端到端）保持组织性阻断，本版不声明稳定发布，发布检查按预期失败。完整实现证据见 [IMPLEMENTATION_ACCEPTANCE](IMPLEMENTATION_ACCEPTANCE.md) 与 CHANGELOG，历史版本测试数字不作为当前结果。
 
-### 1.3.0 四条主线（已完成）
+### v1.4.0 三主线（已完成）
+
+- ✅ G03 项级否定（TD-23）：焦点短路让否定轮落到否定块，否定块清除前重读重建后的 items 列表；两条回归用例在修复前各自失败。
+- ✅ 债务与卫生：TD-12 分类退避、TD-13 改述后偿还（tool_call_log 有界环，审计红线不动）、TD-07 扫描形态补齐、`/api/chat` 消息长度上限、TD-18 安全模型入 ARCHITECTURE.md、TD-17 落地 RELEASING.md。
+- ✅ 计价 schema 3.0：family 枚举扩展 cup/form；订单侧驱动 cupVolume 容量档、paperParts 联数映射、boardThickness 板厚档；card 侧组件拼版大纸（整张开料不叠损耗）、批次开机费、数量阶梯加工费（档内累进保持数量单调性）；rate card `2026.12.01` 全 18 类条件计价 + 3 个新手算 golden 算例；blocked 原因透传 `reasonDetail`。
+
+### v1.3.0 历史基线（已归档）
+
+2026-10 两轮改造：第一轮把订单、存储、计价与供应商协议分开——业务订单 2.0 视图统一 mm；SQLite/memory 实现统一 OrderStore；Decimal 计价引擎读取版本化 JSON；供应商通过 registry 扩展。第二轮即 1.3.0 四条主线。
+
+#### 1.3.0 四条主线（已完成）
 
 - ✅ 内核技术债（TD-01/03/04/05）：`chat()` 拆为 `_planner_chat_turn()` + 有序 `INTENT_DISPATCH` 表驱动（7 路由意图 + 1 查询意图，`tests/test_intent_dispatch.py` 新增回归）；询价回退只认活跃状态（`QUOTE_ACTIVE_STATUSES`）；方案条目形状校验与状态项归一化守卫，坏数据自愈不再 500；高版本 state schema 加载 warning + 提示级 `state_version_newer`。
 - ✅ 知识复核与计价重标定：manifest 声明 90 天复核周期与下次复核日，`tools/knowledge_review.py` 离线门禁挂入 dev_check 非 `--quick` 路径；到期在订单响应注入提示级 `knowledge_review_due`；rate card 升版 `2026.11.01`（来源 `industry-standard-flow-2026-10` 全参数人工重推，golden 与算例手工重算），blocked 品类 7 → 3，`pricing_schema` confidence 收紧为枚举 `illustrative`。
@@ -130,11 +140,10 @@ v1.0.0 汇集 v0.9.x–v0.11.x 的全部代码成果：自然语言建单、可�
 - `/api/chat` 文本无长度上限（仅整体 1MB body 限制），应加单条消息长度校验。
 - 无打包/发布产物：依赖零安装是特色，但缺少 `pipx`/zipapp 交付与版本清单。
 
-## v1.4+ 顺延项（规划）
+## v1.5+ 顺延项（规划）
 
-1.3.0 明确顺延的工作，全部保持既有边界：
+1.3.0/1.4.0 明确顺延的工作，全部保持既有边界：
 
-- **计价引擎 schema 3.0**：拼版大纸、批次开机费、设备阶梯，以及纸杯/信封等三维品类驱动；当前纸杯、联单、PVC 展板三条例外 blocked 的原因都引用该规划，落地后随新 rate card 标定解禁。
 - **app.js 模块化拆分**：按 [path-02 前端模块化](plan/path-02-frontend-modularization.md) 的任务卡推进。
 - **供应商 sandbox/live 接入**：当前无授权，沿用下述原边界。
 - **真实语料与真人走查门槛**：保持组织性阻断，不视为候选版阻塞项；发布检查按预期失败，见 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md)。

@@ -8,11 +8,7 @@
 
 | 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| TD-02 | agent.py 多产品拆分路径 | 单产品阶段积累的 fieldMeta（provenance）在拆分为 items 时不迁移到 `items.{itemId}.*` 键，只在顶层键留存 | 项级置信度展示与路径 10 的徽标体系在"首条多产品消息"场景下缺数据 | 路径 7（S7-04）实现时一并评估迁移方案 | 未开始 |
-| TD-07 | tools/secret_scan.py | 模式仍以"形态匹配"为主，无法识别无前缀的自定义凭据（如 `Bearer xxx` 变量拼接） | 理论漏报 | 待排期（增加 Bearer/Authorization 头形态） | 未开始 |
-| TD-23 | agent.py chat() 焦点短路 + 否定块 | 带产品项焦点的"第1项不要300g铜版纸"因 focus-only 短路完全不生效；带已有焦点的"不要300g铜版纸"清两处 fieldMeta 但 item 值不清（否定块持有的 items 局部变量在 `_update_item` 重建列表后失效） | 项级否定取消材料在焦点场景丢语义 | 待排期（1.4 候选；G03 项级否定语义专项） | 未开始 |
 | TD-24 | perception_candidates.py 子句窗口 | 中文全角标点经 NFKC 展开后子句边界判断被跳过，多产品消息的 fieldMeta evidence quote 常退化为整句 | 依据抽屉原文摘录不够精确 | 待排期（低优先级；证据可追溯性打磨） | 未开始 |
-| TD-21 | agent.py `_set_field_meta` / paper 镜像 | 确认 `paper` 只解决 paper 冲突：镜像参数（如名片材质 `productSpecs.cardStock`）值同步但 fieldMeta/冲突不随确认升级，低置信替换后确认会留下一条未解决的镜像冲突 | 冲突面板残留一条"待确认"，需要用户再确认一次镜像字段 | 待排期（确认 paper 时对 linked spec 字段同步 `_set_field_meta`；1.4 候选） | 未开始 |
 
 ## B.2 行为一致性
 
@@ -26,19 +22,18 @@
 
 | 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| TD-12 | llm_adapter.py | 同步阻塞 20s×2、固定退避、last_error 共享 | 等待体验与并发正确性 | 路径 1/4 | 计划内 |
-| TD-13 | agent.py Memory | sessions 无限增长；`_db` 每操作新连接（无长连接池，本地可接受） | 存储膨胀 | 路径 4（S4-06） | 计划内 |
 | TD-14 | llm_adapter.py SSRF | 配置时校验与请求时之间存在 DNS 重绑定理论窗口 | 本地单机威胁模型内可接受 | 路径 9（S9-08） | 计划内 |
 | TD-15 | llm_config.json | Key 明文为默认存储 | 本机文件泄露即凭据泄露 | 路径 9（S9-06/07） | 计划内 |
 | TD-16 | server.py 静态白名单 | 目录白名单扩展后需保持"`/app/../server.py` 归一化 404"类测试常青 | 路径穿越回归 | 路径 2（S2-01） | 计划内 |
-| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-10-24 Mimosa deep 扫描（scan-2026-10-24T07-02-43，113 项）triage：83 项为 `reports/journey-webkit/**` Playwright trace viewer 第三方产物噪音（gitignored 测试工具，非源码）；30 项项目源码标记逐一核查——addMessage/renderMessageBody/journey.js:173 的 innerHTML 均走 markdown.js 白名单渲染器（先转义、仅白名单标签、链接限 http(s)/mailto，`test_markdown_render.py` 契约锁定），renderFieldList/renderToolStats 等为 textContent，querySelector→mongo-sort-injection 为启发式误报（仓库无 MongoDB），SSRF 指向 llm_adapter.py:1478 的用户配置模型端点请求（有 host 校验，残余窗口即 TD-14）。扫描 run status 为 inconclusive（动态派发致调用图不完整），不构成安全结论 | 扫描噪音长期存在，renderer 契约变更时需人工复查污点链 | 待排期（renderer 或渲染路径变更时重扫；考虑让扫描聚焦源码目录排除 reports/） | 已 triage |
+| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-10-24 Mimosa deep 扫描（scan-2026-10-24T07-02-43，113 项）triage：83 项为 `reports/journey-webkit/**` Playwright trace viewer third-party 产物噪音（gitignored 测试工具，非源码）；30 项项目源码标记逐一核查——addMessage/renderMessageBody/journey.js:173 的 innerHTML 均走 markdown.js 白名单渲染器（先转义、仅白名单标签、链接限 http(s)/mailto，`test_markdown_render.py` 契约锁定），renderFieldList/renderToolStats 等为 textContent，querySelector→mongo-sort-injection 为启发式误报（仓库无 MongoDB），SSRF 指向 llm_adapter.py:1478 的用户配置模型端点请求（有 host 校验，残余窗口即 TD-14）。扫描 run status 为 inconclusive（动态派发致调用图不完整），不构成安全结论 | 扫描噪音长期存在，renderer 契约变更时需人工复查污点链 | 待排期（renderer 或渲染路径变更时重扫；考虑让扫描聚焦源码目录排除 reports/） | 已 triage |
 
 ## B.4 文档与流程
 
-| 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-| TD-17 | README"GitHub 发布"章节 | 仍是手工 git 命令清单，未与 RELEASING.md 流程对齐 | 发布操作易出错 | 路径 8（S8-10 后统一改写指向） | 未开始 |
-| TD-18 | ARCHITECTURE.md | 未包含 v0.11.0 的令牌/白名单/SSRF 安全模型更新 | 架构文档滞后 | 随 v0.11.0 提交一并补 | 未开始 |
+（当前无未偿条目。）
+
+## B.5 已偿还债务（趋势记录）
+
+| 编号 | 原描述 | 偿还版本 | 备注 |
 
 ## B.5 已偿还债务（趋势记录）
 
@@ -59,7 +54,13 @@
 | TD-20 | 尺寸别名归一测试哈希顺序敏感偶发（PYTHONHASHSEED flaky） | 1.3.0 | `_update_order` 冲突记录循环改 `sorted(changed)` / `sorted(set(before)\|set(after))` 确定性顺序；测试按 `field == 'paper'` 定位目标冲突而非 `conflicts[-1]`；7 个 seed 复跑全绿。镜像确认残留另立 TD-21 |
 | TD-02 | 单产品依据拆分时不迁入 items 键，"首条多产品消息"项级依据缺失 | 1.3.0 后 | `_migrate_single_product_provenance` 按 mention 归属把顶层产品作用域依据原样迁入 `items.{itemId}.*`（只补空不降级、审计条目改名用重建副本）；同轮发现并修复重述品名拆出空壳重复项（一条消息 N 个产品恰 N 项）。MCP 低置信契约随迁移更新为项级路径 |
 | TD-21 | 确认 paper 不升级镜像品类参数的依据与冲突 | 1.3.0 后 | `_set_field_meta` 按 `paper_spec_key` 传播确认到镜像 spec 字段（同 source/置信/evidence，不重写镜像值），镜像冲突随确认一次解决；显式改过镜像字段时不传播 |
-| TD-20b | runtime_hardening 请求日志断言全量跑偶发双计数 | 1.3.0 后 | 共享 logger 混入其他测试后台流量；断言改按 `requestId={id}` 过滤后计数（该请求恰好记录一次），多 seed 全量验证 |
+| TD-20b | runtime_hardening 请求日志断言全量跑偶发双计数 | 1.3.0 后 | 共享 logger 混入其他测试后台流量；断言改按 `requestId={id}` 过滤后计数（该请求恰好登记一次），多 seed 全量验证 |
+| TD-23 | 项级否定在焦点场景丢语义（短路吞否定 + 否定写孤儿对象） | 1.4.0 | 焦点短路让否定轮落到否定块；否定块清除前重读重建后的 items 列表；`_clear_process_options` 传项索引。两条回归用例钉住（修复前各失败，修复后 7/7），多 seed 全绿 |
+| TD-07 | secret_scan 只识别带供应商前缀的凭据形态 | 1.4.0 | 增 Bearer 令牌与 Authorization 头取值两条模式；全仓扫描零新增命中；命中/放行两方向单测 |
+| TD-12 | planner 重试仅 2 次、固定 80ms 退避 | 1.4.0 | 按错误类别退避：429 指数（0.5s×2^n）、其余可重试 5xx 线性、网络错误指数；全部仍走 deadline_sleep，MAX_ATTEMPTS 不变 |
+| TD-13 | 原描述"Memory sessions 无限增长"已失效；实际无界增长点是 SQLite tool_call_log（建表注释明示 no retention pruning） | 1.4.0 | Memory 已是 OrderStore 门面且 state 内有界（消息 80/run 历史 20/候选 128）；tool_call_log 改为 TOOL_CALL_LOG_DISK_LIMIT=5000 有界环（插入与初始化时清理），audit_log/order_events 按 preserve_audit 红线一行不动 |
+| TD-17 | 原描述"README GitHub 发布章节未对齐"已失效（README 已无该章节）；实际是发布操作手册缺失 | 1.4.0 | 新建 docs/RELEASING.md（文档收口、门禁、打标签、Release 资产与 SHA256SUMS、发布后事项），README 贡献节链接之 |
+| TD-18 | ARCHITECTURE.md 未包含 v0.11.0 起的安全模型 | 1.4.0 | 新增"本地安全模型"节：令牌鉴权、同源约束、静态白名单、SSRF 校验与 TD-14 残余窗口、WAL 隔离自愈、Key 明文提醒、限流未做如实标注 |
 
 ## B.6 登记流程
 
