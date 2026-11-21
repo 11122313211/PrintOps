@@ -12,10 +12,12 @@ from typing import Any
 PRICING_SCHEMA_VERSION = "3.0"
 CENT = Decimal("0.01")
 DISCLAIMER = "示例价格参数表仅用于本地参考估算，不构成供应商报价；实际以供应商回复为准。"
-# The engine only publishes illustrative, hand-maintained reference figures.
-# Tightening this to a closed enum keeps a future "market price" relabel from
-# sneaking in through the schema instead of through an explicit redesign.
-CONFIDENCE_LEVELS = ("illustrative",)
+# Closed enum, extended only through explicit redesign. "illustrative" covers
+# the hand-maintained baseline rates the engine computes from; "market-listed"
+# (2026-11-21, alongside the reference release tier) marks 公开挂牌参考价
+# source records — publicly listed, unlogged prices that are neither deal
+# prices nor authorized supplier quotes, carried as calibration evidence.
+CONFIDENCE_LEVELS = ("illustrative", "market-listed")
 
 
 def decimal_value(value: Any) -> Decimal:

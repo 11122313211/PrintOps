@@ -47,6 +47,12 @@ KNOWLEDGE_MANIFEST: dict[str, Any] = {
             "title": "示例价格参数表",
             "scope": "estimate_price 的量级参考（对应 rate card 来源 industry-standard-flow-2026-10）；基数为按通用工艺流程人工构造的示例数据，不构成任何供应商实价",
         },
+        {
+            "id": "sd2000-listed-2026-11-21",
+            "title": "盛大印刷公开挂牌参考价实测记录",
+            "url": CATALOG_SOURCE,
+            "scope": "参考版市场参考价标定来源（对应 rate card 来源 sd2000-listed-2026-11-21）：产品详情页未登录挂牌价实测，覆盖名片/PVC展板/宣传单/不干胶/骑马订画册/卡盒六品类数量阶梯、工艺轴与口径实验；公开挂牌参考价非成交价、非供应商授权报价，证据与逐条口径见 docs/plan/sd2000-price-probe-2026-11-21.md",
+        },
     ],
     "dimensionDefinitions": {
         "size": {"label": "成品尺寸", "kind": "finished_2d", "unit": "mm", "requiresConfirmation": True},

@@ -1,12 +1,12 @@
 {
   "schemaVersion": "3.0",
   "rateCardId": "cn-local-reference",
-  "version": "2026.12.01",
+  "version": "2026.12.02",
   "region": "CN-reference-only",
   "currency": "CNY",
   "unitSystem": "mm",
   "sourceType": "local_reference",
-  "sourceDescription": "开发用示例成本表，未采集供应商实价，不能作为市场价格依据",
+  "sourceDescription": "双口径参考表：计算基率为人工构造的 illustrative 示例参数（非供应商实价）；另按参考版发布层级收录公开挂牌参考价来源（非成交价、非供应商授权报价），见 sources 与各品类 marketReference",
   "effectiveFrom": "2026-10-24",
   "expiresAt": "2027-10-31",
   "confidence": "illustrative",
@@ -29,6 +29,14 @@
       "effectiveFrom": "2026-10-01",
       "region": "CN-reference-only",
       "confidence": "illustrative",
+      "isSupplierPrice": false
+    },
+    "sd2000-listed-2026-11-21": {
+      "description": "公开挂牌参考价：sd2000.com（盛大印刷，河南永城）产品详情页未登录挂牌价，2026-11-21 Computer Use 真实浏览器实测（非爬虫）。口径=自助网络下单价（人工接线价 +4~11%），不含目的地运费（发货地未选照常出价、运费栏空置），含税与否未验证；名片 90×54 精品盒包装为平台强制工艺。覆盖名片/PVC展板/宣传单/不干胶/骑马订画册/卡盒六品类数量阶梯与工艺轴，证据与逐条口径见 docs/plan/sd2000-price-probe-2026-11-21.md",
+      "enteredBy": "printops-maintainer",
+      "effectiveFrom": "2026-11-21",
+      "region": "CN-market-listed-sd2000",
+      "confidence": "market-listed",
       "isSupplierPrice": false
     }
   },
@@ -57,7 +65,20 @@
       "units": [
         "张"
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "90×54mm 铜版纸350克 双面彩色 直角 精品盒包装（平台强制，不可取消）",
+        "shape": "linear",
+        "points": [
+          {"quantity": 200, "listedTotal": "10.00", "unitPrice": "0.050"},
+          {"quantity": 400, "listedTotal": "20.00", "unitPrice": "0.050"},
+          {"quantity": 600, "listedTotal": "30.00", "unitPrice": "0.050"},
+          {"quantity": 800, "listedTotal": "40.00", "unitPrice": "0.050"},
+          {"quantity": 1000, "listedTotal": "50.00", "unitPrice": "0.050"}
+        ],
+        "notes": "短版区间纯线性 0.05 元/张，无开机费无档位折扣；单面实测与双面同价（印面系数=1）；人工接线单价 +10%；重量 200张=0.3kg / 1000张=1.7kg"
+      }
     },
     "单页": {
       "supported": true,
@@ -76,7 +97,17 @@
         "张",
         "份"
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "宣传单：市场128克铜版(110克) 大度16开210×285 双面不同 彩色 默认打包",
+        "shape": "tiered",
+        "points": [
+          {"quantity": 500, "listedTotal": "55.00", "unitPrice": "0.110"},
+          {"quantity": 1000, "listedTotal": "85.00", "unitPrice": "0.085"}
+        ],
+        "notes": "折合单价随量缓降（500→1000 边际 0.06 元/张）；数量阶梯模型；截稿 18:00；重量 500张=3.3kg / 1000张=6.6kg；单页/海报变体未采"
+      }
     },
     "数码印刷": {
       "supported": true,
@@ -176,7 +207,17 @@
         "本",
         "份"
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "骑马订画册：285×210mm 24P 封皮铜版纸250克单面哑膜+内页铜版纸157克双面彩色 传统胶印",
+        "shape": "batch-setup-dominant",
+        "points": [
+          {"quantity": 100, "listedTotal": "944.00", "unitPrice": "9.44"},
+          {"quantity": 500, "listedTotal": "1405.00", "unitPrice": "2.81"}
+        ],
+        "notes": "制版费摊薄主导（100→500 本总价仅 +49%）；印刷类型轴：100 本时高质量喷墨 505/激光 540 低于胶印 944，500 本时胶印 1405 反超喷墨 2425——数字/胶印交叉点在 100~500 本；截稿 18:30；起订 10 本（平台）vs PrintOps display/booklet MIN_QUANTITY 差异记录在案"
+      }
     },
     "吊牌": {
       "supported": true,
@@ -235,7 +276,17 @@
       "supportedStructures": [
         "折叠盒",
         "飞机盒"
-      ]
+      ],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "卡盒（折叠纸盒·白卡纸盒）：普通扣底盒 白卡纸350克 100×80×60mm 单面彩色 胶印 哑膜[单面] 标准刀版 粘盒 起订500个",
+        "shape": "batch-setup-dominant",
+        "points": [
+          {"quantity": 500, "listedTotal": "308.00", "unitPrice": "0.616"},
+          {"quantity": 5000, "listedTotal": "1623.00", "unitPrice": "0.3246"}
+        ],
+        "notes": "强规模效应：10 倍量→5.3 倍价（边际 0.292 元/个），刀版/开机摊薄主导；期货服务=工期换价格（延期1天 500个 -6 元 / 5000个 -32 元，约 -2%）；尺寸约束：成品高度<60mm 无法机器粘盒需手工粘；截稿 18:00；重量 500个=13.2kg / 5000个=131.7kg"
+      }
     },
     "信封封套": {
       "supported": true,
@@ -300,7 +351,19 @@
         "张",
         "个"
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "不干胶（胶印合版）：品质款 90×54 正常四色 模切[刀版相同][圆角R5] 起订100张",
+        "shape": "base-plus-marginal",
+        "points": [
+          {"quantity": 100, "listedTotal": "9.20", "unitPrice": "0.092"},
+          {"quantity": 200, "listedTotal": "10.50", "unitPrice": "0.0525"},
+          {"quantity": 1000, "listedTotal": "16.00", "unitPrice": "0.016"},
+          {"quantity": 2000, "listedTotal": "32.00", "unitPrice": "0.016"}
+        ],
+        "notes": "重前置基础费+超低边际（100→200 边际 1.30 元；≥1000 后严格线性 0.016 元/张），合版拼版共享经济学；印刷类型轴：合版×1 / 激光碳粉·得世喷墨×2.7（一张起印）/ 胶印专版×50（制版费主导）；截稿随数量档 12:00→18:00；数码模切为激光镭刻有边缘黄边"
+      }
     },
     "海报": {
       "supported": true,
@@ -370,7 +433,18 @@
         {"upTo": 199, "perUnit": "0.35"},
         {"upTo": null, "perUnit": "0.25"}
       ],
-      "supportedStructures": []
+      "supportedStructures": [],
+      "marketReference": {
+        "sourceId": "sd2000-listed-2026-11-21",
+        "basis": "展板（PVC雪弗板）：0.9×0.6米 户内背胶 单面 四色喷印 覆亮膜 裁切直角 覆3MMPVC板 瓦楞纸箱打包 起订1张",
+        "shape": "base-plus-marginal",
+        "points": [
+          {"quantity": 1, "listedTotal": "18.00", "unitPrice": "18.00"},
+          {"quantity": 2, "listedTotal": "30.00", "unitPrice": "15.00"},
+          {"quantity": 5, "listedTotal": "68.00", "unitPrice": "13.60"}
+        ],
+        "notes": "非线性：边际≈12.5 元/张+小额固定，首张单价显著高；板厚灵敏度：覆5MM/覆3MM=1.235（5张 84 vs 68，+3.2 元/张）；板厚档 3/4.5高密/5/7.5/8.5/1CM高密 MM；截稿 11:30（品类间不同）；单张带包装 6.7kg 运费敏感；平台起订 1 张 vs 本卡 MIN_QUANTITY=100"
+      }
     },
     "联单": {
       "supported": true,

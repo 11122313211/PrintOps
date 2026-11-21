@@ -459,5 +459,57 @@ class PricingSchema3ComponentTest(unittest.TestCase):
                     validate_rate_card(broken)
 
 
+class MarketReferenceCardTest(unittest.TestCase):
+    """参考版门槛与随卡 marketReference 记录的契约（2026-11-21 标定）。"""
+
+    def setUp(self):
+        self.card = load_rate_card()
+
+    def test_card_carries_the_market_listed_source(self):
+        source = self.card["sources"]["sd2000-listed-2026-11-21"]
+        self.assertEqual(source["confidence"], "market-listed")
+        self.assertIs(source["isSupplierPrice"], False)
+        self.assertIn("公开挂牌参考价", source["description"])
+        self.assertIn("sd2000-price-probe-2026-11-21.md", source["description"])
+
+    def test_reference_tier_gate_passes_on_the_shipped_card(self):
+        # 复用 evaluate_agent 的参考档检查，保证两档门槛与实卡一致。
+        spec = importlib.util.spec_from_file_location(
+            "evaluate_agent", Path(__file__).resolve().parents[1] / "tests/evaluate_agent.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        ok, detail = module.market_reference_verdict()
+        self.assertTrue(ok, detail)
+
+    def test_every_market_reference_block_is_wellformed(self):
+        shapes = {"linear", "base-plus-marginal", "tiered", "batch-setup-dominant"}
+        expected_categories = {"名片", "单页", "标签", "画册", "PVC", "包装盒"}
+        found = set()
+        for name, category in self.card["categories"].items():
+            block = category.get("marketReference")
+            if block is None:
+                continue
+            found.add(name)
+            with self.subTest(category=name):
+                self.assertEqual(block["sourceId"], "sd2000-listed-2026-11-21")
+                source = self.card["sources"][block["sourceId"]]
+                self.assertEqual(source["confidence"], "market-listed")
+                self.assertIn(block["shape"], shapes)
+                self.assertGreaterEqual(len(block["points"]), 2)
+                previous = None
+                for point in block["points"]:
+                    quantity = point["quantity"]
+                    self.assertIsInstance(quantity, int)
+                    self.assertGreater(quantity, 0)
+                    if previous is not None:
+                        self.assertGreater(quantity, previous)
+                    previous = quantity
+                    self.assertGreater(Decimal(point["listedTotal"]), Decimal("0"))
+                    self.assertGreater(Decimal(point["unitPrice"]), Decimal("0"))
+                self.assertTrue(str(block["basis"]).strip())
+                self.assertTrue(str(block["notes"]).strip())
+        self.assertEqual(found, expected_categories)
+
+
 if __name__ == "__main__":
     unittest.main()

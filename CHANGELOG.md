@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - 2026-11-21（参考版发布层级与市场参考价标定）
+
+- **发布门槛拆分稳定/参考两档**：`tests/evaluate_agent.py --release-gate` 新增 `--tier {stable,reference}`（默认 stable 行为一字不变）。参考版三项条件：合成门禁全绿（同一套 ≥90%/≥80% 阈值）+ 活动 rate card `sources` 含"公开挂牌参考价"来源（`confidence: "market-listed"` 或来源描述注明）+ 固定边界声明输出（估算非报价；挂牌参考价非成交价非供应商授权报价；自测走查非独立真人验证；真实语料如实标注）。真实语料缺失/不足在参考档不阻断但原样报告，**语料格式无效仍阻断**；`--json` 增 `releaseTier`/`marketReferenceVerdict`/`referenceBoundaryNotice`。新增 7 项测试（verdict + 两档退出码方向 + stable 不回归）。
+- **rate card 公开挂牌参考价标定（schema 3.0 显式扩展）**：`CONFIDENCE_LEVELS` 由闭合单值扩为 `("illustrative", "market-listed")`（对应既有注释要求的显式 redesign，非静默改标签）。活动卡 `rate_cards/cn-local-reference.json` 增来源 `sd2000-listed-2026-11-21`（sd2000.com 未登录挂牌价 2026-11-21 Computer Use 实测，自助下单口径、不含目的地运费、非成交价非授权报价），六个品类（名片/单页/标签/画册/PVC/包装盒）增 `marketReference` 参照块：实测数量阶梯、形态判定（linear / base-plus-marginal / tiered / batch-setup-dominant，与 schema 3.0 驱动选型对应）与工艺轴灵敏度（印面系数=1、板厚 5MM/3MM=1.235、印刷类型 合版×1/数字×2.7/专版×50、数字/胶印交叉点 100~500 本、期货延期 1 天约 -2%）。**计算基率一字未动**——estimate 数值与既有 golden 全部不变；卡 version `2026.12.01`→`2026.12.02`，worked examples 同步。
+- **知识复核挂接**：知识 manifest 增来源 `sd2000-listed-2026-11-21`（复核周期 90 天 ride 既有 knowledge_review，`lastReviewed=2026-11-21`）；采集证据落盘 `docs/plan/sd2000-price-probe-2026-11-21.md`（6 品类阶梯 + 口径对照实验：名片精品盒包装强制不可剥离、挂牌价不含目的地运费），标定口径与季度复核流程见 `docs/plan/market-rate-intake-template.md`。
+- **验收**：`--release-gate --tier reference` 在标定后的实卡上退出码 0（标定前 1）；dev_check 六步全绿（含新增测试）；Mimosa deep 重扫（scan-2026-11-21T11-58-04.423Z，114 项，seal sha256:2e62afc9…）未引入新入口，结论已记入 TD-22。
+
 ## Unreleased - 2026-11-21（恢复 CI）
 
 - **恢复 GitHub Actions CI，与本机共用同一条门禁**：2026-09-08 `b0d5b06` 时 Windows runner 的 socket 类单测连续失败（4 次 CI 全红：ubuntu 全绿，windows Python 3.9/3.12 均停在 Unit tests），随后 `e8f5bd9` 移除 CI 改为本机 `tools/dev_check.py` 检查；2026-10-23 的 Windows 兼容修复（SQLite 文件锁、连接排空/RST、408 语义、WSAEINTR 中断写、WinError 5 配置写入根因）落地后，本机 Windows（Python 3.14）复跑 556 项单测全绿（含默认运行的 socket 级 HTTP 测试），恢复条件已具备。新增 `.github/workflows/ci.yml`：push/PR 触发，`windows-latest`（3.9/3.14）与 ubuntu（3.14 跑 `ubuntu-latest`，3.9 固定 `ubuntu-22.04`——24.04 runner 无 Python 3.9 可装）共四组合执行 `python tools/dev_check.py`（编译 + 单测 + 评测 + 知识复核 + secret_scan + repo_guard），零新增 CI 专属脚本；dev_check 自带 `PYTHONUTF8=1` 与 UTF-8 流重配，无需额外 CI 环境变量，job 级 `timeout-minutes: 15` 兜底。
