@@ -37,7 +37,7 @@
 触发：攻击者页面对 attacker.com:4174 做 DNS A 记录切换 → 浏览器同源 `fetch("/")` 读出注入 token → 以 token 调全部 API（导出订单、改设置、purge）。纯跨域 CSRF 已被 token 拦住（401），本链路破坏的是"读不到 token"前提。
 **修复建议**：`serve_static`（至少 index.html）加 Host 头白名单（仅 127.0.0.1/localhost/[::1] 带端口），一处小改即可闭合并让 D1 两处声明成立；补 rebinding 形态测试。
 
-### L1 LLM 请求跟随重定向且 Authorization 随跳
+### L1 LLM 请求跟随重定向且 Authorization 随跳（✅ 已修复 2026-11-22：进程级 _NoRedirect opener + 双服务器端到端测试，见 TD-27 偿还记录与 CHANGELOG Unreleased）
 
 证据：全部模型请求走 `urllib.request.urlopen` 默认 opener（`llm_adapter.py:389-392`）；Request 带 `Authorization: Bearer {key}`（`llm_adapter.py:1355-1360`，同形态还有能力探测 ：1539-1544、test_connection :1777-1780、探活 GET :1502-1507）；URL 私网校验只在配置时做一次（`_reject_private_host`，:34-88），重定向目标不复检；Python 默认 `HTTPRedirectHandler` 跟随 301/302/303（POST 转 GET）与 307/308，**Authorization 头跨主机保留**。
 触发：被劫持/恶意 OpenAI 兼容网关（或 http 明文中间人）302 → attacker.com 即收到 Bearer key；302 → 127.0.0.1:xxxx / 169.254.169.254 即绕过私网拦截做内网探测。

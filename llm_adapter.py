@@ -31,6 +31,28 @@ from request_runtime import (DeadlineExceeded, bounded_io, deadline_sleep,
                              operation_deadline, remaining)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """TD-27 (2026-11-22 security audit L1): never follow 3xx from gateways.
+
+    urllib's default redirect handler re-sends the Authorization header to
+    whatever host Location points at, and the private-host validation only
+    ever saw the original URL — a compromised gateway could exfiltrate the
+    API key or turn the client into an internal network oracle. Returning
+    None makes every 3xx surface as HTTPError, which the existing call sites
+    already treat as a hard failure (3xx is not in RETRYABLE_HTTP_CODES).
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# Process-wide install: every urlopen() call in this module refuses redirects
+# (the audit confirmed llm_adapter is the only urllib network caller in the
+# repo). Tests that patch urllib.request.urlopen are unaffected — they replace
+# the module attribute before the installed opener is ever consulted.
+urllib.request.install_opener(urllib.request.build_opener(_NoRedirect()))
+
+
 def _reject_private_host(hostname: str | None) -> None:
     """SSRF guard: reject hosts that resolve to loopback/private/reserved space.
 

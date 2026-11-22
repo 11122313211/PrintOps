@@ -61,7 +61,7 @@
 - **本地令牌鉴权**：启动时生成本地 token 并注入页面，除 `/api/health` 外全部接口要求 `X-PrintOps-Token`，缺失或错误一律 401；
 - **同源与 Host 约束**：带 `Origin` 的跨来源请求返回 403；Host 头白名单只接受环回名（`127.0.0.1`/`localhost`/`::1`，TD-26）——DNS rebinding 场景下 Origin 与 Host 同为攻击者域会绕过前一条比较，Host 白名单把页面与注入令牌一起钉在本机；第三方页面无法借用页面注入的令牌调用本地 API；
 - **静态白名单**：静态路由只放行 `/`（index.html）、`/app.js`、`/markdown.js`、`/workbench.js`、`/journey.js`、`/workcard.js` 与 `/styles.css`（`server.py` 的 `STATIC_FILES`），`/.git`、源码与数据文件一律 404；白名单在进程内存中，新增静态资源须重启服务；
-- **SSRF 校验**：LLM 配置 URL 在保存时校验主机，拒绝环回/私有/CGNAT/保留/链路本地地址（含解析后指向内网的域名）；无法解析的主机名放行、请求时自然失败。配置时校验与实际请求之间存在理论上的 DNS 重绑定窗口（TD-14），在单机威胁模型内可接受；
+- **SSRF 校验**：LLM 配置 URL 在保存时校验主机，拒绝环回/私有/CGNAT/保留/链路本地地址（含解析后指向内网的域名）；无法解析的主机名放行、请求时自然失败。请求全程禁用 3xx 跟随（TD-27）：重定向以 HTTPError 硬失败（不在重试集合），Authorization 不随跳转发往未校验主机。配置时校验与实际请求之间存在理论上的 DNS 重绑定窗口（TD-14），在单机威胁模型内可接受；
 - **SQLite 加固**：WAL 模式与 `busy_timeout`；损坏会话自动隔离备份到 `data/corrupted/` 后自愈，不阻塞启动；
 - **Key 明文提醒**：`/api/settings` 保存的 API Key 以明文 JSON 落盘（TD-15），设置面板与响应携带 `keyStorageWarning`；系统凭据库（keyring）方案仍在评估；
 - **未做**：接口限流（ROADMAP P1 排队项）；静态白名单与令牌的常青回归依赖 `tests/test_local_host.py` / `tests/test_http_handler.py`（TD-16）。

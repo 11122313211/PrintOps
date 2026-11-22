@@ -367,5 +367,78 @@ class PlannerPromptContractTest(unittest.TestCase):
         self.assertIn("字段路径", prompt)
 
 
+class RedirectRefusalTest(unittest.TestCase):
+    """TD-27（安全体检 L1）：网关返回 3xx 时绝不跟随——Authorization 不得
+    外发到 Location 指向的主机，私网校验也不得被重定向绕过。真实 socket
+    端到端：网关 302 → 第二台服务器必须收不到任何请求。"""
+
+    def test_plan_follows_no_redirect_and_never_reaches_location_target(self) -> None:
+        import http.server
+        import threading
+
+        hits: list[tuple[str, str]] = []
+
+        class _Redirector(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+                self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{self.server.target_port}/chat/completions")
+                self.end_headers()
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        class _Target(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+                self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
+                hits.append((self.command, self.headers.get("Authorization", "")))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                body = json.dumps({"choices": [{"message": {"content": "leaked"}}]}).encode("utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args) -> None:
+                pass
+
+        def _serve(handler):
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            server.listener_port = server.server_address[1]
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            return server
+
+        redirector = _serve(_Redirector)
+        target = _serve(_Target)
+        redirector.target_port = target.listener_port
+        try:
+            planner = OpenAICompatiblePlanner(
+                f"http://127.0.0.1:{redirector.listener_port}", "test-key", "test-model",
+                allow_private_hosts=True)
+            plan = planner.plan("做 500 张名片", {}, TOOLS, [])
+        finally:
+            redirector.shutdown()
+            redirector.server_close()
+            target.shutdown()
+            target.server_close()
+
+        self.assertIsNone(plan, "重定向响应必须按硬失败处理而非跟随")
+        self.assertEqual(hits, [], "Authorization 头绝不能随 302 到达 Location 主机")
+        self.assertIn("302", planner.last_error)
+        self.assertNotIn("test-key", planner.last_error or "")
+
+    def test_installed_global_opener_refuses_redirects(self) -> None:
+        """import llm_adapter 即安装禁重定向 opener（进程级 TD-27 保证）。"""
+        import urllib.request
+
+        import llm_adapter
+
+        installed = getattr(urllib.request, "_opener", None)
+        self.assertIsNotNone(installed, "llm_adapter 导入后必须已安装全局 opener")
+        self.assertTrue(
+            any(isinstance(handler, llm_adapter._NoRedirect) for handler in installed.handlers),
+            "全局 opener 必须包含 _NoRedirect 处理器")
+
+
 if __name__ == "__main__":
     unittest.main()
