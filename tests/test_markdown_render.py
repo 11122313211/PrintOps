@@ -160,6 +160,14 @@ CASES = [
         "contains": ["2 * 3 = 6"],
         "excludes": ["<em>"],
     },
+    {
+        # TD-28（安全体检 S7）：NUL 占位符可被输入字面量伪造——输入含 \u0000
+        # 时直接剥除，内部 stash token（\u0000N\u0000）不可能被外部消息冒充。
+        "name": "NUL 占位符伪造被剥除",
+        "input": "\u00001\u0000 hello \u00000\u0000 `code` [x](https://e.example)",
+        "contains": ["<p>1 hello 0 <code>code</code>"],
+        "excludes": ["\u0000", "leaked"],
+    },
 ]
 
 

@@ -37,6 +37,14 @@ SECRET_PATTERNS = {
     "Bearer 令牌": re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}"),
     "Authorization 头取值": re.compile(
         r"(?i)[\"']?authorization[\"']?\s*[:=]\s*[\"'][^\"']{15,}[\"']"),
+    # TD-28（安全体检 S8）：主流凭据形态补齐。PEM 私钥头一行即可判定；其余
+    # 各家前缀风格不同（下划线/连字符），逐家给显式模式而非泛化捕获。
+    "PEM 私钥": re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"),
+    "Stripe 密钥": re.compile(r"(?<![A-Za-z0-9_])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"),
+    "GitLab 令牌": re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),
+    "npm 令牌": re.compile(r"npm_[A-Za-z0-9]{30,}"),
+    "JWT 令牌": re.compile(r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+    "阿里云 AccessKey": re.compile(r"LTAI[A-Za-z0-9]{12,}"),
 }
 SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".zcode", ".mimosa",

@@ -123,6 +123,28 @@ class SecretScanTest(unittest.TestCase):
         self.assertFalse(secret_scan.scan_text('{"Authorization": f"Bearer {self.api_key}"}'))
         self.assertFalse(secret_scan.scan_text("Authorization: Bearer short"))
 
+    def test_audit_supplement_shapes_are_detected(self):
+        # TD-28（安全体检 S8）：PEM 头、Stripe/GitLab/npm/JWT/阿里云形态补齐。
+        # PEM 头在源码里拼装（完整字面量会被 secret_scan 本身命中）。
+        pem_head = "-----BEGIN " + "OPENSSH " + "PRIVATE" + " KEY" + "-----"
+        pem_rsa = "-----BEGIN " + "RSA " + "PRIVATE" + " KEY" + "-----"
+        samples = {
+            "PEM 私钥": pem_head + "\n",
+            "PEM 私钥 RSA": pem_rsa,
+            "Stripe 密钥": "sk_live_" + FILLER[:24],
+            "Stripe 令牌": "rk_live_" + FILLER[:24],
+            "GitLab 令牌": "glpat-" + FILLER[:24],
+            "npm 令牌": "npm_" + FILLER[:40],
+            "JWT 令牌": "eyJ" + FILLER[:30] + ".eyJ" + FILLER[:20] + "." + FILLER[:20],
+            "阿里云 AccessKey": "LTAI" + FILLER[:20],
+        }
+        for name, text in samples.items():
+            hits = self.scan({"file.txt": text})
+            self.assertTrue(hits, f"{name} 形态应被识别")
+        # 类似前缀但长度不足/非凭据语境不误报。
+        self.assertFalse(secret_scan.scan_text("sk_live_short"), "过短值不是凭据")
+        self.assertFalse(secret_scan.scan_text("describe eyJscheme labels"), "散列 eyJ 无 JWT 结构不误报")
+
     def test_designed_plaintext_key_file_does_not_trip_but_leaked_copies_do(self):
         secret = _fixture("openai")
         allowed = self.scan({"data/llm_config.json":

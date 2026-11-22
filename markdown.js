@@ -56,7 +56,12 @@
       tokens.push(html);
       return TOKEN + (tokens.length - 1) + TOKEN;
     };
-    let text = escapeHtml(source);
+    /* TD-28: strip NUL from external input — a literal "\u0000N\u0000" in a
+       message must never impersonate the internal stash tokens, which are
+       only ever generated below over already-escaped text. */
+    let text = escapeHtml(
+      String(source === null || source === undefined ? "" : source).replace(/\u0000/g, "")
+    );
     text = text.replace(/`([^`\n]+)`/g, (match, code) => stash("<code>" + code + "</code>"));
     text = text.replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (match, label, href) => {
       const url = safeUrl(href);
@@ -242,7 +247,9 @@
   }
 
   function render(source) {
-    const normalized = String(source === null || source === undefined ? "" : source).replace(/\r\n?/g, "\n");
+    const normalized = String(source === null || source === undefined ? "" : source)
+      .replace(/\r\n?/g, "\n")
+      .replace(/\u0000/g, "");
     if (!normalized.trim()) return "";
     return renderBlocks(normalized.split("\n")).join("");
   }
