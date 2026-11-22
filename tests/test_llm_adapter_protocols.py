@@ -373,16 +373,24 @@ class DeepResponseClassificationTest(unittest.TestCase):
     补齐后按"返回格式异常"分类，plan 硬失败降级而非异常外溢/500。"""
 
     def test_deeply_nested_model_response_is_a_format_error(self) -> None:
-        # 90k 层才在本机 C 扫描器上触发 RecursionError（3k 层会被正常解析成
-        # 嵌套列表、走"内容无法识别"路径）；180KB 在 2MB 响应上限之内。
-        deep_body = (("[" * 90000) + ("]" * 90000)).encode("utf-8")
+        # 实际触发 RecursionError 的深度取决于平台的 C 递归上限（3.13+ 按线程
+        # 栈大小推导，Linux 8MB 栈上 90k 层可被正常解析、走"内容无法识别"
+        # 分支），因此改用标记响应体让 json.loads 只在该调用点抛出受控
+        # RecursionError——钉住分类契约本身，不赌平台深度阈值。
+        real_loads = json.loads
+
+        def _deep_only_loads(text, *args, **kwargs):
+            if text == "PRINTOPS_DEEP_NESTED_BODY":
+                raise RecursionError("simulated deep nesting")
+            return real_loads(text, *args, **kwargs)
 
         class _DeepResponse(_Response):
             def __init__(self) -> None:
-                self._body = deep_body
+                self._body = b"PRINTOPS_DEEP_NESTED_BODY"
 
         planner = _planner()
-        with patch("llm_adapter.urllib.request.urlopen", return_value=_DeepResponse()):
+        with patch("llm_adapter.urllib.request.urlopen", return_value=_DeepResponse()), \
+                patch("json.loads", side_effect=_deep_only_loads):
             plan = planner.plan("做 500 张名片", {}, TOOLS, [])
         self.assertIsNone(plan)
         # 修复前 RecursionError（RuntimeError，非 ValueError 族）逃出捕获

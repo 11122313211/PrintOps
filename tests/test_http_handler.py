@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 from pathlib import Path
 
 import server
@@ -173,17 +174,29 @@ class HttpGateTest(unittest.TestCase):
 
     def test_deeply_nested_json_returns_400_not_500(self):
         # TD-28: RecursionError is a RuntimeError, not ValueError — before the
-        # fix it escaped read_json's except tuple and surfaced as a 500.
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        deep = b"[" * 60000 + b"]" * 60000
-        try:
-            connection.request("POST", "/api/settings", body=deep, headers={
-                "Content-Type": "application/json",
-                "X-PrintOps-Token": server.ACCESS_TOKEN})
-            response = connection.getresponse()
-            raw = response.read()
-        finally:
-            connection.close()
+        # fix it escaped read_json's except tuple and surfaced as a 500. The
+        # depth where the C parser actually raises is platform-dependent
+        # (3.13+ derives the limit from the thread stack size, so a Linux
+        # runner parses 60k nested levels fine), so the classification is
+        # pinned by making json.loads raise on a marker body instead of
+        # betting on a depth threshold.
+        real_loads = json.loads
+
+        def _deep_only_loads(raw, *args, **kwargs):
+            if raw in (b"PRINTOPS_DEEP_NESTED_BODY", "PRINTOPS_DEEP_NESTED_BODY"):
+                raise RecursionError("simulated deep nesting")
+            return real_loads(raw, *args, **kwargs)
+
+        with mock.patch("json.loads", side_effect=_deep_only_loads):
+            connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            try:
+                connection.request("POST", "/api/settings", body=b"PRINTOPS_DEEP_NESTED_BODY",
+                                   headers={"Content-Type": "application/json",
+                                            "X-PrintOps-Token": server.ACCESS_TOKEN})
+                response = connection.getresponse()
+                raw = response.read()
+            finally:
+                connection.close()
         self.assertEqual(response.status, 400)
         self.assertIn(b"INVALID_JSON", raw)
 
