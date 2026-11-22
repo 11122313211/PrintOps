@@ -106,7 +106,7 @@
 | 供应商协议 | `python3 -m unittest discover -s tests -p 'test_supplier_connectors.py'` | 20 项通过；全部为本地/mock/注入传输测试 |
 | 发布门槛逻辑 | `python3 -m unittest tests.test_real_corpus_eval -v` | 12 项通过，包含空/缺失/无效/不足语料阻断、准确率失败、合成回归失败及双门槛通过 |
 | 浏览器开发冒烟 | `npm run test:browser`；`reports/browser-smoke/report.json`，2026-10-16 复跑 | Chromium 12 项通过，0 跳过/失败/flaky；范围详见 `docs/BROWSER_SMOKE.md` |
-| 严格发布命令 | `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json` | 主流程最新运行：111 条合成案例，字段准确率 100%、完整率 93%；真实 verdict=pending；releaseGatePassed=false；退出码 1 |
+| 严格发布命令 | `PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json` | 主流程最新运行：123 条合成案例（含 12 例长尾，2026-11-22），字段准确率 100%、完整率 93%；真实 verdict=pending；releaseGatePassed=false；退出码 1（稳定档） |
 | 价格校准 CLI | 示例 CSV 输出至临时目录 | 1 桶、0 拒绝、0 过期、published=false；示例为人工构造 |
 | 真实语料 | 直接检查 `tests/eval_cases_real.json` | 0 例，发布门槛保持阻断 |
 | 业务 JSON Schema | Draft 2020-12 校验器（仅临时安装） | schema 合法；6 个空值/多产品/待确认/包装尺寸样例符合结构 |

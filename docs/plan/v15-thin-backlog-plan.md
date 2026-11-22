@@ -173,3 +173,21 @@ README.md:40 / README.en.md:40（GitHub 仓库名含"111"）；**五个文件内
 （123 = 55 手写 + 56 矩阵 + 12 长尾）。范围外现状句（如
 docs/plan/path-05-eval-quality.md:13、docs/IMPLEMENTATION_ACCEPTANCE.md:109
 "主流程最新运行：111 条"）留待 V5-03 收口时统一复核，本卡不越界改动。
+
+## V5-01 执行记录（2026-11-22）
+
+三件交付物全部落地（提交 bd8062c）：`tests/test_dual_track_equivalence.py` 10 组
+差分用例（等价面：15 订单标量字段 + dimensions/productSpecs + missingFields +
+workflowStage；白名单差异面逐项钉住）；提示词契约绊线 5 例 + `PLANNER_PROMPT_VERSION="1"`
+变更锚（llm_adapter.py +8 行，唯一产品代码改动）；`tools/compare_modes.py`
+CLI（--case-file/--out/--json/--baseline；KNOWN_DIVERGENCES 台账只许缩不许涨）。
+配套 tests/test_compare_modes.py 11 例。全套单测 611 项，3 种子复跑全绿，
+变异自证两轮红→恢复→绿（等价面剧本变异 + provenance 钉变异）。
+
+**产出分歧清单**：①估价意图两轨 workflowStage 不一致（recommend vs quote，
+call_tool 置态粘性）——超出白名单，登记 **TD-25** 待裁定，KNOWN_DIVERGENCES
+预登记 + 差分用例 2 单独钉住；②同值重述翻牌不对称（quantity 三键全翻 vs size
+派生字段保持 rule）——确认为有意设计，钉住；③planner 文字总结被强制工具作废
+——安全设计澄清；④capability/否定询价两轨消息"巧合级同串"——已钉防单侧漂移；
+⑤fieldMeta 差分必须走 {source, confidence} 稳定投影（runId/updatedAt 易变）。
+内置默认集等价面差异 1/190（0.53%），全部为预登记已知分歧。

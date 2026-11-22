@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.0 - 2026-11-22（参考版：双轨差分断言与长尾评测收口）
+
+v1.5 薄背包按 [v1.5 薄背包执行计划](docs/plan/v15-thin-backlog-plan.md) 执行，两卡当日落地；发布口径复用**参考版**层级（活动 rate card market-listed 来源不变，`--release-gate --tier reference` 退出码 0，稳定档保持组织性阻断）。
+
+1. **TD-08 双轨行为差分断言（V5-01）**：`tests/test_dual_track_equivalence.py` 10 组——同一句话规则轨与 LLM 轨（ScriptedPlanner 剧本）各跑一次 `chat()`，**等价面**（订单字段值/missingFields/workflowStage）必须一致，**白名单差异面**（fieldMeta 翻牌 model/0.68、消息文案不同源、toolReceipts 形态、planner 意图抢跑、size 派生字段不跟随翻转的不对称）逐项钉住；变异自证两轮红→恢复→绿。提示词契约绊线：`llm_adapter.py` 增 `PLANNER_PROMPT_VERSION = "1"` 变更锚（唯一产品代码改动，提示词字节零变化）+ `PlannerPromptContractTest` 5 例——JSON 输出形态/patch 白名单/工具规则/置信语义任一从 system prompt 丢失即红，"换提示词的影响"从静默漂移变为可见测试红。`tools/compare_modes.py` 差异报告 CLI（`--json`/`--baseline` 支持跨提示词版本对比；KNOWN_DIVERGENCES 台账只许缩不许涨；`--replay` 按计划有意收窄不实现）。
+2. **TD-10 长尾品类评测用例（V5-02）**：`_longtail_cases()` 12 例（tag=长尾）——纸杯容量档/内淋膜、喷画灯布平米/写真布视距、PVC卡 0.38mm 冲切/磁条、联单三联打号/四联、手提袋牛皮纸扁绳/白卡纸承重、异形标签枚计/万枚改张多轮；合成语料 111→**123 例全绿**（390/390 键，字段准确率 100%，完整率分母未动）；expected 只钉原话明确提到的字段，取值按品类 hint 口径 + 引擎探针实测；6 条话术口径勘误随 TD-09 评估（含"PVC异形冲切卡"品类边界缺口、手提袋"白卡"hint/提取器不一致），产品代码零改动。
+3. **登记册**：新债 TD-25（估价意图两轨 workflowStage 分歧：规则轨不置态 vs call_tool 置 "quote" 粘性，V5-01 发现，待裁定）；TD-08/TD-10 迁 B.5 趋势表（偿还版本 1.5.0）。
+4. **验收**：dev_check 六步全绿（611 项单测/123 例评测）；PYTHONHASHSEED=1/2/3 全量三次全绿；CI 四组合（windows/ubuntu × Python 3.9/3.14）在 V5-02（491054c）与 V5-01（bd8062c）提交上全绿；Mimosa deep 重扫十次均 114 项、无新 hypotheses、依赖零命中（末次 scan-2026-11-22T08-12-54.636Z，seal sha256:1037bac1…，覆盖 bd8062c，随本版收口提交记入 TD-22）。
+
 ## Unreleased - 2026-11-03（右栏卡片堆叠）
 
 - **订单草稿栏由通栏列表重塑为卡片堆叠**：右栏自身改为纵向 flex（块间距统一由 gap 驱动），上传区、三张填写组（概览/规格/工艺）、待处理清单、供应商接口、询价全部成为独立卡片——纸底 + 1px --rule 描边 + --radius-md 圆角 + --shadow-hard 印刷偏移阴影；hairline 通栏分隔线（`.draft-groups` border-top、`.draft-group` border-bottom）删除。填写组走表面阶梯：闭卡 --paper-light → 悬停弹簧上浮 1px（--ease-spring-fine）→ 展开 --paper-raise + --shadow-soft + 边加深（"open = lift, not color"）；summary 按压微缩放（scale .99）。待处理清单/询价保留金/黄铜语义左竖线并并入同一卡签名；`estimate-panel`（中栏）样式拆分不受影响。

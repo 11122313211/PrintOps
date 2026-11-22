@@ -19,7 +19,7 @@ PrintOps 刻意保持轻量。动手前请先读“核心约束”，它们比�
 ## 开发循环
 
 ```bash
-python3 tools/dev_check.py           # 编译 + 556 项单测 + 评测 + knowledge_review + secret_scan + repo_guard
+python3 tools/dev_check.py           # 编译 + 611 项单测 + 评测（123 例） + knowledge_review + secret_scan + repo_guard
 python3 tools/dev_check.py --quick   # 只跑编译与守护（快速回路）
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json   # 发布门槛（真实语料不足时必须失败）
 ```

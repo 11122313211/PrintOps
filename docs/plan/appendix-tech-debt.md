@@ -14,9 +14,7 @@
 
 | 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| TD-08 | nlu.py vs LLM 双轨 | 同一句话两轨行为差异未固化断言（换提示词/模型的影响不可知） | 模型变更风险不可见 | 路径 5（S5-07） | 计划内 |
 | TD-09 | product_knowledge.py | 行业风险规则缺口：折页压痕线、深色实底折痕爆裂、专色配置说明（ROADMAP v0.9.x 遗留） | 行业专业性不足 | 待排期（v0.14 知识专项；依赖可溯源来源） | 未开始 |
-| TD-10 | 评测语料 | 长尾品类（纸杯/喷画/PVC/联单/手提袋/异形标签）用例薄 | 品类回归盲区 | 路径 5（S5-06） | 计划内 |
 | TD-25 | agent.py call_tool estimate_price 分支 vs _handle_price | 估价意图两轨 workflowStage 不一致：规则轨 _handle_price 不置工作流态（停在 recommend），planner 轨 call_tool 的 estimate_price 分支置 "quote"（对 preflight/quote/export 粘性），同订单同估算区间信封工作流态不同 | 切换 planner 前后 UI 阶段语义漂移 | 待裁定（V5-01 差分断言发现，tools/compare_modes.py KNOWN_DIVERGENCES 已预登记；方向：规则轨同步置 quote，或确认 call_tool 置态为 planner 轨特有语义） | 未开始 |
 
 ## B.3 运行与安全
@@ -26,7 +24,7 @@
 | TD-14 | llm_adapter.py SSRF | 配置时校验与请求时之间存在 DNS 重绑定理论窗口 | 本地单机威胁模型内可接受 | 路径 9（S9-08） | 计划内 |
 | TD-15 | llm_config.json | Key 明文为默认存储 | 本机文件泄露即凭据泄露 | 路径 9（S9-06/07） | 计划内 |
 | TD-16 | server.py 静态白名单 | 目录白名单扩展后需保持"`/app/../server.py` 归一化 404"类测试常青 | 路径穿越回归 | 路径 2（S2-01） | 计划内 |
-| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-11-21 Mimosa deep 重扫（scan-2026-11-21T09-54-25.592Z，114 项，seal sha256:921c095d…）：与 2026-10-24 基线（113 项）同量级，TD-23 渲染路径修复与 journey.js ERROR_TEXTS 增项未引入新入口；既有 triage 结论继续有效——innerHTML 均走 markdown.js 白名单渲染器（`test_markdown_render.py` 契约锁定），其余为 textContent 或启发式误报。同日二次重扫（scan-2026-11-21T11-58-04.423Z，114 项，seal sha256:2e62afc9…）：覆盖参考版发布层级与 rate card 标定两笔提交（evaluate_agent 两档门槛为评测脚本非运行面、其余为文档与 JSON）， findings 数与无新 hypotheses 维持不变；同日三次重扫（scan-2026-11-21T12-09-29.671Z，114 项，seal sha256:bdf1fbd6…）：覆盖标定提交 98e865d（schema 枚举扩展/卡 JSON/manifest/测试），结论同前；同日四次重扫（scan-2026-11-21T12-20-42.805Z，114 项，seal sha256:d89c8102…）：覆盖 TD-22 记录提交 3171ba7（纯文档），结论同前；同日五次重扫（scan-2026-11-21T12-36-00.868Z，114 项，seal sha256:7f2d99d8…）：覆盖海报回采标定提交 4bebecc（probe 文档/rate card 海报块/契约测试集合），结论同前；同日六次重扫（scan-2026-11-21T12-46-54.127Z，114 项，seal sha256:cb35e16f…）：覆盖胶装画册变体标定提交 08e65d5（variantReferences/卡 v2026.12.04/测试扩展），结论同前；次日七次重扫（scan-2026-11-22T04-32-09.915Z，114 项，seal sha256:39e80b51…）：覆盖 v1.4.0 参考版收口提交 f150849（CHANGELOG 折叠与版本表述），结论同前；历次提交前钩子报 scanner_enobufs（结论迟到）以对应重扫结论补齐；同日八次重扫（scan-2026-11-22T04-51-43.252Z，114 项，seal sha256:de4b9d50…）：覆盖 v1.5 执行计划提交 1c46e88（纯文档），结论同前；同日九次重扫（scan-2026-11-22T07-40-47.545Z，114 项，seal sha256:57e6b7d5…）：覆盖 V5-02 长尾用例提交 491054c（评测语料+12 例/文档/TD-22），结论同前 | 重扫结论未变；renderer 契约变更或引擎运行面变更时再次重扫 | 待排期（考虑让扫描聚焦源码目录排除 reports/） | 已 triage（2026-11-21 两次重扫） |
+| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-11-21 Mimosa deep 重扫（scan-2026-11-21T09-54-25.592Z，114 项，seal sha256:921c095d…）：与 2026-10-24 基线（113 项）同量级，TD-23 渲染路径修复与 journey.js ERROR_TEXTS 增项未引入新入口；既有 triage 结论继续有效——innerHTML 均走 markdown.js 白名单渲染器（`test_markdown_render.py` 契约锁定），其余为 textContent 或启发式误报。同日二次重扫（scan-2026-11-21T11-58-04.423Z，114 项，seal sha256:2e62afc9…）：覆盖参考版发布层级与 rate card 标定两笔提交（evaluate_agent 两档门槛为评测脚本非运行面、其余为文档与 JSON）， findings 数与无新 hypotheses 维持不变；同日三次重扫（scan-2026-11-21T12-09-29.671Z，114 项，seal sha256:bdf1fbd6…）：覆盖标定提交 98e865d（schema 枚举扩展/卡 JSON/manifest/测试），结论同前；同日四次重扫（scan-2026-11-21T12-20-42.805Z，114 项，seal sha256:d89c8102…）：覆盖 TD-22 记录提交 3171ba7（纯文档），结论同前；同日五次重扫（scan-2026-11-21T12-36-00.868Z，114 项，seal sha256:7f2d99d8…）：覆盖海报回采标定提交 4bebecc（probe 文档/rate card 海报块/契约测试集合），结论同前；同日六次重扫（scan-2026-11-21T12-46-54.127Z，114 项，seal sha256:cb35e16f…）：覆盖胶装画册变体标定提交 08e65d5（variantReferences/卡 v2026.12.04/测试扩展），结论同前；次日七次重扫（scan-2026-11-22T04-32-09.915Z，114 项，seal sha256:39e80b51…）：覆盖 v1.4.0 参考版收口提交 f150849（CHANGELOG 折叠与版本表述），结论同前；历次提交前钩子报 scanner_enobufs（结论迟到）以对应重扫结论补齐；同日八次重扫（scan-2026-11-22T04-51-43.252Z，114 项，seal sha256:de4b9d50…）：覆盖 v1.5 执行计划提交 1c46e88（纯文档），结论同前；同日九次重扫（scan-2026-11-22T07-40-47.545Z，114 项，seal sha256:57e6b7d5…）：覆盖 V5-02 长尾用例提交 491054c（评测语料+12 例/文档/TD-22），结论同前；同日十次重扫（scan-2026-11-22T08-12-54.636Z，114 项，seal sha256:1037bac1…）：覆盖 V5-01 双轨差分提交 bd8062c（新测试/CLI/PLANNER_PROMPT_VERSION 锚），结论同前 | 重扫结论未变；renderer 契约变更或引擎运行面变更时再次重扫 | 待排期（考虑让扫描聚焦源码目录排除 reports/） | 已 triage（2026-11-21 两次重扫） |
 
 ## B.4 文档与流程
 
@@ -35,11 +33,9 @@
 ## B.5 已偿还债务（趋势记录）
 
 | 编号 | 原描述 | 偿还版本 | 备注 |
-
-## B.5 已偿还债务（趋势记录）
-
-| 编号 | 原描述 | 偿还版本 | 备注 |
 | --- | --- | --- | --- |
+| TD-08 | nlu.py vs LLM 双轨：同一句话两轨行为差异未固化断言 | 1.5.0 | V5-01 落地：10 组差分用例（等价面+白名单差异面钉住）+ 提示词契约绊线（PLANNER_PROMPT_VERSION 变更锚 + PlannerPromptContractTest 5 例）+ tools/compare_modes.py 差异报告 CLI（--json/--baseline 跨提示词版本对比）；回放 fixture 有意收窄为格式约定；发现并登记 TD-25 |
+| TD-10 | 评测语料：长尾品类（纸杯/喷画/PVC/联单/手提袋/异形标签）用例薄 | 1.5.0 | V5-02 落地：_longtail_cases() 12 例（tag=长尾），评测 111→123 例全绿（390/390 键）；6 条话术口径勘误随 TD-09 评估（见 v15 计划 V5-02 执行记录） |
 | RD-01 | `_update_item`/`_update_order` 约 220 行重复且已漂移 | v0.11.0 | 合并为 `_apply_patch`，三处分叉同步修正 |
 | RD-02 | 静态服务暴露 `/.git` 与源码 | v0.11.0 | 静态白名单落地 |
 | RD-03 | 本地 API 无鉴权 | v0.11.0 | 进程内令牌 + 同源校验 |
