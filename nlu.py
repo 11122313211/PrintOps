@@ -53,20 +53,45 @@ def _quantity_text(text):
     return re.sub(r"[零一二三四五六七八九两十百千万]+(?=\s*(?:张|本|册|份|个|件|枚|套|箱|杯|块))", convert, text)
 
 
+_ALIAS_ALTERNATION: "re.Pattern[str] | None" = None
+_ALIAS_PRODUCT_MAP: dict[str, str] | None = None
+
+
+def _alias_scan() -> tuple["re.Pattern[str]", dict[str, str]]:
+    """One combined alternation pass over the text (TD-28 S2 perf) instead of
+    one finditer sweep per alias; aliases are literal strings so the merged
+    pattern is behavior-equivalent, with longest-first priority matching the
+    old per-alias sort. Cached: alias_map() is a pure function of the fixed
+    PRODUCT_CATALOG."""
+    global _ALIAS_ALTERNATION, _ALIAS_PRODUCT_MAP
+    if _ALIAS_ALTERNATION is None:
+        aliases = sorted(alias_map(), key=len, reverse=True)
+        _ALIAS_ALTERNATION = re.compile("|".join(re.escape(alias) for alias in aliases), re.IGNORECASE)
+        _ALIAS_PRODUCT_MAP = {alias.lower(): product for alias, product in alias_map().items()}
+    return _ALIAS_ALTERNATION, _ALIAS_PRODUCT_MAP
+
+
 def _find_product_mentions(text: str) -> list[tuple[str, int, int]]:
     """Find non-overlapping catalog mentions so multi-product requests are explicit."""
     normalized = unicodedata.normalize("NFKC", text or "")
+    pattern, alias_to_product = _alias_scan()
     candidates = []
-    for alias, product in sorted(alias_map().items(), key=lambda item: len(item[0]), reverse=True):
-        for match in re.finditer(re.escape(alias), normalized, re.IGNORECASE):
-            if not _valid_product_mention(normalized, match.start(), match.end(), alias):
-                continue
-            candidates.append((match.start(), match.end(), product))
+    for match in pattern.finditer(normalized):
+        product = alias_to_product.get(match.group().lower())
+        if product is None:
+            continue
+        if not _valid_product_mention(normalized, match.start(), match.end(), match.group()):
+            continue
+        candidates.append((match.start(), match.end(), product))
     accepted: list[tuple[str, int, int]] = []
+    max_end = 0
     for start, end, product in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
-        if any(start < other_end and end > other_start for _, other_start, other_end in accepted):
+        # Candidates arrive by ascending start; skipping is exactly "this span
+        # overlaps some already-accepted span" ⇔ start < highest accepted end.
+        if start < max_end:
             continue
         accepted.append((product, start, end))
+        max_end = max(max_end, end)
     return sorted(accepted, key=lambda item: item[1])
 
 
