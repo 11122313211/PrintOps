@@ -290,6 +290,14 @@ def _system_proxy_hint() -> str:
     return f"（本机系统代理 {endpoint} 可能不可用，可切换节点或临时关闭后重试）"
 
 
+# 提示词变更锚点（V5-01 TD-08）。OpenAICompatiblePlanner.plan 内联 system prompt
+# （见下方 plan 方法，"你是印刷订单助手……"字符串）当前没有独立版本字段：
+# 任何提示词改动都必须 bump 本常量并重跑 tests/test_dual_track_equivalence.py
+# 与 tests/test_llm_adapter_protocols.py 的 PlannerPromptContractTest（契约绊线），
+# 让"换提示词的影响"从静默漂移变为可见的测试红。
+PLANNER_PROMPT_VERSION = "1"
+
+
 class OpenAICompatiblePlanner:
     MAX_ATTEMPTS = 2
     RETRYABLE_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}

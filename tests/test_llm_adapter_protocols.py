@@ -302,5 +302,70 @@ class LlmAdapterCapabilityTest(unittest.TestCase):
         self._assert_no_order_payload(requests)
 
 
+class PlannerPromptContractTest(unittest.TestCase):
+    """V5-01 TD-08 提示词契约绊线。
+
+    system prompt 是 llm_adapter.plan 内联字符串，没有独立版本字段；改一行即
+    静默漂移。本绊线用 FakeResponse 捕获真实请求 payload，断言提示词包含四类
+    契约要素：JSON 输出形态、PATCH_FIELDS 白名单字段名、工具使用规则、置信度
+    语义。改提示词丢掉任一要素 → 测试红，"换提示词的影响"从静默变可见。
+    提示词实质变更时必须 bump ``PLANNER_PROMPT_VERSION`` 并重跑
+    tests/test_dual_track_equivalence.py（差分用例）。
+    """
+
+    def _captured_system_prompt(self) -> str:
+        requests: list[dict] = []
+        response = {"choices": [{"message": {
+            "content": '{"reply":"绊线","patch":{},"tool":null}'}}]}
+
+        def fake_urlopen(request, timeout):
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return _Response(response)
+
+        planner = _planner()
+        with patch("llm_adapter.urllib.request.urlopen", side_effect=fake_urlopen):
+            planner.plan("做500张名片", {"productType": "名片"}, TOOLS)
+        self.assertTrue(requests, "绊线必须捕获到至少一次真实协议请求")
+        system_messages = [item for item in requests[0]["messages"]
+                           if isinstance(item, dict) and item.get("role") == "system"]
+        self.assertEqual(len(system_messages), 1, "请求必须恰好携带一条 system prompt")
+        return system_messages[0]["content"]
+
+    def test_prompt_version_constant_is_pinned(self) -> None:
+        """变更锚：提示词实质变更必须 bump PLANNER_PROMPT_VERSION。"""
+        import llm_adapter
+        self.assertEqual(llm_adapter.PLANNER_PROMPT_VERSION, "1")
+
+    def test_prompt_declares_json_output_shape(self) -> None:
+        """契约要素 1：JSON 输出形态（reply/patch/tool 信封与 null 哨兵）。"""
+        prompt = self._captured_system_prompt()
+        for marker in ("reply", "patch:object", "tool:{name:string,arguments:object}|null",
+                       "knowledgeVersion", "JSON"):
+            self.assertIn(marker, prompt, f"system prompt 丢失 JSON 形态要素：{marker}")
+
+    def test_prompt_enumerates_every_patch_whitelist_field(self) -> None:
+        """契约要素 2：patch 白名单——提示词必须逐一列出 PATCH_FIELDS 的全部
+        字段名（从类常量推导，白名单扩字段而提示词漏写 → 红）。"""
+        prompt = self._captured_system_prompt()
+        for field in sorted(OpenAICompatiblePlanner.PATCH_FIELDS):
+            self.assertIn(field, prompt,
+                          f"system prompt 未列出 patch 白名单字段：{field}")
+
+    def test_prompt_states_tool_usage_rules(self) -> None:
+        """契约要素 3：工具使用规则（本地权威工具名 + 防重复/防编造约束）。"""
+        prompt = self._captured_system_prompt()
+        for marker in ("validate_order", "recommend_processes", "estimate_price",
+                       "explain_print_term", "工具使用规则", "不要重复同一工具",
+                       "不要把完整 order 作为参数", "不要编造价格"):
+            self.assertIn(marker, prompt, f"system prompt 丢失工具规则要素：{marker}")
+
+    def test_prompt_defines_confidence_semantics(self) -> None:
+        """契约要素 4：置信度语义（字段路径到 0~1 数字的映射约定）。"""
+        prompt = self._captured_system_prompt()
+        self.assertIn("confidence", prompt)
+        self.assertIn("0~1", prompt, "system prompt 丢失置信度 0~1 语义")
+        self.assertIn("字段路径", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
