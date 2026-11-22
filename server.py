@@ -147,6 +147,13 @@ SHUTDOWN_GRACE_SECONDS = float(
 # fail with 401/403.
 TOKEN_HEADER = "X-PrintOps-Token"
 ACCESS_TOKEN = secrets.token_urlsafe(24)
+# Host allowlist (TD-26): under DNS rebinding both Origin and Host carry the
+# attacker's domain, so the Origin==Host comparison passes by construction.
+# Bounding Host to loopback names is what actually pins the page — and the
+# token injected into index.html — to this machine. A missing Host header
+# (non-browser HTTP/1.0 tooling) cannot drive the browser rebinding chain
+# and stays allowed.
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 # Static routes are whitelisted: the server must never expose source files,
 # docs, .git or runtime data. Non-API paths outside this set return 404.
 STATIC_FILES = {
@@ -1262,6 +1269,22 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return False
 
+    def _host_allowed(self) -> bool:
+        """Host allowlist: loopback names only (TD-26).
+
+        The Origin==Host comparison passes by construction under DNS
+        rebinding, so the Host header itself must be bounded to this machine
+        for both API calls and the token-carrying static page.
+        """
+        host = self.headers.get("Host")
+        if not host:
+            return True
+        try:
+            hostname = urlsplit(f"//{host}").hostname
+        except ValueError:
+            return False
+        return hostname in LOCAL_HOSTNAMES
+
     def _authorized(self) -> bool:
         token = self.headers.get(TOKEN_HEADER, "")
         try:
@@ -1289,7 +1312,11 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _guard(self) -> bool:
-        """Reject cross-origin and tokenless API access with a JSON error."""
+        """Reject cross-host, cross-origin and tokenless API access."""
+        if not self._host_allowed():
+            self._discard_body()
+            self.error_response(RequestError("非本机地址的请求被拒绝", 403, "FORBIDDEN_HOST"))
+            return False
         if not self._origin_allowed():
             self._discard_body()
             self.error_response(RequestError("跨来源请求被拒绝", 403, "FORBIDDEN_ORIGIN"))
@@ -1436,6 +1463,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_static(self, path: str):
         """Serve only whitelisted static files; the page carries the access token."""
+        if not self._host_allowed():
+            # index.html injects the access token, so the static surface must
+            # be bounded to loopback Hosts even though it skips _guard().
+            return self.error_response(RequestError("非本机地址的请求被拒绝", 403, "FORBIDDEN_HOST"))
         name = STATIC_FILES.get(path)
         if name is None:
             return self.error_response(RequestError("资源不存在", 404, "NOT_FOUND"))

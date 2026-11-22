@@ -118,6 +118,38 @@ class HttpGateTest(unittest.TestCase):
         status, payload = self.request("/api/session", body={}, origin=f"http://127.0.0.1:{self.port}")
         self.assertEqual(status, 200)
 
+    # -- host allowlist (TD-26: DNS rebinding) -----------------------------
+
+    def _with_host(self, host):
+        """One request whose Host header is overridden (http.client auto-fills
+        Host with 127.0.0.1, so rebinding forms need an explicit override)."""
+        return self.request("/api/session", body={}, headers={"Host": host},
+                            origin=f"http://{host}")
+
+    def test_rebinding_host_is_rejected_on_api_post(self):
+        # Origin == Host == attacker domain: the old same-origin check passed
+        # by construction; the Host allowlist is what now rejects it.
+        status, payload = self._with_host("attacker.com:4174")
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["code"], "FORBIDDEN_HOST")
+
+    def test_rebinding_host_is_rejected_on_static_page(self):
+        # The token-carrying index.html must never reach a non-loopback Host,
+        # even though static paths skip the token guard.
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        connection.request("GET", "/", headers={"Host": "attacker.com:4174",
+                                                "Origin": "http://attacker.com:4174"})
+        response = connection.getresponse()
+        raw = response.read()
+        self.assertEqual(response.status, 403)
+        self.assertIn(b"FORBIDDEN_HOST", raw)
+        self.assertNotIn(b"__PRINTOPS_TOKEN__", raw)
+
+    def test_loopback_host_variants_are_accepted(self):
+        for host in (f"127.0.0.1:{self.port}", f"localhost:{self.port}", f"[::1]:{self.port}"):
+            status, _ = self._with_host(host)
+            self.assertEqual(status, 200, host)
+
     # -- static whitelist --------------------------------------------------
 
     def test_whitelisted_static_files_are_served(self):

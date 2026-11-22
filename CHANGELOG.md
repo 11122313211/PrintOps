@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased - 2026-11-22（安全修复：Host 白名单，TD-26）
+
+- **浏览器侧 DNS rebinding 链路闭合（全方位体检 H1，登记 TD-26）**：`server.py` 新增 Host 头白名单 `LOCAL_HOSTNAMES`（仅 127.0.0.1/localhost/::1）——`_guard()` 与 `serve_static()`（令牌注入入口）前置 `_host_allowed()`，非环回 Host 一律 403 `FORBIDDEN_HOST`。体检证实 rebinding 场景下 Origin==Host 比较恒通过（两处同为攻击者域），静态路径又绕过令牌防护，攻击页可同源读出 `__PRINTOPS_TOKEN__` 后调用全部 API；Host 白名单把页面与令牌一起钉回本机，缺 Host 头（非浏览器 HTTP/1.0 工具）不构成浏览器侧链路、保持放行。新增 3 项 socket 级测试（rebinding 表单 POST 403 / 静态页 403 且响应无令牌 / 三种环回 Host 放行）；ARCHITECTURE.md"本地安全模型"同源条目改为"同源与 Host 约束"如实表述。
+
 ## v1.5.0 - 2026-11-22（参考版：双轨差分断言与长尾评测收口）
 
 v1.5 薄背包按 [v1.5 薄背包执行计划](docs/plan/v15-thin-backlog-plan.md) 执行，两卡当日落地；发布口径复用**参考版**层级（活动 rate card market-listed 来源不变，`--release-gate --tier reference` 退出码 0，稳定档保持组织性阻断）。

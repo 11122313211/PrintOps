@@ -26,7 +26,7 @@
 
 ## 二、中危详情（已主会话逐条复核）
 
-### H1 浏览器侧 DNS rebinding 全链路
+### H1 浏览器侧 DNS rebinding 全链路（✅ 已修复 2026-11-22：Host 白名单 + 3 项 socket 级测试，见 TD-26 偿还记录与 CHANGELOG Unreleased）
 
 证据链四处：
 1. `server.py:1303-1315` — `do_GET` 仅 `/api/*` 走 `_guard()`（Origin+token），静态路径直接 `serve_static`，无 Origin/Host/token 检查；
