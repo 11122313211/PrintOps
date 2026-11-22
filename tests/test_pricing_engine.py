@@ -538,5 +538,54 @@ class MarketReferenceCardTest(unittest.TestCase):
         self.assertLess(premium_500, Decimal("1.25"))
 
 
+class RateCardBoundTest(unittest.TestCase):
+    """TD-28（安全体检 S1）：rate card 数值必须有绝对上界——decimal_value
+    接受 "1e999999"（is_finite=True），越界值此前会让 estimate_order 抛
+    未捕获的 decimal 异常，所有估价请求持续失败。以实卡为基底逐字段变异。"""
+
+    def setUp(self):
+        self.card = load_rate_card()
+
+    def assert_rejected(self, mutate, fragment):
+        card = deepcopy(self.card)
+        mutate(card)
+        with self.assertRaises(ValueError) as caught:
+            validate_rate_card(card)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_money_rates_capped(self):
+        self.assert_rejected(
+            lambda c: c["materials"]["铜版纸"].__setitem__("perKg", "1e30"),
+            "超出合理上界")
+        self.assert_rejected(
+            lambda c: c["printing"]["合版"].__setitem__("perM2", "1e999999"),
+            "超出合理上界")
+
+    def test_factor_fields_capped(self):
+        self.assert_rejected(
+            lambda c: c["categories"]["名片"].__setitem__("wasteFactor", "11"),
+            "wasteFactor 超出合理上界")
+        self.assert_rejected(
+            lambda c: c["band"].__setitem__("high", "11"),
+            "价格区间 high 超出合理上界")
+        self.assert_rejected(
+            lambda c: c["colorFactors"].__setitem__("单色", "11"),
+            "颜色成本系数 单色 超出合理上界")
+        self.assert_rejected(
+            lambda c: c["categories"]["PVC"].__setitem__("wasteFactor", "99"),
+            "wasteFactor 超出合理上界")
+
+    def test_component_rates_capped(self):
+        self.assert_rejected(
+            lambda c: c["categories"]["PVC"]["boardThicknesses"]["5mm"].__setitem__("materialFactor", "11"),
+            "materialFactor 超出合理上界")
+        self.assert_rejected(
+            lambda c: c["categories"]["PVC"]["quantityTiers"][0].__setitem__("perUnit", "2e6"),
+            "perUnit 超出合理上界")
+
+    def test_shipped_card_still_validates(self):
+        validate_rate_card(self.card)
+
+
 if __name__ == "__main__":
     unittest.main()

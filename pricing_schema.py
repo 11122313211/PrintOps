@@ -11,6 +11,12 @@ from typing import Any
 
 PRICING_SCHEMA_VERSION = "3.0"
 CENT = Decimal("0.01")
+# Absolute sanity bounds (TD-28, 2026-11-22 audit S1): decimal_value accepts
+# "1e999999" as a finite number, and money()'s quantize / engine multiplications
+# would then raise uncaught decimal exceptions on every estimate request. Rate
+# amounts are CNY figures; factors are dimensionless multipliers.
+MONEY_RATE_CEILING = Decimal("1000000")
+FACTOR_CEILING = Decimal("10")
 DISCLAIMER = "示例价格参数表仅用于本地参考估算，不构成供应商报价；实际以供应商回复为准。"
 # Closed enum, extended only through explicit redesign. "illustrative" covers
 # the hand-maintained baseline rates the engine computes from; "market-listed"
@@ -107,6 +113,8 @@ def validate_rate_card(card: dict[str, Any]) -> None:
             for key in ("perKg", "perM2", "setup", "perUnit"):
                 if key in rate and decimal_value(rate[key]) < 0:
                     raise ValueError(f"{section}.{name}.{key} 不能为负数")
+                if key in rate and decimal_value(rate[key]) > MONEY_RATE_CEILING:
+                    raise ValueError(f"{section}.{name}.{key} 超出合理上界（≤{MONEY_RATE_CEILING}）")
     for name, category in card["categories"].items():
         if (not isinstance(category, dict) or not isinstance(category.get("requiredDrivers"), list)
                 or any(not isinstance(driver, str) or not driver for driver in category["requiredDrivers"])):
@@ -132,6 +140,8 @@ def validate_rate_card(card: dict[str, Any]) -> None:
                     if (not isinstance(blank, dict) or not str(size_name).strip()
                             or decimal_value(blank.get("blankAreaM2")) <= 0):
                         raise ValueError(f"{name}.cupSizes.{size_name} 必须声明正数 blankAreaM2")
+                    if decimal_value(blank.get("blankAreaM2")) > FACTOR_CEILING:
+                        raise ValueError(f"{name}.cupSizes.{size_name}.blankAreaM2 超出合理上界（≤{FACTOR_CEILING}）")
             if family == "form":
                 parts = category.get("paperParts")
                 if (not isinstance(parts, dict) or not parts
@@ -147,11 +157,17 @@ def validate_rate_card(card: dict[str, Any]) -> None:
                     if (not isinstance(spec, dict) or not str(thickness).strip()
                             or decimal_value(spec.get("materialFactor")) <= 0):
                         raise ValueError(f"{name}.boardThicknesses.{thickness} 必须声明正数 materialFactor")
+                    if decimal_value(spec.get("materialFactor")) > FACTOR_CEILING:
+                        raise ValueError(f"{name}.boardThicknesses.{thickness}.materialFactor 超出合理上界（≤{FACTOR_CEILING}）")
             for key in ("minimumTotal", "packingPerUnit", "wasteFactor"):
                 if decimal_value(category.get(key)) < 0:
                     raise ValueError(f"{name}.{key} 不能为负数")
+                if key != "wasteFactor" and decimal_value(category.get(key)) > MONEY_RATE_CEILING:
+                    raise ValueError(f"{name}.{key} 超出合理上界（≤{MONEY_RATE_CEILING}）")
             if decimal_value(category["wasteFactor"]) < 1:
                 raise ValueError(f"{name}.wasteFactor 不能低于1")
+            if decimal_value(category["wasteFactor"]) > FACTOR_CEILING:
+                raise ValueError(f"{name}.wasteFactor 超出合理上界（≤{FACTOR_CEILING}）")
             # Card-side cost components (schema 3.0). They add cost lines, not
             # order-supplied drivers, so they never enter requiredDrivers.
             imposition = category.get("imposition")
@@ -179,6 +195,8 @@ def validate_rate_card(card: dict[str, Any]) -> None:
                 for index, tier in enumerate(tiers):
                     if not isinstance(tier, dict) or decimal_value(tier.get("perUnit")) < 0:
                         raise ValueError(f"{name}.quantityTiers[{index}] 必须为含非负 perUnit 的对象")
+                    if decimal_value(tier.get("perUnit")) > MONEY_RATE_CEILING:
+                        raise ValueError(f"{name}.quantityTiers[{index}].perUnit 超出合理上界（≤{MONEY_RATE_CEILING}）")
                     up_to = tier.get("upTo")
                     if up_to is None and index != len(tiers) - 1:
                         raise ValueError(f"{name}.quantityTiers 仅最后档允许 upTo 为空")
@@ -190,9 +208,13 @@ def validate_rate_card(card: dict[str, Any]) -> None:
     band = card.get("band", {})
     if not Decimal("0") < decimal_value(band.get("low")) <= 1 <= decimal_value(band.get("high")):
         raise ValueError("价格区间必须满足 0 < low <= 1 <= high")
+    if decimal_value(band.get("high")) > FACTOR_CEILING:
+        raise ValueError(f"价格区间 high 超出合理上界（≤{FACTOR_CEILING}）")
     for color in ("单色", "四色"):
         if decimal_value(card.get("colorFactors", {}).get(color)) <= 0:
             raise ValueError("颜色成本系数必须为正数")
+        if decimal_value(card.get("colorFactors", {}).get(color)) > FACTOR_CEILING:
+            raise ValueError(f"颜色成本系数 {color} 超出合理上界（≤{FACTOR_CEILING}）")
 
 
 ESTIMATE_OUTPUT_SCHEMA = {

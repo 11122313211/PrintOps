@@ -367,6 +367,30 @@ class PlannerPromptContractTest(unittest.TestCase):
         self.assertIn("字段路径", prompt)
 
 
+class DeepResponseClassificationTest(unittest.TestCase):
+    """TD-28（安全体检 L10b）：模型返回深嵌套 JSON（字节量在响应上限内）时
+    json.loads 抛 RecursionError（RuntimeError 而非 ValueError）——捕获元组
+    补齐后按"返回格式异常"分类，plan 硬失败降级而非异常外溢/500。"""
+
+    def test_deeply_nested_model_response_is_a_format_error(self) -> None:
+        # 90k 层才在本机 C 扫描器上触发 RecursionError（3k 层会被正常解析成
+        # 嵌套列表、走"内容无法识别"路径）；180KB 在 2MB 响应上限之内。
+        deep_body = (("[" * 90000) + ("]" * 90000)).encode("utf-8")
+
+        class _DeepResponse(_Response):
+            def __init__(self) -> None:
+                self._body = deep_body
+
+        planner = _planner()
+        with patch("llm_adapter.urllib.request.urlopen", return_value=_DeepResponse()):
+            plan = planner.plan("做 500 张名片", {}, TOOLS, [])
+        self.assertIsNone(plan)
+        # 修复前 RecursionError（RuntimeError，非 ValueError 族）逃出捕获
+        # 元组直达调用方/500 兜底；现在按"返回格式异常"硬失败降级。
+        self.assertEqual(planner.last_error, "模型接口返回格式异常")
+        self.assertEqual(planner.last_protocol, "error")
+
+
 class RedirectRefusalTest(unittest.TestCase):
     """TD-27（安全体检 L1）：网关返回 3xx 时绝不跟随——Authorization 不得
     外发到 Location 指向的主机，私网校验也不得被重定向绕过。真实 socket

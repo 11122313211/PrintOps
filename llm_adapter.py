@@ -143,7 +143,7 @@ def read_saved_config(path: str | Path) -> dict[str, str]:
             return {}
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError, RecursionError, json.JSONDecodeError):
         return {}
     if not isinstance(data, dict):
         return {}
@@ -1103,7 +1103,7 @@ class OpenAICompatiblePlanner:
                     return
                 try:
                     body = json.loads(content)
-                except (TypeError, ValueError, json.JSONDecodeError):
+                except (TypeError, ValueError, RecursionError, json.JSONDecodeError):
                     return
                 if isinstance(body, dict):
                     body["_contextTruncated"] = True
@@ -1159,7 +1159,7 @@ class OpenAICompatiblePlanner:
             if isinstance(content, str):
                 try:
                     decoded = json.loads(content)
-                except (TypeError, ValueError, json.JSONDecodeError):
+                except (TypeError, ValueError, RecursionError, json.JSONDecodeError):
                     decoded = content
                 bounded = cls._bounded_context_object(decoded, 2048)
                 item["content"] = json.dumps(bounded, ensure_ascii=False, separators=(",", ":"))
@@ -1443,7 +1443,7 @@ class OpenAICompatiblePlanner:
                     self.last_protocol = "error"
                     retryable = True
                     backoff_error = error
-                except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+                except (KeyError, IndexError, TypeError, ValueError, RecursionError, json.JSONDecodeError):
                     self.last_error = "模型接口返回格式异常"
                     self.last_protocol = "error"
                     if variant_index == 0 and len(payload_variants) > 1:
@@ -1863,7 +1863,7 @@ class OpenAICompatiblePlanner:
             value = json.loads(text)
             if isinstance(value, dict):
                 return value
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             pass
         decoder = json.JSONDecoder()
         for index, char in enumerate(text):
@@ -1871,7 +1871,7 @@ class OpenAICompatiblePlanner:
                 continue
             try:
                 value, _ = decoder.raw_decode(text[index:])
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 continue
             if isinstance(value, dict):
                 return value
