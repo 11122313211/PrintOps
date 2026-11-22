@@ -1,23 +1,5 @@
 # Changelog
 
-## Unreleased - 2026-11-21（参考版发布层级与市场参考价标定）
-
-- **发布门槛拆分稳定/参考两档**：`tests/evaluate_agent.py --release-gate` 新增 `--tier {stable,reference}`（默认 stable 行为一字不变）。参考版三项条件：合成门禁全绿（同一套 ≥90%/≥80% 阈值）+ 活动 rate card `sources` 含"公开挂牌参考价"来源（`confidence: "market-listed"` 或来源描述注明）+ 固定边界声明输出（估算非报价；挂牌参考价非成交价非供应商授权报价；自测走查非独立真人验证；真实语料如实标注）。真实语料缺失/不足在参考档不阻断但原样报告，**语料格式无效仍阻断**；`--json` 增 `releaseTier`/`marketReferenceVerdict`/`referenceBoundaryNotice`。新增 7 项测试（verdict + 两档退出码方向 + stable 不回归）。
-- **rate card 公开挂牌参考价标定（schema 3.0 显式扩展）**：`CONFIDENCE_LEVELS` 由闭合单值扩为 `("illustrative", "market-listed")`（对应既有注释要求的显式 redesign，非静默改标签）。活动卡 `rate_cards/cn-local-reference.json` 增来源 `sd2000-listed-2026-11-21`（sd2000.com 未登录挂牌价 2026-11-21 Computer Use 实测，自助下单口径、不含目的地运费、非成交价非授权报价），六个品类（名片/单页/标签/画册/PVC/包装盒）增 `marketReference` 参照块：实测数量阶梯、形态判定（linear / base-plus-marginal / tiered / batch-setup-dominant，与 schema 3.0 驱动选型对应）与工艺轴灵敏度（印面系数=1、板厚 5MM/3MM=1.235、印刷类型 合版×1/数字×2.7/专版×50、数字/胶印交叉点 100~500 本、期货延期 1 天约 -2%）。**计算基率一字未动**——estimate 数值与既有 golden 全部不变；卡 version `2026.12.01`→`2026.12.02`，worked examples 同步。
-- **知识复核挂接**：知识 manifest 增来源 `sd2000-listed-2026-11-21`（复核周期 90 天 ride 既有 knowledge_review，`lastReviewed=2026-11-21`）；采集证据落盘 `docs/plan/sd2000-price-probe-2026-11-21.md`（6 品类阶梯 + 口径对照实验：名片精品盒包装强制不可剥离、挂牌价不含目的地运费），标定口径与季度复核流程见 `docs/plan/market-rate-intake-template.md`。
-- **验收**：`--release-gate --tier reference` 在标定后的实卡上退出码 0（标定前 1）；dev_check 六步全绿（含新增测试）；Mimosa deep 重扫（scan-2026-11-21T11-58-04.423Z，114 项，seal sha256:2e62afc9…）未引入新入口，结论已记入 TD-22。
-
-## Unreleased - 2026-11-21（恢复 CI）
-
-- **恢复 GitHub Actions CI，与本机共用同一条门禁**：2026-09-08 `b0d5b06` 时 Windows runner 的 socket 类单测连续失败（4 次 CI 全红：ubuntu 全绿，windows Python 3.9/3.12 均停在 Unit tests），随后 `e8f5bd9` 移除 CI 改为本机 `tools/dev_check.py` 检查；2026-10-23 的 Windows 兼容修复（SQLite 文件锁、连接排空/RST、408 语义、WSAEINTR 中断写、WinError 5 配置写入根因）落地后，本机 Windows（Python 3.14）复跑 556 项单测全绿（含默认运行的 socket 级 HTTP 测试），恢复条件已具备。新增 `.github/workflows/ci.yml`：push/PR 触发，`windows-latest`（3.9/3.14）与 ubuntu（3.14 跑 `ubuntu-latest`，3.9 固定 `ubuntu-22.04`——24.04 runner 无 Python 3.9 可装）共四组合执行 `python tools/dev_check.py`（编译 + 单测 + 评测 + 知识复核 + secret_scan + repo_guard），零新增 CI 专属脚本；dev_check 自带 `PYTHONUTF8=1` 与 UTF-8 流重配，无需额外 CI 环境变量，job 级 `timeout-minutes: 15` 兜底。
-- **文档同步**：README 双语“开发与验收”、CONTRIBUTING“开发循环”与 `tools/dev_check.py` docstring 不再宣称“有意不使用 GitHub Actions”，改为说明 CI 与本机跑同一条门禁、发布前仍以本机检查为准；CONTRIBUTING 单测计数更新为 556 项并补上知识复核步。
-- **验收**：本机 `python tools/dev_check.py` 六步全绿；推送后首跑四个 job 需人工观察——若 windows runner 复现 socket 类偶发失败，回退方案是恢复 `PRINTOPS_RUN_SOCKET_TESTS` 式 opt-in 跳过（仅 CI 环境生效，本机不受影响）。
-
-## Unreleased - 2026-11-03（供应商接口扁平化）
-
-- **供应商接口压成一行扁平控件**：此前该块是"标题 + label + 44px 选择器 + 两句状态长文"的卡片（实测高约 166px），其中标题"供应商接口"与 label"目标平台"语义重复、状态长文与选中 option 文案几乎逐字重复。现删除 `<h3>`（section 的 aria-label 保留语义），label 文本包 span 后与选择器并排一行（`grid-template-columns: auto minmax(0,1fr)`），整块去卡片外壳（透明底、无边框阴影、零内距），`#provider-status` 状态文压成单行省略（11px 弱字色，悬停经既有 title 看全文；**DOM 文本逐字保留**，browser_smoke 四处 `toContainText` 断言不受影响）。实测高度 166→65px；390px 移动端同一行布局自然成立（label 50px + 选择器占满余宽），无需媒体查询。选择器 44px 触控高度与 12px label 字号红线（ui_focus/ui_positions 断言）不变。
-- **验收**：Chromium journey 39 / browser_smoke 13 / ui_positions 16 / ui_focus 17 全部通过；1440px 与 390px 实景截图人工核验（一行控件 + 单行省略状态文）；styles.css 版本号 bump 为 `20261103-provider-flat-1`。
-
 ## Unreleased - 2026-11-03（右栏卡片堆叠）
 
 - **订单草稿栏由通栏列表重塑为卡片堆叠**：右栏自身改为纵向 flex（块间距统一由 gap 驱动），上传区、三张填写组（概览/规格/工艺）、待处理清单、供应商接口、询价全部成为独立卡片——纸底 + 1px --rule 描边 + --radius-md 圆角 + --shadow-hard 印刷偏移阴影；hairline 通栏分隔线（`.draft-groups` border-top、`.draft-group` border-bottom）删除。填写组走表面阶梯：闭卡 --paper-light → 悬停弹簧上浮 1px（--ease-spring-fine）→ 展开 --paper-raise + --shadow-soft + 边加深（"open = lift, not color"）；summary 按压微缩放（scale .99）。待处理清单/询价保留金/黄铜语义左竖线并并入同一卡签名；`estimate-panel`（中栏）样式拆分不受影响。
@@ -110,17 +92,19 @@
 - **回归门禁去偶发**：`test_runtime_hardening` 的请求日志断言改为按 requestId 过滤——共享 logger 会把其他测试的后台流量带进 assertLogs 窗口，全量跑偶发双计数；MCP 低置信契约测试随迁移更新为项级 `items.item-1.*` 路径。
 - **验收**：全量 552 项 Python（多 seed 验证）、评测 111 例字段准确率 100%（多产品 8/8）、dev_check 六步全绿、journey 34 / ui_positions 16 / ui_focus 15 全部通过。
 
-## v1.4.0 - 2026-11-21（代码基线候选版）
+## v1.4.0 - 2026-11-22（参考版）
 
-本版定位延续"代码交付 ≠ 稳定发布"的口径。三主线按 **B → C → A** 顺序执行，并折叠此前 Unreleased 记录（2026-10-25 至 2026-11-21 的界面与 CI 轮次）。
+本版按**参考版**层级发布（2026-11-21 拆分的两档门槛，2026-11-22 打标）：合成门禁全绿 + 活动 rate card 携公开挂牌参考价来源 + 固定边界声明；稳定版门槛（真实脱敏语料 ≥20 例、8 人真人走查、真实 dsh/模型端到端）保持组织性阻断，顺延 v1.5+。三主线按 **B → C → A** 顺序执行，参考版层级与市场标定收口于本段第 4 条；此前 Unreleased 记录（2026-10-25 至 2026-11-21 的界面与 CI 轮次）折叠见继承索引。
 
 1. **G03 项级语义收尾（TD-23）**：带焦点的"第1项不要300g铜版纸"曾被 focus-only 短路吞掉、焦点下"不要300g铜版纸"只清 fieldMeta 不清项级值（否定块持有 `_update_item` 重建前的孤儿引用）。修复后两条回归用例在修复前各自失败、修复后 7/7，多 seed 全绿。
 2. **债务与卫生批量清偿**：TD-12 分类退避（429 指数/5xx 线性/网络指数，deadline 仍优先）、TD-13 改述后偿还（tool_call_log 5000 条有界环，审计红线不动）、TD-07 secret_scan 增 Bearer/Authorization 形态、`/api/chat` 单条消息 20000 字符上限（400 MESSAGE_TOO_LONG）、TD-18 ARCHITECTURE.md 补"本地安全模型"节、TD-17 落地 docs/RELEASING.md。登记册 B.1–B.4 仅剩 TD-24 一条未偿。
 3. **计价引擎 schema 3.0，18 类目录全部条件计价**：family 枚举扩展 cup/form，`schemaVersion` 首次被校验；订单侧驱动 `cupVolume`（容量档不换算）、`paperParts`（二/三/四联映射）、`boardThickness`（板厚档系数）；card 侧组件拼版大纸（整张开料不再叠损耗）、批次开机费、数量阶梯加工费（**档内累进**，档位边界总价单调不降——回归钉住 49/50/199/200）。rate card `2026.12.01` 三品类解禁并新增三个手算 golden 算例；blocked 品类原因透传 `reasonDetail`；知识库复核至 2026.11.21。PRICING.md/README 覆盖矩阵同步。
+4. **参考版发布层级与市场参考价标定（2026-11-21~22）**：`--release-gate` 拆分 `--tier {stable,reference}` 两档（stable 行为一字不变）；`CONFIDENCE_LEVELS` 显式扩展 `("illustrative", "market-listed")`；活动卡增来源 `sd2000-listed-2026-11-21`（sd2000.com 未登录挂牌价，Computer Use 真实浏览器实测、非爬虫，自助口径、不含目的地运费、非成交价非授权报价），**七个品类**（名片/单页/标签/画册/PVC/包装盒/海报）`marketReference` 数量阶梯 + 形态判定（linear / base-plus-marginal / tiered / batch-setup-dominant）+ 工艺轴灵敏度，画册另含**胶装变体** `variantReferences`（100 本 +33.7%/500 本 +20.8% 对骑马订，溢价随量摊薄）。计算基率一字未动，estimate 与既有 golden 全部不变；卡 version → `2026.12.04`，worked examples 同步。知识 manifest 挂接同源来源（90 天复核 ride knowledge_review，`nextReviewAt=2027-02-19`）；采集证据 `docs/plan/sd2000-price-probe-2026-11-21.md`（7 品类 + 2 变体、口径对照实验），标定与季度复核流程 `docs/plan/market-rate-intake-template.md`；**采集面 2026-11-22 封版**，剩余可选变体转季度复核。
+5. **验收（参考版）**：`--release-gate --tier reference` 在标定后的实卡上退出码 0（标定前 1）；dev_check 六步全绿；CI 四组合（windows/ubuntu × Python 3.9/3.14）在标定各提交上全绿；Mimosa deep 重扫六次均 114 项、无新 hypotheses、依赖零命中（末次 scan-2026-11-21T12-46-54.127Z，seal sha256:cb35e16f…，覆盖胶装画册标定提交 08e65d5；历次 seal 记 TD-22）。
 
-继承的 1.3.0 后改造（Unreleased 收口索引）：恢复 GitHub Actions CI（与本机同一 dev_check 门禁）、供应商接口一行扁平控件、右栏卡片堆叠与弹簧动效、composer 高度手柄与返回导航统一、核对页操作台重排、工单小卡交接单图像版、尺寸校验可读性、历史订单批量管理、多产品依据迁移（TD-02）与纸张镜像确认（TD-21）、对话路由声明式预算。
+继承的 1.3.0 后改造（Unreleased 收口索引）：恢复 GitHub Actions CI（与本机同一 dev_check 门禁，四组合 windows/ubuntu × 3.9/3.14 稳定全绿）、供应商接口一行扁平控件（166→65px，DOM 文本逐字保留）、右栏卡片堆叠与弹簧动效、composer 高度手柄与返回导航统一、核对页操作台重排、工单小卡导出与交接单图像版、尺寸校验可读性、历史订单批量管理与归档列表、历史悬停钮扁平化与视觉密度收敛、常用规格复用、前端重复代码收敛（零行为变化）、视图空态与面板静态化（P0-2 焦点修复）、聊天等待可停止、对话路由声明式预算、多产品依据迁移（TD-02）与纸张镜像确认（TD-21）。
 
-发布门槛：真实脱敏语料（≥20 例、字段准确率 ≥95%）、8 人真人走查、真实 dsh/模型端到端仍未闭合——候选版不声明稳定发布，发布检查按预期失败（组织性阻断）。
+发布门槛：稳定档（真实脱敏语料 ≥20 例、字段准确率 ≥95%、8 人真人走查、真实 dsh/模型端到端）保持组织性阻断、按预期失败；本版以**参考版**档发布（`--release-gate --tier reference` 退出码 0），对外表述一律带层级名；市场价采集面已封版，转季度复核（2027-02-19）或偏差 >15% 触发重标定。
 
 ## v1.3.0 - 2026-10-24（代码基线候选版）
 

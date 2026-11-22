@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.3.0--candidate-blue)
+![Version](https://img.shields.io/badge/version-1.4.0--reference-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python standard-library runtime · Local first · Optional models · Human review and confirmation**
@@ -26,7 +26,7 @@ The initial study assigns one primary task to each of 8 non-expert participants 
 
 ## Current capabilities and boundaries
 
-- `VERSION` is the **1.3.0 candidate baseline** (bumped at release finalization). See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- `VERSION` is the **1.4.0 reference release** (2026-11-22): synthetic gates green + a market-listed rate-card source + a fixed boundary notice — the stable-tier gates (≥20 real redacted cases, 8-person human walkthrough, real dsh/model end-to-end) remain organizationally blocked and are not claimed. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
 - This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
 - Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
 - The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
@@ -190,7 +190,7 @@ APIs other than health require a process-local token; cross-origin requests carr
 | [File management](docs/FILE_MANAGEMENT.md) / [dsh integration](docs/plan/dsh-print-agent.md) | Commit boundaries and optional integration. |
 | [Historical development plan](docs/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
 
-v1.3.0 remains a candidate baseline. The next priority is the local order workflow and independent acceptance. Real supplier integration has been deferred to v1.4+ and separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
+v1.4.0 ships as the **reference tier** (2026-11-22): all 18 catalog categories price conditionally, and the market-price collection surface is closed (7 categories + 2 variants from sd2000.com listed prices, see `docs/plan/sd2000-price-probe-2026-11-21.md`; further variants moved to the quarterly review). Reference-tier quotes are publicly listed prices, not authorized supplier quotes. Real supplier integration has been deferred to v1.5+ and separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
 
 ## Contributing and license
 

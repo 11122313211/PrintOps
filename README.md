@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.3.0--candidate-blue)
+![Version](https://img.shields.io/badge/version-1.4.0--reference-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python 标准库运行时 · 本地优先 · 可选模型 · 人工核对与确认**
@@ -26,7 +26,7 @@ PrintOps 面向市场、设计、采购等非印刷专业用户。先描述用�
 
 ## 当前能力与边界
 
-- `VERSION` 为 **1.3.0 候选基线**（随发布收口 bump），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
+- `VERSION` 为 **1.4.0 参考版**（2026-11-22 发布：合成门禁全绿 + 公开挂牌参考价来源 + 边界声明），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
 - 它是订单前置整理工具。当前没有真实供应商授权、HTTP transport 或 live 工具入口；确认、导出和打印都不代表供应商已接收。
 - 参考估算来自版本化的 **illustrative 人工示例参数**，不是市场价、供应商报价或交期承诺。PDF 检查只提供基础线索，不能证明文件可直接生产。
 - 真实脱敏语料目前为 **0**，严格发布门槛保持阻断。开发评测、演示输入、可用性任务和示例报价不能替代真实订单。
@@ -190,7 +190,7 @@ python3 tools/printops_local_host.py \
 | [文件管理](docs/FILE_MANAGEMENT.md) / [dsh 集成](docs/plan/dsh-print-agent.md) | 提交边界与可选集成。 |
 | [历史开发计划](docs/DEVELOPMENT_PLAN.md) / [开源选型](docs/OPEN_SOURCE_OPTIONS.md) | 设计参考；历史排期和任务卡不代表当前状态。 |
 
-v1.4.0 仍为候选基线：18 个目录品类已全部具备条件计价能力，发布门槛（真实语料、真人走查）闭合前不声明稳定发布。真实语料与真人走查保持组织性阻断的同时，可按**参考版**层级发布（合成门禁全绿 + rate card 公开挂牌参考价标定 + 边界声明，见 RELEASE_CHECKLIST"发布层级"节）；参考版报价口径为公开挂牌参考价（如 sd2000.com 实测记录，见 docs/plan/sd2000-price-probe-2026-11-21.md），非供应商授权报价。真实供应商接入顺延至 v1.5+，需另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
+v1.4.0 已按**参考版**层级发布（2026-11-22）：18 个目录品类全部具备条件计价能力，发布门槛（真实语料、真人走查）保持组织性阻断、不声明稳定发布——参考版 = 合成门禁全绿 + rate card 公开挂牌参考价标定（7 品类 + 2 变体，sd2000.com 实测记录见 docs/plan/sd2000-price-probe-2026-11-21.md，采集面已封版转季度复核）+ 固定边界声明（见 RELEASE_CHECKLIST"发布层级"节）。参考版报价口径为公开挂牌参考价，非供应商授权报价。真实供应商接入顺延至 v1.5+，需另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
 
 ## 贡献与许可证
 
