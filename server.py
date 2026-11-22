@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from contextlib import contextmanager
 from copy import copy, deepcopy
 import json
 import logging
@@ -21,7 +22,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from agent import (Agent, Memory, RevisionConflictError, PLATFORMS, SUPPLIER_PROFILE_VERSION,
@@ -63,6 +64,14 @@ PLANNER = OpenAICompatiblePlanner(
 LLM_LOCK = threading.Lock()
 SESSION_LOCKS: dict[str, threading.Lock] = {}
 SESSION_LOCKS_GUARD = threading.Lock()
+# TD-28 hygiene: locks accumulate one per chat session; bound the dict by
+# evicting entries nobody is waiting on. An entry is marked in-use under the
+# same guard that creates it, so eviction can never drop a lock another
+# thread is about to wait on (it would recreate a parallel lock and break
+# mutual exclusion). When every entry is in use the dict temporarily grows
+# past the cap instead of sacrificing correctness.
+SESSION_LOCKS_IN_USE: set[str] = set()
+MAX_SESSION_LOCKS = 1024
 MAX_BODY_BYTES = 1 * 1024 * 1024
 # A chat turn is conversational text, not bulk import: the body cap governs
 # transport, this cap keeps one message from ballooning the stored message
@@ -425,7 +434,29 @@ def _session_id(value: object) -> str | None:
 
 def _session_lock(session_id: str) -> threading.Lock:
     with deadline_lock(SESSION_LOCKS_GUARD):
-        return SESSION_LOCKS.setdefault(session_id, threading.Lock())
+        lock = SESSION_LOCKS.get(session_id)
+        if lock is None:
+            if len(SESSION_LOCKS) >= MAX_SESSION_LOCKS:
+                for stale in SESSION_LOCKS:
+                    if stale not in SESSION_LOCKS_IN_USE:
+                        del SESSION_LOCKS[stale]
+                        break
+            lock = threading.Lock()
+            SESSION_LOCKS[session_id] = lock
+        SESSION_LOCKS_IN_USE.add(session_id)
+        return lock
+
+
+@contextmanager
+def _session_guard(session_id: str) -> Iterator[None]:
+    """Hold one session's lock; release the in-use marker afterwards."""
+    lock = _session_lock(session_id)
+    try:
+        with deadline_lock(lock):
+            yield
+    finally:
+        with deadline_lock(SESSION_LOCKS_GUARD):
+            SESSION_LOCKS_IN_USE.discard(session_id)
 
 
 def _item_index(body: dict[str, object]) -> int | None:
@@ -751,6 +782,9 @@ def dispatch_get(path: str) -> dict[str, object] | None:
             limit, offset = int(query.get("limit", [50])[0]), int(query.get("offset", [0])[0])
         except (TypeError, ValueError):
             raise RequestError("分页参数必须是整数", code="INVALID_PAGINATION")
+        # TD-28: SQLite reads LIMIT -1 as "unbounded"; clamp so one request
+        # cannot force a whole-table scan with full JSON deserialization.
+        limit, offset = min(max(limit, 1), 500), max(offset, 0)
         filters = {"limit": limit, "offset": offset,
                    "includeArchived": query.get("includeArchived", ["false"])[0].lower() == "true",
                    "status": query.get("status", [None])[0]}
@@ -1396,11 +1430,11 @@ class Handler(BaseHTTPRequestHandler):
             if session_id:
                 # Lock before loading state so concurrent requests cannot read
                 # the same snapshot and overwrite each other's changes.
-                with deadline_lock(_session_lock(session_id)):
+                with _session_guard(session_id):
                     agent = Agent(session_memory(), session_id, planner=planner)
                     return self.reply(dispatch_post(path, body, agent))
             agent = Agent(session_memory(), planner=planner)
-            with deadline_lock(_session_lock(agent.id)):
+            with _session_guard(agent.id):
                 return self.reply(dispatch_post(path, body, agent))
         except RequestError as error:
             return self.error_response(error)
@@ -1446,7 +1480,10 @@ class Handler(BaseHTTPRequestHandler):
             raise RequestError("请求必须使用 JSON 格式", 415, "UNSUPPORTED_MEDIA_TYPE")
         try:
             value = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
+        except (TypeError, ValueError, RecursionError, json.JSONDecodeError):
+            # RecursionError (RuntimeError, not ValueError) surfaces for deeply
+            # nested payloads — classify as a client-side parse failure instead
+            # of falling through to the 500 catch-all.
             raise RequestError("请求 JSON 无法解析", 400, "INVALID_JSON")
         if not isinstance(value, dict):
             raise RequestError("请求体必须是 JSON 对象", 400, "INVALID_PAYLOAD")
@@ -1530,7 +1567,7 @@ class Handler(BaseHTTPRequestHandler):
         status = getattr(self, "_response_status", None) or 0
         request_id = getattr(self, "request_id", "")
         command = getattr(self, "command", "") or ""
-        path = unquote(urlsplit(getattr(self, "path", "") or "").path)
+        path = _log_safe(unquote(urlsplit(getattr(self, "path", "") or "").path))
         LOGGER.info("requestId=%s method=%s path=%s status=%s durationMs=%.1f",
                     request_id, command, path, status, duration_ms,
                     extra={"request_id": request_id, "status": status,
@@ -1561,7 +1598,17 @@ class Handler(BaseHTTPRequestHandler):
             detail = format % args if args else str(format)
         except (TypeError, ValueError):
             detail = str(format)
-        LOGGER.info("%s %s %s", command, path, detail)
+        LOGGER.info("%s %s %s", command, _log_safe(path), _log_safe(detail))
+
+
+def _log_safe(value: str) -> str:
+    """Escape control characters (TD-28): a request path containing %0A/%0D
+    decodes into real newlines after unquote and could forge structured log
+    lines. Non-printables become \\uXXXX escapes; spaces stay untouched."""
+    if not value:
+        return value
+    return "".join(f"\\u{ord(ch):04x}" if (ord(ch) < 0x20 or ord(ch) == 0x7F) else ch
+                   for ch in value)
 
 
 def index_html_with_token(raw: bytes) -> bytes:
