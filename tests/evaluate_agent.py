@@ -283,8 +283,82 @@ def _matrix_cases() -> list[dict[str, Any]]:
     return cases
 
 
+def _longtail_cases() -> list[dict[str, Any]]:
+    """V5-02（TD-10）：长尾品类用例。expected 只钉原话明确提到的字段，取值以
+    product_knowledge.py 品类 hint 口径 + 引擎实测归一值为准（探针验证 2026-11-22）。
+
+    话术口径备注（供 TD-09 溯源，见 v15 计划 V5-02 执行记录勘误清单）：
+    - 纸杯容量档为 ml（250/350/500，不自动换算），"盎司"表达不在 hint/提取器口径内；
+    - 纸杯内涂层话术用"内淋膜"（提取器匹配"淋膜"，"内涂"不落库）；
+    - 喷画介质用 hint 问句列举的"灯布/写真布"（"喷绘布"不在提取词表）；
+    - 手提袋材料用"白卡纸"全词（提取器只匹配"白卡纸"，口语"白卡"不落库）；
+    - PVC 卡型话术须保住品类别名（"PVC卡，异形冲切卡"），"PVC异形冲切卡"直连会
+      被识别成板材 PVC（"PVC"后接汉字仍算有效品类提及）；
+    - 喷画"3×2 米"的米单位不在尺寸系统（mm/cm/inch）口径内，单位缺失永不默认，
+      平米话术改为纯平方米数量表达。
+    """
+    return [
+        # ---------------------------------------------------------- 纸杯
+        {"name": "长尾-纸杯单PE大容量档", "tag": "长尾",
+         "turns": [{"text": "做 3000 个纸杯，500ml，单PE"}],
+         "expected": {"productType": "纸杯", "quantity": "3000 个",
+                      "productSpecs.cupVolume": "500ml", "productSpecs.cupMaterial": "单PE"}},
+        {"name": "长尾-纸杯内淋膜250档", "tag": "长尾",
+         "turns": [{"text": "做 8000 个250ml纸杯，需要内淋膜"}],
+         "expected": {"productType": "纸杯", "quantity": "8000 个",
+                      "productSpecs.cupVolume": "250ml", "productSpecs.innerCoating": "需要内淋膜"}},
+        # ---------------------------------------------------------- 喷画
+        {"name": "长尾-喷画平米计价", "tag": "长尾",
+         "turns": [{"text": "做 6 平米户外灯布喷画"}],
+         "expected": {"productType": "喷画", "quantity": "6 平方米",
+                      "productSpecs.displayMaterial": "灯布", "productSpecs.install": "户外"}},
+        {"name": "长尾-喷画室内视距", "tag": "长尾",
+         "turns": [{"text": "做 100 张室内写真布喷画，观看距离 5 米"}],
+         "expected": {"productType": "喷画", "quantity": "100 张",
+                      "productSpecs.displayMaterial": "写真布", "productSpecs.install": "室内",
+                      "productSpecs.viewingDistance": "5米"}},
+        # ---------------------------------------------------------- PVC卡
+        {"name": "长尾-PVC卡038冲切", "tag": "长尾",
+         "turns": [{"text": "做 500 张 0.38mm PVC卡，异形冲切卡"}],
+         "expected": {"productType": "PVC卡", "quantity": "500 张",
+                      "productSpecs.cardType": "冲切卡", "productSpecs.cardThickness": '0.38 mm'}},
+        {"name": "长尾-PVC卡磁条", "tag": "长尾",
+         "turns": [{"text": "做 1000 张PVC卡，需要磁条"}],
+         "expected": {"productType": "PVC卡", "quantity": "1000 张",
+                      "productSpecs.chip": "需要芯片/磁条"}},
+        # ---------------------------------------------------------- 联单
+        {"name": "长尾-联单三联打号", "tag": "长尾",
+         "turns": [{"text": "做 200 本三联送货单，需要打号"}],
+         "expected": {"productType": "联单", "quantity": "200 本",
+                      "productSpecs.paperParts": "三联", "productSpecs.numbering": "需要连续编号"}},
+        {"name": "长尾-联单四联", "tag": "长尾",
+         "turns": [{"text": "做 150 本四联无碳联单"}],
+         "expected": {"productType": "联单", "quantity": "150 本",
+                      "productSpecs.paperParts": "四联"}},
+        # ---------------------------------------------------------- 手提袋
+        {"name": "长尾-手提袋牛皮纸扁绳", "tag": "长尾",
+         "turns": [{"text": "做 400 个牛皮纸手提袋，扁绳提手"}],
+         "expected": {"productType": "手提袋", "quantity": "400 个",
+                      "productSpecs.bagMaterial": "牛皮纸", "productSpecs.handle": "扁绳"}},
+        {"name": "长尾-手提袋白卡承重", "tag": "长尾",
+         "turns": [{"text": "做 300 个白卡纸手提袋，覆膜，承重 5 公斤"}],
+         "expected": {"productType": "手提袋", "quantity": "300 个",
+                      "productSpecs.bagMaterial": "白卡纸", "finishing": "覆膜",
+                      "productSpecs.loadBearing": "5kg"}},
+        # ---------------------------------------------------------- 异形标签
+        {"name": "长尾-异形标签枚计", "tag": "长尾",
+         "turns": [{"text": "做 5000 枚异形透明不干胶标签，需要刀模"}],
+         "expected": {"productType": "标签", "quantity": "5000 枚",
+                      "productSpecs.labelShape": "异形", "productSpecs.labelMaterial": "透明不干胶"}},
+        {"name": "长尾-异形标签万枚改张", "tag": "长尾",
+         "turns": [{"text": "做 2万枚异形铜版不干胶标签"}, {"text": "数量改成 3000 张"}],
+         "expected": {"productType": "标签", "quantity": "3000 张",
+                      "productSpecs.labelShape": "异形", "productSpecs.labelMaterial": "铜版不干胶"}},
+    ]
+
+
 DEFAULT_UNITS = {"名片": "张", "宣传册": "本", "包装盒": "个"}
-CASES: list[dict[str, Any]] = _hand_cases() + _matrix_cases()
+CASES: list[dict[str, Any]] = _hand_cases() + _matrix_cases() + _longtail_cases()
 
 # Most cases intentionally feed partial input (they test single fields), so
 # the completion metric only counts cases that receive one extra turn with
