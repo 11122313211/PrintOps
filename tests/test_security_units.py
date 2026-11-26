@@ -13,10 +13,7 @@ from unittest import mock
 
 from llm_adapter import normalize_base_url
 
-_spec = importlib.util.spec_from_file_location(
-    "printops_secret_scan", Path(__file__).resolve().parents[1] / "tools" / "secret_scan.py")
-secret_scan = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(secret_scan)
+from scripts import secret_scan
 
 FILLER = "Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0"
 

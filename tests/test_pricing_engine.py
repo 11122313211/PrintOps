@@ -15,9 +15,7 @@ from pathlib import Path
 
 from pricing_engine import estimate_order, load_rate_card
 from pricing_schema import validate_rate_card
-_calibration_spec = importlib.util.spec_from_file_location("calibrate_pricing", Path(__file__).resolve().parents[1] / "tools/calibrate_pricing.py")
-_calibration = importlib.util.module_from_spec(_calibration_spec)
-_calibration_spec.loader.exec_module(_calibration)
+from scripts import calibrate_pricing as _calibration
 calibrate, REQUIRED_COLUMNS = _calibration.calibrate, _calibration.REQUIRED_COLUMNS
 
 
@@ -290,7 +288,7 @@ class CalibrationTest(unittest.TestCase):
 
     def test_offline_cli_writes_only_a_draft_and_rejects_active_rate_directory(self):
         root = Path(__file__).resolve().parents[1]
-        result = subprocess.run([sys.executable, str(root / "tools/calibrate_pricing.py"), "missing.csv", "--output", str(root / "rate_cards/draft.json")],
+        result = subprocess.run([sys.executable, str(root / "scripts/calibrate_pricing.py"), "missing.csv", "--output", str(root / "rate_cards/draft.json")],
                                 capture_output=True, text=True, encoding="utf-8",
                                 env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"})
         self.assertEqual(result.returncode, 2)

@@ -14,11 +14,8 @@
 本机与 CI 共用同一条门禁，发布前以本机全量为准：
 
 ```bash
-python tools/dev_check.py            # 编译 + 单测 + 评测 + 知识复核 + secret_scan + repo_guard
-npx playwright test --config tests/journey.config.mjs
-npx playwright test --config tests/browser_smoke.config.mjs
-npx playwright test --config tests/ui_positions.config.mjs
-npx playwright test --config tests/ui_focus.config.mjs
+python scripts/dev_check.py            # 编译 + 单测 + 评测 + 知识复核 + MCP冒烟 + 架构守卫 + secret_scan + repo_guard
+npm run test:browser:all
 ```
 
 发布加跑 [RELEASE_CHECKLIST](RELEASE_CHECKLIST.md)「发布前最终检查」的逐条命令（含 `--release-gate`；真实语料为 0 时它按预期失败，候选版记录该结果即可）。全部输出保存到 `reports/`（不入库），关键结论摘录入 CHANGELOG。
@@ -35,7 +32,7 @@ git push origin main --tags
 
 ## 4. GitHub Release 资产
 
-用 `git archive` 生成源码包并附校验和（打包产物 pipx/zipapp 仍属 [path-08](plan/path-08-packaging.md) 顺延，当前只发源码包）：
+用 `git archive` 生成源码包并附校验和（打包产物 pipx/zipapp 仍属 [path-08](archive/plan/path-08-packaging.md) 顺延，当前只发源码包）：
 
 ```bash
 git archive --format=zip --prefix=PrintOps-vX.Y.Z/ vX.Y.Z -o PrintOps-vX.Y.Z-source.zip

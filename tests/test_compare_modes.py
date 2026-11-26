@@ -16,12 +16,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "tools" / "compare_modes.py"
+from scripts import compare_modes as _compare_modes
 
-_spec = importlib.util.spec_from_file_location("compare_modes", TOOL)
-_compare_modes = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_compare_modes)
+ROOT = Path(__file__).resolve().parents[1]
+TOOL = ROOT / "scripts" / "compare_modes.py"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess:
@@ -81,8 +79,7 @@ class CompareModesCasesTest(unittest.TestCase):
 
 class CompareModesComparisonTest(unittest.TestCase):
     def test_default_run_known_divergence_only(self) -> None:
-        """内置默认集：等价面只有预登记的估价 workflowStage 已知分歧，
-        无新增白名单外差异，结论可合入。"""
+        """内置默认集：TD-25 偿还后等价面零分歧，无新增白名单外差异，结论可合入。"""
         report = _compare_modes.run_comparison(_compare_modes.DEFAULT_CASES)
         self.assertEqual(report["totals"]["cases"], len(_compare_modes.DEFAULT_CASES))
         self.assertEqual(report["totals"]["fieldsCompared"],
@@ -90,14 +87,12 @@ class CompareModesComparisonTest(unittest.TestCase):
         self.assertEqual(report["totals"]["unexpectedDiffs"], 0)
         self.assertEqual(report["totals"]["equivalenceDiffs"],
                          report["totals"]["knownDivergences"])
+        self.assertEqual(report["totals"]["equivalenceDiffs"], 0)
         self.assertEqual(report["conclusion"]["verdict"], "可合入")
-        # 已知分歧就是估价用例的 workflowStage。
+        # TD-25 已偿还：估价用例两轨 workflowStage 均为 quote，零等价面分歧。
         price = next(item for item in report["cases"]
                      if item["name"] == "估价-完整订单-模型调估价工具")
-        self.assertEqual([diff["surface"] for diff in price["equivalence"]],
-                         ["workflowStage"])
-        self.assertTrue(all(diff["verdict"].startswith("已知")
-                            for diff in price["equivalence"]))
+        self.assertEqual(price["equivalence"], [])
         # 多产品门用例两轨零差异。
         multi = next(item for item in report["cases"] if item["name"] == "多产品门-先于模型")
         self.assertEqual(multi["equivalence"], [])
@@ -160,7 +155,7 @@ class CompareModesReportTest(unittest.TestCase):
                         "## 4. 行动项", "## 5. 结论"):
             self.assertIn(section, text)
         self.assertIn("PLANNER_PROMPT_VERSION=1", text)
-        self.assertIn("已知分歧（预登记）", text)
+        self.assertIn("等价面零漂移", text)
         self.assertIn("可合入", text)
         self.assertNotIn("api_key", text)
 

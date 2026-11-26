@@ -235,7 +235,7 @@ def _load_agent(memory_path: Path, session_id: str) -> Any:
 
 def run_mcp_smoke(session_id: str, memory_path: Path, capabilities: str) -> dict[str, Any]:
     """Run the actual stdio transcript used by the dsh-facing boundary."""
-    helper_path = REPO_ROOT / "tools" / "dsh_mcp_smoke.py"
+    helper_path = REPO_ROOT / "scripts" / "dsh_mcp_smoke.py"
     if not helper_path.is_file():
         raise LocalHostError("dsh_mcp_smoke.py is missing")
     import importlib.util  # local stdlib import

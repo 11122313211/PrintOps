@@ -15,7 +15,6 @@
 | 编号 | 位置 | 描述 | 影响 | 归属 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | TD-09 | product_knowledge.py | 行业风险规则缺口：折页压痕线、深色实底折痕爆裂、专色配置说明（ROADMAP v0.9.x 遗留） | 行业专业性不足 | 待排期（v0.14 知识专项；依赖可溯源来源） | 未开始 |
-| TD-25 | agent.py call_tool estimate_price 分支 vs _handle_price | 估价意图两轨 workflowStage 不一致：规则轨 _handle_price 不置工作流态（停在 recommend），planner 轨 call_tool 的 estimate_price 分支置 "quote"（对 preflight/quote/export 粘性），同订单同估算区间信封工作流态不同 | 切换 planner 前后 UI 阶段语义漂移 | 待裁定（V5-01 差分断言发现，tools/compare_modes.py KNOWN_DIVERGENCES 已预登记；方向：规则轨同步置 quote，或确认 call_tool 置态为 planner 轨特有语义） | 未开始 |
 
 ## B.3 运行与安全
 
@@ -24,7 +23,7 @@
 | TD-14 | llm_adapter.py SSRF | 配置时校验与请求时之间存在 DNS 重绑定理论窗口 | 本地单机威胁模型内可接受 | 路径 9（S9-08） | 计划内 |
 | TD-15 | llm_config.json | Key 明文为默认存储 | 本机文件泄露即凭据泄露 | 路径 9（S9-06/07） | 计划内 |
 | TD-16 | server.py 静态白名单 | 目录白名单扩展后需保持"`/app/../server.py` 归一化 404"类测试常青 | 路径穿越回归 | 路径 2（S2-01） | 计划内 |
-| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-11-21 Mimosa deep 重扫（scan-2026-11-21T09-54-25.592Z，114 项，seal sha256:921c095d…）：与 2026-10-24 基线（113 项）同量级，TD-23 渲染路径修复与 journey.js ERROR_TEXTS 增项未引入新入口；既有 triage 结论继续有效——innerHTML 均走 markdown.js 白名单渲染器（`test_markdown_render.py` 契约锁定），其余为 textContent 或启发式误报。同日二次重扫（scan-2026-11-21T11-58-04.423Z，114 项，seal sha256:2e62afc9…）：覆盖参考版发布层级与 rate card 标定两笔提交（evaluate_agent 两档门槛为评测脚本非运行面、其余为文档与 JSON）， findings 数与无新 hypotheses 维持不变；同日三次重扫（scan-2026-11-21T12-09-29.671Z，114 项，seal sha256:bdf1fbd6…）：覆盖标定提交 98e865d（schema 枚举扩展/卡 JSON/manifest/测试），结论同前；同日四次重扫（scan-2026-11-21T12-20-42.805Z，114 项，seal sha256:d89c8102…）：覆盖 TD-22 记录提交 3171ba7（纯文档），结论同前；同日五次重扫（scan-2026-11-21T12-36-00.868Z，114 项，seal sha256:7f2d99d8…）：覆盖海报回采标定提交 4bebecc（probe 文档/rate card 海报块/契约测试集合），结论同前；同日六次重扫（scan-2026-11-21T12-46-54.127Z，114 项，seal sha256:cb35e16f…）：覆盖胶装画册变体标定提交 08e65d5（variantReferences/卡 v2026.12.04/测试扩展），结论同前；次日七次重扫（scan-2026-11-22T04-32-09.915Z，114 项，seal sha256:39e80b51…）：覆盖 v1.4.0 参考版收口提交 f150849（CHANGELOG 折叠与版本表述），结论同前；历次提交前钩子报 scanner_enobufs（结论迟到）以对应重扫结论补齐；同日八次重扫（scan-2026-11-22T04-51-43.252Z，114 项，seal sha256:de4b9d50…）：覆盖 v1.5 执行计划提交 1c46e88（纯文档），结论同前；同日九次重扫（scan-2026-11-22T07-40-47.545Z，114 项，seal sha256:57e6b7d5…）：覆盖 V5-02 长尾用例提交 491054c（评测语料+12 例/文档/TD-22），结论同前；同日十次重扫（scan-2026-11-22T08-12-54.636Z，114 项，seal sha256:1037bac1…）：覆盖 V5-01 双轨差分提交 bd8062c（新测试/CLI/PLANNER_PROMPT_VERSION 锚），结论同前；同日十二次重扫（scan-2026-11-22T10-02-07.773Z，114 项，seal sha256:68964498…）：覆盖 v1.5.0 发布态（tag v1.5.0=收口提交 21cbdea），结论同前；同日发起全方位安全体检（docs/plan/security-audit-2026-11-22.md，三面代理+主会话复核），产出 TD-26/27/28；同日十三次重扫（scan-2026-11-22T10-18-39.488Z，114 项，seal sha256:da6cb051…）：覆盖审计登记提交 b451474（纯文档），结论同前；同日十四次重扫（scan-2026-11-22T10-30-45.347Z，114 项，seal sha256:0af1edc6…）：覆盖 TD-26 Host 白名单修复提交 471de3a（server.py/测试/文档），结论同前；同日十五次重扫（scan-2026-11-22T10-42-26.245Z，114 项，seal sha256:2e68f154…）：覆盖 TD-27 禁重定向提交 2c3e7f1（llm_adapter/端到端测试），结论同前；同日十六次重扫（scan-2026-11-22T11-23-14.392Z-7d9fd895a974，114 项，seal sha256:d0894c18…）：覆盖 TD-28 收尾文档提交 ae824e6（审计处置状态/CHANGELOG/登记册 B.5 迁移），结论同前 | 重扫结论未变；renderer 契约变更或引擎运行面变更时再次重扫 | 待排期（考虑让扫描聚焦源码目录排除 reports/） | 已 triage（2026-11-21 两次重扫） |
+| TD-22 | app.js/journey.js 静态扫描 XSS 入口标记 | 2026-10-24 基线（113 项）至 2026-11-22 第 16 次重扫（114 项，最新 seal `sha256:d0894c18…`）结论维持不变：`innerHTML` 均走 `markdown.js` 白名单渲染器（`test_markdown_render.py` 契约锁定），其余为 `textContent` 或启发式误报。完整逐次重扫流水已拆至 [mimosa-scan-log.md](mimosa-scan-log.md) | 重扫结论未变；renderer 契约变更或引擎运行面变更时再次重扫 | 待排期（考虑让扫描聚焦源码目录排除 reports/） | 已 triage（已拆流水日志） |
 
 ## B.4 文档与流程
 
@@ -34,6 +33,7 @@
 
 | 编号 | 原描述 | 偿还版本 | 备注 |
 | --- | --- | --- | --- |
+| TD-25 | 估价意图两轨 workflowStage 不一致（规则轨 `_handle_price` 停在 `recommend` vs planner 轨 `call_tool("estimate_price")` 置 `quote`） | 1.5.0 后（Wave 3） | `printops/agent/planner_orchestrator.py` 的 `_handle_price` 对齐 `call_tool("estimate_price")` 置 `clarify`/`quote`；`scripts/compare_modes.py` `KNOWN_DIVERGENCES` 清零，10 组双轨差分用例实现零等价面分歧 |
 | TD-28 | 健壮性低危批：RecursionError 分类×2、SESSION_LOCKS 只增不删、limit=-1 全表加载、日志换行注入、markdown NUL 占位符、rate card 数值无上界、secret_scan 形态缺口、NLU O(n²) | 1.5.0 后 | 四批修复：server.py（RecursionError→400 INVALID_JSON、limit clamp 1~500、锁有界驱逐 in-use 保护、日志\uu 转义，c4a2707）；llm_adapter 十处解析捕获补 RecursionError + pricing_schema 金额 ≤1e6/因子 ≤10 绝对上界（da08000）；markdown 双入口剥 NUL + secret_scan 补 PEM/Stripe/glpat/npm/JWT/LTAI 六形态（0d905b2）；NLU 合并别名正则单趟扫描 + O(n) 消重（实测别名密集文本 0.68→0.02s，e32c5c0）。评测 123 例等价全绿；S9（sessionStorage 明文）与 H6（health 存活探测面）按体检结论记录维持 |
 | TD-27 | 模型请求默认 opener 跟随 3xx 且 Authorization 头跨主机保留、重定向目标不复检私网 | 1.5.0 后 | llm_adapter 导入时进程级安装 _NoRedirect opener：任何 3xx 以 HTTPError 硬失败（不在重试集合）；真实双服务器端到端测试（网关 302 → 目标零命中、错误消息含 302 不含 key）+ 全局 opener 安装断言；ARCHITECTURE SSRF 条目补禁跟随 |
 | TD-26 | 浏览器侧 DNS rebinding 全链路（静态路径无 _guard + index.html 注入令牌 + Origin==Host 恒过） | 1.5.0 后 | Host 头白名单 LOCAL_HOSTNAMES（127.0.0.1/localhost/::1）前置到 _guard 与 serve_static，非环回 Host 一律 403 FORBIDDEN_HOST；新增 3 项 socket 级测试（rebinding POST/静态页无令牌/环回变体放行）；ARCHITECTURE 同源条目改述；CHANGELOG Unreleased 记录 |

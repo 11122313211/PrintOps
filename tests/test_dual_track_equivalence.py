@@ -139,9 +139,9 @@ class DualTrackEquivalenceTest(unittest.TestCase):
                          llm["toolResult"].get("status"))
 
     def test_price_intent_scripts_estimate_tool(self) -> None:
-        """钉：price 意图（剧本让模型调 estimate_price 再合成总结）——估算结果与
-        订单等价；结果消息来自 planner 合成（抢跑 post_planner）；workflowStage
-        recommend vs quote 是已知白名单外分歧（规则轨 _handle_price 不经 call_tool）。"""
+        """钉：price 意图（剧本让模型调 estimate_price 再合成总结）——估算结果、
+        订单与 workflowStage（TD-25 偿还后两轨均置 quote）全等价；结果消息来自
+        planner 合成（抢跑 post_planner）。"""
         def setup(agent: Agent) -> None:
             agent.chat(READY_TEXT)
 
@@ -150,11 +150,9 @@ class DualTrackEquivalenceTest(unittest.TestCase):
             plans=[tool_plan("estimate_price"), final_plan("模型已完成估价总结。")],
             setup=setup)
 
-        # 等价面（workflowStage 除外——单独钉已知分歧）。
-        self._assert_equivalent(rule, llm, workflow_stage=False)
-        # 已知白名单外分歧（预登记，tools/compare_modes.py KNOWN_DIVERGENCES 同源）：
-        # 规则轨 workflowStage 保持 recommend；planner 轨 call_tool 置 quote。
-        self.assertEqual(rule["workflowStage"], "recommend")
+        # 等价面（含 workflowStage：TD-25 已偿还，两轨均置 quote）。
+        self._assert_equivalent(rule, llm)
+        self.assertEqual(rule["workflowStage"], "quote")
         self.assertEqual(llm["workflowStage"], "quote")
         # 等价面补充：估算区间完全一致（同一本地估价内核）。
         self.assertEqual(rule["toolResult"]["type"], "estimate")

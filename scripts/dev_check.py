@@ -3,8 +3,8 @@
 Releases are validated on the developer's own machine. This runner chains the
 documented checks into one command with a stable summary:
 
-    python3 tools/dev_check.py          # compile, unit tests, evaluation, guards
-    python3 tools/dev_check.py --quick  # compile + guards only (fast loop)
+    python3 scripts/dev_check.py          # compile, unit tests, evaluation, guards
+    python3 scripts/dev_check.py --quick  # compile + guards only (fast loop)
 
 It is standard-library only and forces UTF-8 pipes so Chinese report text
 survives legacy Windows consoles.
@@ -59,9 +59,11 @@ def main():
                             [sys.executable, "-m", "unittest", "discover",
                              "-s", "tests", "-p", "test_*.py"]))
         results.append(_run("evaluation", [sys.executable, "tests/evaluate_agent.py"]))
-        results.append(_run("knowledge review", [sys.executable, "tools/knowledge_review.py"]))
-    results.append(_run("secret scan", [sys.executable, "tools/secret_scan.py"]))
-    results.append(_run("repo guard", [sys.executable, "tools/repo_guard.py"]))
+        results.append(_run("knowledge review", [sys.executable, "scripts/knowledge_review.py"]))
+        results.append(_run("dsh mcp smoke", [sys.executable, "scripts/dsh_mcp_smoke.py"]))
+    results.append(_run("arch guard", [sys.executable, "scripts/arch_guard.py"]))
+    results.append(_run("secret scan", [sys.executable, "scripts/secret_scan.py"]))
+    results.append(_run("repo guard", [sys.executable, "scripts/repo_guard.py"]))
     print("")
     print("本地门禁：" + ("全部通过" if all(results) else "存在失败项（发布检查未通过）"))
     return 0 if all(results) else 1

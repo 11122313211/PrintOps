@@ -17,19 +17,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_helper(filename: str, module_name: str):
-    """Load a helper under tools/ without shadowing the legacy tools.py module."""
-    path = REPO_ROOT / "tools" / filename
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_launcher = _load_helper("dsh_mcp_launcher.py", "printops_dsh_mcp_launcher_test")
-_smoke = _load_helper("dsh_mcp_smoke.py", "printops_dsh_mcp_smoke_test")
+from scripts import dsh_mcp_launcher as _launcher
+from scripts import dsh_mcp_smoke as _smoke
 build_server_argv = _launcher.build_server_argv
 run_smoke = _smoke.run_smoke
 
@@ -91,7 +80,7 @@ class DshRuntimeTest(unittest.TestCase):
                 "PYTHONUTF8": "1",
             })
             completed = subprocess.run(
-                [sys.executable, "tools/dsh_mcp_launcher.py", "--session-id", "bound-session",
+                [sys.executable, "scripts/dsh_mcp_launcher.py", "--session-id", "bound-session",
                  "--memory-path", str(db), "--capabilities", "L0", "--dry-run"],
                 cwd=str(REPO_ROOT), env=environment, text=True, encoding="utf-8",
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
@@ -114,7 +103,7 @@ class DshRuntimeTest(unittest.TestCase):
         for extra in (("--session-id", "bad session"),
                       ("--session-id", "ok", "--capabilities", "L2")):
             completed = subprocess.run(
-                [sys.executable, "tools/dsh_mcp_launcher.py", *extra, "--dry-run"],
+                [sys.executable, "scripts/dsh_mcp_launcher.py", *extra, "--dry-run"],
                 cwd=str(REPO_ROOT), text=True, encoding="utf-8", stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},

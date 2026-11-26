@@ -10,14 +10,8 @@ import sys
 import unittest
 from pathlib import Path
 
-_TOOLS_DIR = str(Path(__file__).resolve().parents[1] / "tools")
-_ROOT = str(Path(__file__).resolve().parents[1])
-for entry in (_TOOLS_DIR, _ROOT):
-    if entry not in sys.path:
-        sys.path.insert(0, entry)
-
-import annotate_case  # noqa: E402
-from order_model import ORDER_DEFAULTS  # noqa: E402
+from scripts import annotate_case
+from printops.domain.order_model import ORDER_DEFAULTS
 
 
 class FakeAgent(annotate_case.Agent):

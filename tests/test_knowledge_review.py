@@ -15,7 +15,7 @@ from product_knowledge import (KNOWLEDGE_MANIFEST, PRODUCT_CATALOG,
                                knowledge_review_status)
 
 ROOT = Path(__file__).resolve().parents[1]
-REVIEW_TOOL = ROOT / "tools" / "knowledge_review.py"
+REVIEW_TOOL = ROOT / "scripts" / "knowledge_review.py"
 LAST_REVIEWED = date.fromisoformat(KNOWLEDGE_MANIFEST["lastReviewed"])
 CADENCE = int(KNOWLEDGE_MANIFEST["reviewCadenceDays"])
 GRACE = 30

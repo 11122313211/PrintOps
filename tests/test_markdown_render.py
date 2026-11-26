@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RENDERER = ROOT / "markdown.js"
+RENDERER = ROOT / "web" / "markdown.js"
 NODE = shutil.which("node")
 EVENT_HANDLER = re.compile(r"\son[a-z]+\s*=", re.IGNORECASE)
 TAG = re.compile(r"<[^>]*>")

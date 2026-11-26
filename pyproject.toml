@@ -1,0 +1,17 @@
+[project]
+name = "printops"
+version = "1.5.0"
+description = "Local-first, zero-dependency print order agent (Python standard library runtime)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+printops-server = "printops.web.server:main"
+printops-mcp = "printops.mcp.server:main"
+
+[tool.printops]
+runtime-dependencies = "stdlib-only"
+static-root = "web"
+scripts-root = "scripts"

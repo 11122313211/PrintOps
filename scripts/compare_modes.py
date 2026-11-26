@@ -60,13 +60,8 @@ READY_TEXT = "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"
 
 # 白名单外已知分歧预登记（键 = (用例名, 等价面字段)）。这是"已知并已裁定为
 # 暂不修"的行为分歧台账：报告把它们标为"已知分歧（预登记）"，不计入
-# "新增待裁定"。该台账只允许缩不允许涨——新增分歧必须人工裁定后登记或修复。
-KNOWN_DIVERGENCES: dict[tuple[str, str], str] = {
-    ("估价-完整订单-模型调估价工具", "workflowStage"):
-        "规则轨 _handle_price 直接调 _estimate_reference，不置工作流态（保持 recommend）；"
-        "planner 轨经 call_tool('estimate_price') 置 workflowStage='quote'。"
-        "订单与估算结果等价，仅信封工作流态不同。",
-}
+# "新增待裁定"。该台账只允许缩不允许涨——TD-25 已偿还，当前已知分歧为 0。
+KNOWN_DIVERGENCES: dict[tuple[str, str], str] = {}
 
 # 内置默认用例集：与 tests/test_dual_track_equivalence.py 的 10 组差分用例同源，
 # 与 Agent.PLANNER_INTENT_PATTERNS 六意图对齐（quote/price/capability/validation/

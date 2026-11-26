@@ -1,18 +1,7 @@
-"""Schema 2.0 physical dimensions; evidence stays outside this structure."""
-from unit_normalizer import dimension_values
+"""Root compatibility shim aliasing ``printops.domain.measurement``."""
+from __future__ import annotations
 
-SEMANTICS = {
-    "finishedSize": "finished", "expandedSize": "expanded", "dieCutSize": "die_cut",
-    "packageSize": "package_unspecified", "packageInnerSize": "package_inner",
-    "packageOuterSize": "package_outer",
-}
+import sys
+from printops.domain import measurement as _impl
 
-
-def parse_measurement(value, semantic="finished"):
-    values = dimension_values(value)
-    if values is None:
-        return None
-    result = {axis: int(v) if v == int(v) else float(v)
-              for axis, v in zip(("width", "height", "depth"), values)}
-    result.update(unit="mm", semantic=semantic)
-    return result
+sys.modules[__name__] = _impl

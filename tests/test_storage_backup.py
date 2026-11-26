@@ -93,7 +93,7 @@ class StorageBackupTest(unittest.TestCase):
         self.assertFalse((self.root / "never-created").exists())
 
     def test_cli_round_trip(self):
-        script = Path(__file__).resolve().parents[1] / "tools" / "order_backup.py"
+        script = Path(__file__).resolve().parents[1] / "scripts" / "order_backup.py"
         for arguments in (["create", str(self.source), "--output", str(self.bundle)],
                           ["verify", str(self.bundle)],
                           ["restore", str(self.bundle), "--destination", str(self.root / "cli-restore")],

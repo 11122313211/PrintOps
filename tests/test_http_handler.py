@@ -29,7 +29,7 @@ class HttpGateTest(unittest.TestCase):
         server.MEMORY = Memory(Path(cls.tmp.name) / "agent.sqlite3")
         server.SESSION_LOCKS = {}
         server.PLANNER = server.OpenAICompatiblePlanner()
-        cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.httpd = server.PrintOpsHTTPServer(("127.0.0.1", 0), server.Handler)
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
@@ -154,13 +154,18 @@ class HttpGateTest(unittest.TestCase):
     # -- static whitelist --------------------------------------------------
 
     def test_whitelisted_static_files_are_served(self):
-        for path in ("/", "/index.html", "/app.js?v=20260905-6", "/markdown.js?v=20260918-1", "/styles.css"):
+        for path in ("/", "/index.html", "/app.js?v=20260905-6", "/markdown.js?v=20260918-1",
+                     "/styles.css", "/js/main.js", "/js/store.js", "/js/render/chat.js",
+                     "/css/tokens.css", "/css/workbench.css"):
             status, _ = self.request(path, method="GET")
             self.assertEqual(status, 200, path)
 
     def test_non_whitelisted_paths_return_404(self):
         for path in ("/.git/config", "/.gitignore", "/server.py", "/agent.py",
-                     "/tools/secret_scan.py", "/docs/ROADMAP.md", "/README.md",
+                     "/printops/web/server.py", "/scripts/secret_scan.py",
+                     "/web/../server.py", "/js/../../server.py", "/js/evil.py",
+                     "/css/../index.html", "/tools/secret_scan.py",
+                     "/docs/ROADMAP.md", "/README.md",
                      "/data/agent.sqlite3", "/data", "/favicon.ico", "/nope.txt"):
             status, _ = self.request(path, method="GET")
             self.assertEqual(status, 404, path)
@@ -212,6 +217,7 @@ class HttpGateTest(unittest.TestCase):
         # structured log line; the handler now escapes control characters.
         with self.assertLogs(server.LOGGER, level="INFO") as captured:
             self.request("/api/health%0aX-Forged%20yes", method="GET")
+            self.httpd.wait_for_idle(2.0)
         messages = [record.getMessage() for record in captured.records]
         forged = [m for m in messages if "api/health" in m]
         self.assertTrue(forged, "请求日志应包含该路径")

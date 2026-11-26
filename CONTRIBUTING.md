@@ -14,17 +14,17 @@ PrintOps 刻意保持轻量。动手前请先读“核心约束”，它们比�
 3. **不伪造真实连接**：当前没有真实 HTTP transport 或供应商授权；新供应商请通过 registry 扩展，
    内置模板保持 `verified=false`、`networkEnabled=false`。
 4. **示例价不是市场价**：rate card 变更必须版本化，并在文档与输出中标注 illustrative。
-5. **隐私红线**：不提交真实订单、原稿、密钥或任何 `data/` 内容；提交前跑 `python3 tools/repo_guard.py`。
+5. **隐私红线**：不提交真实订单、原稿、密钥或任何 `data/` 内容；提交前跑 `python3 scripts/repo_guard.py`。
 
 ## 开发循环
 
 ```bash
-python3 tools/dev_check.py           # 编译 + 611 项单测 + 评测（123 例） + knowledge_review + secret_scan + repo_guard
-python3 tools/dev_check.py --quick   # 只跑编译与守护（快速回路）
+python3 scripts/dev_check.py           # 编译 + 单测 + 评测（123 例） + knowledge_review + dsh_mcp_smoke + arch_guard + secret_scan + repo_guard
+python3 scripts/dev_check.py --quick   # 只跑编译与守护（快速回路）
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json   # 发布门槛（真实语料不足时必须失败）
 ```
 
-GitHub Actions CI（`.github/workflows/ci.yml`）与本机跑**同一条门禁** `tools/dev_check.py`
+GitHub Actions CI（`.github/workflows/ci.yml`）与本机跑**同一条门禁** `scripts/dev_check.py`
 （ubuntu + windows × Python 3.9/3.14），发布前仍以本机检查为准。跨平台代码请同时考虑 Windows（GBK 控制台、SQLite 文件锁、无 SIGTERM）差异，
 参考 `stdio_utf8.py` 与 `tests/test_runtime_hardening.py` 的平台处理。
 

@@ -19,14 +19,14 @@ data/backups/
 
 # Local-only user files and generated artifacts.
 # Put artwork, inbound files, exports, and one-off reports below these paths.
-local/
-runtime/
-inbox/
-outbox/
-uploads/
-exports/
-artifacts/
-reports/
+/local/
+/runtime/
+/inbox/
+/outbox/
+/uploads/
+/exports/
+/artifacts/
+/reports/
 *.local
 *.local.*
 *.tmp

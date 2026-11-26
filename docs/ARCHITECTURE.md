@@ -6,7 +6,19 @@
 输入 -> 感知字段 -> 读取/更新记忆 -> 模型规划（可选） -> 调用白名单工具 -> 模型总结 -> 结构化响应 -> 运行记录
 ```
 
-实现布局：`order_model.py` 持有订单数据契约、规范化与 `schemaVersion` 迁移；`nlu.py` 持有规则感知与置信度分级；`tools.py` 持有工具注册表与契约；`agent.py` 保留会话记忆、工作流和工具网关并 re-export 公共符号；`llm_adapter.py` 负责模型协议与 planner；`mcp_server.py` 提供 stdio MCP 适配。存储层由 `storage_contract.py`（OrderStore 协议与 `ToolCallRecorder` 可选契约）、`storage_sqlite.py` / `storage_memory.py` 双实现和 `storage_factory.py` 选择器组成，`storage_policy.py` / `storage_backup.py` 负责保留策略与备份恢复；知识复核时效由 `product_knowledge.py` 的 `knowledge_review_status()` 提供，离线检查入口为 `tools/knowledge_review.py`。前端由 `app.js`、`markdown.js` 与 `workbench.js` 组成。
+实现布局：核心代码按分层包结构组织在 `printops/` 下（根目录保留 `server.py`、`agent.py`、`mcp_server.py` 等薄兼容垫片，确保既有启动命令与外部导入零破坏）：
+
+- `printops/domain/`：`vocab.py`、`units.py`、`measurement.py`、`knowledge.py`（含产品目录、复核时效与追问/快捷选项元数据）、`order_model.py`、`order_contract.py`、`nlu.py`、`perception_candidates.py`；
+- `printops/pricing/`：`schema.py` 与 `engine.py`（读取 `rate_cards/` 版本化 JSON）；
+- `printops/storage/`：`contract.py`（`OrderStore`、`ToolCallRecorder` 与领域归一化回调钩子）、`sqlite.py`、`memory.py`、`factory.py`、`policy.py`、`backup.py`；
+- `printops/supplier/`：`contract.py`、`adapters.py`、`connectors.py`（通过注册表协议单向依赖，零循环导入）；
+- `printops/tools/`：`registry.py`（8 个白名单工具注册表与契约，彻底消除原 `tools.py` 与运维脚本目录同名冲突）；
+- `printops/llm/`：拆分为 `config_store.py`、`transport.py`、`budget.py`、`protocol.py`、`probe.py`、`plan_validator.py`、`planner.py` 与薄门面 `adapter.py`；
+- `printops/agent/`：拆分为 `memory.py`、`provenance.py`、`patch_engine.py`、`planner_orchestrator.py`、`tool_gateway.py`、`delivery_lifecycle.py`、`context_projector.py`、`facade.py` 与兼容门面 `core.py`；
+- `printops/mcp/`：`server.py`（标准库 JSON-RPC stdio MCP server）；
+- `printops/web/`：`server.py`（轻量 HTTP API 与防路径穿越的 `web/` 静态白名单）；
+- `scripts/`：离线门禁、知识复核、安全扫描、架构守卫（`arch_guard.py`）、双轨对比与 dsh/local host 运维脚本；
+- `web/`：无构建工具原生前端——`web/css/`（6 个多行模块化样式表）、`web/js/`（16 个原生 ES Modules + `store.js` 单一状态源）、`markdown.js`、`workbench.js`、`journey.js`、`workcard.js`。
 
 - `Agent`：维护任务状态；模型可提出字段补丁和受限工具调用，工具结果会回传模型总结，最多三轮，失败时回到确定性规则。每次运行生成 `runId` 与步骤事件，并保存字段来源、置信度和冲突。规则感知的置信度按证据强度分级（显式标签/单位 0.9+，裸数字与氛围词低于 0.75），生产字段低置信度时阻止生成交接单。
 - `Memory`：SQLite 会话记忆，保存订单、最近 80 条消息和当前阶段；刷新页面可恢复完整对话。
@@ -78,7 +90,7 @@
 
 发送给后端的始终是输入框原始文本，渲染只影响展示，`nlu.py` 的解析路径不变。
 
-静态资源由 `server.py` 的 `STATIC_FILES` 白名单控制（`/`、`/index.html`、`/app.js`、`/markdown.js`、`/styles.css`）。白名单保存在进程内存中，修改代码后必须重启服务，否则新增资源会返回 404。
+静态资源由 `printops/web/server.py` 的 `STATIC_FILES` 与受控子目录白名单（`web/js/*.js`、`web/css/*.css`，经 `Path.resolve().relative_to(STATIC_ROOT)` 严格防路径穿越）控制。白名单保存在进程内存中，修改代码后必须重启服务，否则新增资源会返回 404。
 
 知识清单由 `product_knowledge.py` 的 `KNOWLEDGE_MANIFEST` 维护，包含版本、复核日期、来源范围、成品/展开/刀模/包装三维尺寸定义和人工确认策略；1.3.0 起还声明 `reviewCadenceDays`（90 天）与 `nextReviewAt`，`knowledge_review_status()` 据此返回 ok/due/overdue（逾期宽限 30 天）与 rate card 有效期余量，日期可注入便于测试。距复核期达到 due/overdue 时，订单响应在 `validation.risks` 注入提示级 `knowledge_review_due`（距上次复核天数与复核建议），获取失败不影响响应。`tools/knowledge_review.py` 是纯离线复核 CLI：报告复核时效与 rate card 生效窗口、比对品类目录与 rate card 覆盖差集、校验来源描述完整性；结构性不一致退出码 1，仅到期/逾期只警告退出码 0，dev_check 非 `--quick` 路径挂载。`/api/products` 返回完整清单，订单校验、估算、供应商能力匹配和 Agent 会话响应返回 `knowledgeVersion`；供应商静态能力另带 `supplierProfileVersion`。版本元数据用于追溯规则依据，不表示来源具有实时产能、价格或交期保证。
 

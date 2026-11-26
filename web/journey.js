@@ -30,8 +30,10 @@
     $(".task-bar").hidden = name === "intake";
     for (const pane of document.querySelectorAll(".journey-pane")) pane.hidden = pane.id !== `phase-${name}`;
     for (const tab of document.querySelectorAll("[data-view]")) {
-      if (tab.dataset.view === name) tab.setAttribute("aria-current", "page");
+      const active = tab.dataset.view === name;
+      if (active) tab.setAttribute("aria-current", "page");
       else tab.removeAttribute("aria-current");
+      tab.classList.toggle("is-viewing", active);
     }
     $("#workspace").dataset.view = name;
     $("#workspace-title").textContent = {intake: "把想法说出来", compare: "比较效果与成本", review: "把每一项核对清楚"}[name];
@@ -46,6 +48,7 @@
     for (const pane of document.querySelectorAll(".journey-pane")) pane.tabIndex = -1;
     for (const tab of document.querySelectorAll("[data-view]")) tab.addEventListener("click", () => {
       if (tab.closest(".order-section") && $("#workspace").dataset.mobilePane === "order") $("#mobile-back").click();
+      if (tab.closest(".sidebar") && window.matchMedia("(max-width: 1050px)").matches) callbacks?.closeSidebar?.();
       view(tab.dataset.view, true);
     });
     for (const example of document.querySelectorAll("[data-example]")) example.addEventListener("click", () => {
@@ -137,6 +140,14 @@
     if (issue.itemId && issue.itemId !== snapshot.activeItemId) await callbacks.focus(issue.itemId);
     if (issue.action === "compare") { view("compare"); ($(".choose-option:not(:disabled)") || $("#request-options")).focus(); return; }
     if (issue.action === "upload") { view("intake"); $("#upload-button").click(); return; }
+    // On desktop intake view, keep simple missing single-product fixes right inside
+    // the visible Order Draft pane instead of pulling the user out of Chat.
+    const isMulti = Array.isArray(snapshot.order?.items) && snapshot.order.items.length > 1;
+    const reviewEntry = (snapshot.review?.fields || []).find((field) => field.fieldId === issue.fieldId || field.fieldPath === issue.fieldPath);
+    const needsReviewPane = reviewEntry?.status === "pending_confirmation" || issue.kind === "candidate" || issue.kind === "stale";
+    if (currentView === "intake" && !isMulti && !needsReviewPane && issue.fieldPath && callbacks?.canFocusInlineDraft?.()) {
+      if (callbacks?.focusDraftField?.(issue.fieldPath)) return;
+    }
     view("review");
     const row = [...document.querySelectorAll(".review-field")].find(node => node.dataset.fieldId === issue.fieldId);
     if (row) {
@@ -150,9 +161,33 @@
   }
   function renderIssues(data) {
     const issues = data.review?.issues || [];
+    const panel = $("#risk-panel");
     const root = $("#risk-list");
     root.replaceChildren();
-    $("#risk-panel").hidden = !issues.length;
+    const isBlankOrder = !data.order?.productType && !data.order?.quantity
+      && !(data.order?.items?.length) && !data.uploadedFile && !(data.history?.length);
+    if (isBlankOrder) {
+      panel.classList.add("is-onboarding");
+      panel.hidden = false;
+      $("#risk-count").textContent = "准备就绪";
+      const card = el("div", null, "risk-onboarding-card");
+      card.append(el("p", "直接告诉智能体你要印什么，系统会自动提取参数并逐项核验，无需手动逐格填表。", "risk-onboarding-copy"));
+      const tags = el("div", null, "risk-onboarding-tags");
+      for (const name of ["印刷品", "数量", "尺寸", "材料", "印刷颜色", "交期"]) {
+        tags.append(el("span", name, "risk-onboarding-tag"));
+      }
+      const startBtn = button("查看输入示例", () => {
+        view("intake");
+        const starter = $("#starter-panel");
+        if (starter) { starter.hidden = false; starter.open = true; }
+        $("#message-input")?.focus();
+      }, "issue-action risk-onboarding-btn");
+      card.append(tags, startBtn);
+      root.append(card);
+      return;
+    }
+    panel.classList.remove("is-onboarding");
+    panel.hidden = !issues.length;
     $("#risk-count").textContent = `${issues.filter(issue => issue.blocking).length} 项需处理`;
     for (const [section, label] of [["now", "现在需要处理"], ["handoff", "交接时说明"]]) {
       const selected = issues.filter(issue => (issue.section || (issue.blocking ? "now" : "handoff")) === section);
@@ -225,9 +260,10 @@
     const control = $("#next-task-action");
     control.textContent = label; control.onclick = action;
     $("#journey-announcement").textContent = title;
-    if (lastRevision !== undefined && data.revision !== lastRevision && !newOrder) {
+    if (lastRevision !== undefined && data.revision !== lastRevision && !newOrder && !callbacks?.hasUndoNotice?.(data.revision)) {
       const notice = $("#change-notice");
       notice.hidden = false;
+      notice.classList.remove("is-undo-banner");
       notice.textContent = data.orderGenerated ? "交接内容已更新，请核对当前版本。" : "订单已更新；相关方案、估算与交接确认以当前版本为准。";
     }
     lastRevision = data.revision;

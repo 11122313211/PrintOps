@@ -1,0 +1,1041 @@
+/* PrintOps CSS Module: harness.css — Agent Harness UI surfaces (turn run capsule, inline gates, slash commands, ⌘K palette, diff/undo bar, calm onboarding) */
+
+/* ---------------- Top Header & Journey Meta Harness Badges ---------------- */
+
+.cmd-palette-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 9px;
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.cmd-palette-trigger:hover {
+  color: var(--red-deep);
+  background: var(--paper-raise);
+  border-color: var(--line-red-strong);
+}
+
+.harness-meta-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.harness-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  color: var(--ink-soft);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.harness-meta-pill.is-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.harness-meta-pill[data-mode="llm"] {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+.harness-meta-pill[data-mode="fallback"] {
+  color: var(--warning);
+  background: var(--gold-pale);
+  border-color: var(--line-gold);
+}
+
+.harness-meta-pill.is-action {
+  color: var(--red-deep);
+  background: var(--paper-light);
+  border-color: var(--line-strong);
+  cursor: pointer;
+}
+
+.harness-meta-pill.is-action:hover:not(:disabled) {
+  background: var(--red-pale);
+  border-color: var(--line-red-strong);
+}
+
+/* ---------------- Inline Harness Turn Capsule & Delta Bar ---------------- */
+
+.message-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.harness-turn {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.harness-capsule {
+  background: var(--paper-raise);
+  border: 1px solid var(--line-warm);
+  border-left: 3px solid var(--green);
+  border-radius: 2px var(--radius-sm) var(--radius-sm) 2px;
+  font-size: var(--font-xs);
+  overflow: hidden;
+}
+
+.harness-capsule.is-warn {
+  border-left-color: var(--gold);
+}
+
+.harness-capsule.is-error {
+  border-left-color: var(--danger);
+}
+
+.harness-capsule-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.harness-capsule-summary::-webkit-details-marker {
+  display: none;
+}
+
+.harness-capsule-summary:hover {
+  background: var(--tint-gold);
+}
+
+.harness-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 2px rgba(70, 107, 93, .16);
+}
+
+.harness-capsule.is-warn .harness-status-dot {
+  background: var(--gold);
+  box-shadow: 0 0 0 2px rgba(209, 154, 61, .2);
+}
+
+.harness-capsule.is-error .harness-status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px rgba(163, 74, 62, .2);
+}
+
+.harness-flow-text {
+  font-weight: 700;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.harness-metrics {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.harness-metric-pill {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--rule-light);
+  background: var(--paper-light);
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
+
+.harness-metric-pill.is-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.harness-metric-pill.is-delta {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+  font-weight: 600;
+}
+
+.harness-metric-pill.is-gate {
+  color: var(--warning);
+  background: var(--gold-pale);
+  border-color: var(--line-gold);
+  font-weight: 700;
+}
+
+.harness-capsule-caret {
+  color: var(--quiet);
+  font-size: 11px;
+  transition: transform var(--duration-fast) var(--ease-out-standard);
+}
+
+.harness-capsule[open] .harness-capsule-caret {
+  transform: rotate(180deg);
+}
+
+.harness-capsule-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px 9px;
+  border-top: 1px dashed var(--rule-light);
+  background: var(--paper-light);
+}
+
+.harness-decision-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-xs);
+  line-height: 1.45;
+}
+
+.harness-decision-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--paper-deep);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.harness-decision-text {
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.harness-trace-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-trace-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+  padding: 3px 0;
+}
+
+.harness-trace-code {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 19px;
+  border-radius: 4px;
+  border: 1px solid var(--line-warm);
+  background: var(--paper-raise);
+  color: var(--red-deep);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.harness-trace-item.is-blocked .harness-trace-code,
+.harness-trace-item.is-fallback .harness-trace-code,
+.harness-trace-item.is-rejected .harness-trace-code {
+  color: var(--warning);
+  border-color: var(--line-gold);
+  background: var(--gold-pale);
+}
+
+.harness-trace-item.is-failed .harness-trace-code {
+  color: var(--danger);
+  border-color: var(--line-red);
+  background: var(--red-pale);
+}
+
+.harness-trace-main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.harness-trace-main strong {
+  color: var(--ink);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.harness-trace-main small {
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.harness-trace-ms {
+  color: var(--quiet);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.harness-capsule-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--rule-light);
+  color: var(--quiet);
+  font-size: var(--font-xs);
+}
+
+.harness-capsule-foot code {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  color: var(--ink-soft);
+}
+
+/* Field Delta Chips & Contextual View CTA */
+
+.harness-delta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.harness-delta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 8px;
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-warm);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-xs);
+  line-height: 1.35;
+  text-align: left;
+}
+
+.harness-delta-chip:hover {
+  color: var(--ink);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+.harness-delta-chip.is-update:hover {
+  background: var(--gold-pale);
+  border-color: var(--line-gold);
+}
+
+.harness-delta-op {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  color: var(--green);
+}
+
+.harness-delta-chip.is-update .harness-delta-op {
+  color: var(--brass);
+}
+
+.harness-delta-more {
+  color: var(--quiet);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  padding: 0 4px;
+}
+
+.harness-cta-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  color: var(--red-deep);
+  background: var(--red-pale);
+  border: 1px solid var(--line-red);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.harness-cta-chip:hover {
+  color: var(--paper-light);
+  background: var(--red);
+  border-color: var(--red-deep);
+}
+
+/* Inline Human-in-the-Loop Candidate Approval Gates */
+
+.harness-gate-list {
+  display: grid;
+  gap: 6px;
+}
+
+.harness-gate-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+  border-left: 3px solid var(--brass);
+  border-radius: 2px var(--radius-sm) var(--radius-sm) 2px;
+}
+
+.harness-gate-row.is-resolved {
+  background: var(--green-pale);
+  border-color: var(--line-green);
+  border-left-color: var(--green);
+}
+
+.harness-gate-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 7px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.harness-gate-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--brass);
+  color: var(--paper-light);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.harness-gate-row.is-resolved .harness-gate-badge {
+  background: var(--green);
+}
+
+.harness-gate-info strong {
+  color: var(--ink);
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+}
+
+.harness-gate-conf {
+  color: var(--warning);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+}
+
+.harness-gate-quote {
+  width: 100%;
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+
+.harness-gate-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.harness-gate-btn {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.harness-gate-btn.is-confirm {
+  color: var(--paper-light);
+  background: var(--red);
+  border: 1px solid var(--red-deep);
+}
+
+.harness-gate-btn.is-confirm:hover:not(:disabled) {
+  background: var(--red-deep);
+}
+
+.harness-gate-btn.is-reject {
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+}
+
+.harness-gate-btn.is-reject:hover:not(:disabled) {
+  color: var(--red-deep);
+  background: var(--red-pale);
+  border-color: var(--line-red-strong);
+}
+
+.harness-gate-done {
+  color: var(--green);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+/* ---------------- Honest Live Pending Indicator ---------------- */
+
+.harness-pending {
+  display: grid;
+  gap: 5px;
+  min-width: 200px;
+}
+
+.harness-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.harness-pending-mode {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.harness-pending-elapsed {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-xs);
+  color: var(--quiet);
+}
+
+.harness-pending-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--ink);
+}
+
+.harness-pending-hint {
+  color: var(--quiet);
+  font-size: var(--font-xs);
+}
+
+/* ---------------- Upgraded Diff & Undo Notice Banner ---------------- */
+
+.change-notice.is-undo-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 7px 10px;
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+  border-left: 3px solid var(--brass);
+  border-radius: 2px var(--radius-sm) var(--radius-sm) 2px;
+  color: var(--ink);
+}
+
+.change-notice-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.change-notice-rev {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--paper-light);
+  border: 1px solid var(--line-gold);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  color: var(--warning);
+}
+
+.change-notice-text {
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+
+.change-notice-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.change-notice-undo {
+  min-height: 28px;
+  padding: 4px 10px;
+  margin-left: 0 !important;
+  font-size: var(--font-xs);
+}
+
+.change-notice-dismiss {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--quiet);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.change-notice-dismiss:hover {
+  color: var(--ink);
+  background: var(--paper-light);
+  border-color: var(--line-warm);
+}
+
+/* ---------------- Calm Blank-Order Onboarding in #risk-panel ---------------- */
+
+.risk-panel.is-onboarding {
+  background: var(--bg-panel);
+  border-color: var(--line-warm);
+}
+
+.risk-panel.is-onboarding .risk-count {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+.risk-onboarding-card {
+  display: grid;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.risk-onboarding-copy {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+
+.risk-onboarding-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.risk-onboarding-tag {
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--paper-light);
+  border: 1px dashed var(--line-strong);
+  color: var(--quiet);
+  font-size: var(--font-xs);
+}
+
+.risk-onboarding-btn {
+  margin-top: 2px;
+  font-size: var(--font-xs);
+}
+
+/* ---------------- Composer `/` Slash Command Popover ---------------- */
+
+.composer {
+  position: relative;
+}
+
+.slash-trigger {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  max-height: min(280px, 44vh);
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-top: 3px solid var(--red);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  overscroll-behavior: contain;
+}
+
+.slash-menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--rule-light);
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+
+.slash-menu-hint {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.slash-menu-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.slash-menu-item:hover:not(:disabled),
+.slash-menu-item.is-active:not(:disabled) {
+  background: var(--paper-raise);
+  border-color: var(--line-red);
+}
+
+.slash-menu-code {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--red-deep);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.slash-menu-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.slash-menu-copy strong {
+  color: var(--ink);
+  font-size: var(--font-sm);
+  font-weight: 700;
+}
+
+.slash-menu-copy small {
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- Global Ctrl/Cmd+K Command Palette Dialog ---------------- */
+
+.command-palette {
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(520px, calc(100dvh - 48px));
+  margin: auto;
+  padding: 0;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--rule);
+  border-top: 4px solid var(--red);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.command-palette::backdrop {
+  background: rgba(45, 35, 24, .46);
+}
+
+.command-palette-card {
+  display: flex;
+  flex-direction: column;
+  max-height: min(520px, calc(100dvh - 48px));
+}
+
+.command-palette-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--rule-light);
+  background: var(--paper-raise);
+}
+
+.command-palette-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-xs);
+  background: var(--paper-deep);
+  color: var(--red-deep);
+  font-family: var(--font-mono);
+  font-size: var(--font-md);
+  font-weight: 800;
+}
+
+.command-palette-head input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--font-lg);
+}
+
+.command-palette-head input:focus-visible {
+  outline: none;
+}
+
+.command-palette-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+  display: grid;
+  gap: 3px;
+  overscroll-behavior: contain;
+}
+
+.command-palette-group {
+  padding: 7px 8px 3px;
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
+.command-palette-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.command-palette-item:hover:not(:disabled),
+.command-palette-item.is-active:not(:disabled) {
+  background: var(--paper-raise);
+  border-color: var(--line-red);
+}
+
+.command-palette-code {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--red-deep);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.command-palette-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.command-palette-copy strong {
+  color: var(--ink);
+  font-size: var(--font-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-copy small {
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-empty {
+  margin: 18px 8px;
+  text-align: center;
+  color: var(--quiet);
+  font-size: var(--font-sm);
+}
+
+.command-palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--rule-light);
+  background: var(--paper-raise);
+  color: var(--quiet);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+}
+
+/* ---------------- Field Focus Pulse Highlight ---------------- */
+
+@keyframes field-pulse {
+  0% {
+    background-color: var(--gold-pale);
+    box-shadow: 0 0 0 3px rgba(163, 74, 62, .28);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 rgba(163, 74, 62, 0);
+  }
+}
+
+.is-flash-highlight {
+  border-radius: var(--radius-xs);
+  animation: field-pulse 950ms var(--ease-out-standard);
+}
+
+/* ---------------- Responsive & Touch Targets (≤1050px / ≤700px) ---------------- */
+
+@media (max-width: 1050px) {
+  .cmd-palette-trigger {
+    display: none;
+  }
+  .step,
+  .slash-menu-item,
+  .harness-gate-btn,
+  .harness-cta-chip,
+  .harness-delta-chip,
+  .command-palette-item,
+  .change-notice-undo,
+  .change-notice-dismiss,
+  .harness-meta-pill.is-action {
+    min-height: 44px;
+  }
+  .change-notice-dismiss {
+    min-width: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  .harness-meta-badges {
+    display: none;
+  }
+  .slash-menu-hint {
+    display: none;
+  }
+  .harness-gate-row {
+    align-items: stretch;
+  }
+  .harness-gate-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* ---------------- High-Contrast Mode (WCAG AAA ≥ 7:1) ---------------- */
+
+html[data-theme="high-contrast"] .cmd-palette-trigger,
+html[data-theme="high-contrast"] .harness-meta-pill,
+html[data-theme="high-contrast"] .harness-capsule,
+html[data-theme="high-contrast"] .harness-capsule-body,
+html[data-theme="high-contrast"] .harness-metric-pill,
+html[data-theme="high-contrast"] .harness-delta-chip,
+html[data-theme="high-contrast"] .harness-gate-row,
+html[data-theme="high-contrast"] .harness-gate-btn.is-reject,
+html[data-theme="high-contrast"] .change-notice.is-undo-banner,
+html[data-theme="high-contrast"] .slash-menu,
+html[data-theme="high-contrast"] .command-palette,
+html[data-theme="high-contrast"] .command-palette-head,
+html[data-theme="high-contrast"] .command-palette-foot,
+html[data-theme="high-contrast"] .risk-onboarding-tag {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+  box-shadow: none;
+}
+
+html[data-theme="high-contrast"] .step.is-viewing {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+  box-shadow: inset 0 -3px 0 #000;
+}
+
+html[data-theme="high-contrast"] .harness-gate-badge,
+html[data-theme="high-contrast"] .harness-gate-btn.is-confirm,
+html[data-theme="high-contrast"] .harness-cta-chip:hover {
+  color: #fff;
+  background: #000;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .harness-cta-chip {
+  color: #000;
+  background: #fff;
+  border: 2px solid #000;
+}
+
+html[data-theme="high-contrast"] .slash-menu-item.is-active,
+html[data-theme="high-contrast"] .command-palette-item.is-active {
+  color: #fff;
+  background: #000;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .slash-menu-item.is-active strong,
+html[data-theme="high-contrast"] .slash-menu-item.is-active small,
+html[data-theme="high-contrast"] .command-palette-item.is-active strong,
+html[data-theme="high-contrast"] .command-palette-item.is-active small {
+  color: #fff;
+}
+
+/* ---------------- Print Cleanliness ---------------- */
+
+@media print {
+  .cmd-palette-trigger,
+  .harness-meta-badges,
+  .slash-menu,
+  .command-palette {
+    display: none !important;
+  }
+}

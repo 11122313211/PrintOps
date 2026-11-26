@@ -23,13 +23,13 @@ python3 mcp_server.py --session-id <session-id> --memory-path /absolute/path/to/
 `execve`，不经过 shell：
 
 ```text
-python3 tools/dsh_mcp_launcher.py --session-id <validated-session-id> --capabilities L0
+python3 scripts/dsh_mcp_launcher.py --session-id <validated-session-id> --capabilities L0
 ```
 
 启动前可以先检查最终 argv（不会启动 MCP）：
 
 ```text
-python3 tools/dsh_mcp_launcher.py --session-id smoke-session --dry-run
+python3 scripts/dsh_mcp_launcher.py --session-id smoke-session --dry-run
 ```
 
 该命令输出的 `__BOUND_SESSION_ID__` 不能直接传给 dsh；profile 中的占位符必须由受信宿主
@@ -44,7 +44,7 @@ python3 tools/dsh_mcp_launcher.py --session-id smoke-session --dry-run
 不依赖 dsh/Node/npm 的 stdio transcript smoke：
 
 ```text
-python3 tools/dsh_mcp_smoke.py
+python3 scripts/dsh_mcp_smoke.py
 ```
 
 它从临时 SQLite 启动 launcher，验证 `initialize`、`tools/list`、`explain_print_term` 和
@@ -55,8 +55,8 @@ python3 tools/dsh_mcp_smoke.py
 fallback host：
 
 ```text
-python3 tools/printops_local_host.py --session-id local-demo --smoke
-python3 tools/printops_local_host.py --session-id local-demo --memory-path data/agent.sqlite3 \
+python3 scripts/printops_local_host.py --session-id local-demo --smoke
+python3 scripts/printops_local_host.py --session-id local-demo --memory-path data/agent.sqlite3 \
   --message "做 500 张 A4 名片，250g铜版纸，双面四色，下周内"
 ```
 

@@ -9,7 +9,7 @@
         transport: stdio
         command: python3
         args:
-          - !!js '`${process.cwd()}/tools/dsh_mcp_launcher.py`'
+          - !!js '`${process.cwd()}/scripts/dsh_mcp_launcher.py`'
           - --session-id
           - !!js 'process.env.PRINTOPS_MCP_SESSION_ID ?? ""'
           - --capabilities

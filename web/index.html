@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#eee5d5" />
     <title>PrintOps | 印刷订单智能体</title>
-    <link rel="stylesheet" href="styles.css?v=20261103-provider-flat-1" />
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/layout.css" />
+    <link rel="stylesheet" href="css/sidebar-chat.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/workbench.css" />
+    <link rel="stylesheet" href="css/harness.css" />
+    <link rel="stylesheet" href="css/print-and-overrides.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -40,20 +46,20 @@
               <span id="progress-stage">需求收集</span>
               <strong id="progress-percent">0%</strong>
             </div>
-            <div class="step-list" id="step-list">
-              <div class="step active" data-step="collect">
+            <nav class="step-list" id="step-list" aria-label="订单阶段切换">
+              <button type="button" class="step active is-viewing" data-step="collect" data-view="intake" aria-current="page" title="切换到需求收集与对话">
                 <span class="step-index">01</span>
-                <div><strong>收集需求</strong><small>告诉我想印什么</small></div>
-              </div>
-              <div class="step" data-step="recommend">
+                <span><strong>收集需求</strong><small>告诉我想印什么</small></span>
+              </button>
+              <button type="button" class="step" data-step="recommend" data-view="compare" title="切换到工艺方案对比（只读视图）">
                 <span class="step-index">02</span>
-                <div><strong>选择方案</strong><small>比较效果与成本</small></div>
-              </div>
-              <div class="step" data-step="confirm">
+                <span><strong>选择方案</strong><small>比较效果与成本</small></span>
+              </button>
+              <button type="button" class="step" data-step="confirm" data-view="review" title="切换到核对与交接资料（只读视图）">
                 <span class="step-index">03</span>
-                <div><strong>核对与交接</strong><small>确认规格与未决事项</small></div>
-              </div>
-            </div>
+                <span><strong>核对交接</strong><small>确认规格与未决事项</small></span>
+              </button>
+            </nav>
           </section>
 
           <section class="history-panel" aria-label="订单历史">
@@ -96,6 +102,9 @@
             </div>
             <div class="section-title-actions">
               <span class="section-note" id="agent-trace">等待输入</span>
+              <button class="cmd-palette-trigger" id="cmd-palette-trigger" type="button" aria-label="打开快捷命令面板" title="快捷命令与订单切换（Ctrl+K / ⌘K）">
+                <span aria-hidden="true">⌘K</span>
+              </button>
               <button class="panel-toggle" id="order-toggle" type="button" aria-controls="order-panel" aria-label="收起订单栏" title="收起订单栏">
                 <span class="panel-toggle-glyph glyph-right" aria-hidden="true"></span>
                 <span class="panel-toggle-label">订单</span>
@@ -103,7 +112,16 @@
             </div>
           </div>
 
-          <div class="journey-meta"><strong id="active-item-context">当前订单</strong><span id="save-status" role="status">正在读取保存状态</span><button id="phase-back" class="tool-button phase-back" type="button" data-view="intake">← 返回对话</button></div>
+          <div class="journey-meta">
+            <strong id="active-item-context">当前订单</strong>
+            <span class="harness-meta-badges">
+              <span class="harness-meta-pill" id="mode-badge" data-mode="rules" title="当前执行模式">规则引擎</span>
+              <span class="harness-meta-pill is-mono" id="revision-badge" title="当前订单状态版本号">r0</span>
+              <button class="harness-meta-pill is-action" id="trace-jump" type="button" disabled title="发送需求后可查看运行轨迹">轨迹</button>
+            </span>
+            <span id="save-status" role="status">正在读取保存状态</span>
+            <button id="phase-back" class="tool-button phase-back" type="button" data-view="intake">← 返回对话</button>
+          </div>
           <section id="operation-error" class="operation-error" role="alert" hidden>
             <strong id="operation-error-title"></strong><p id="operation-error-message"></p>
             <div id="operation-error-diff"></div><div class="recovery-actions" id="operation-error-actions"></div>
@@ -128,20 +146,22 @@
           <div class="quick-replies" id="quick-replies" aria-label="快捷回答"></div>
 
           <form class="composer" id="message-form">
+            <div class="slash-menu" id="slash-menu" role="listbox" aria-label="快捷斜杠命令" hidden></div>
             <div class="composer-resize" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="调整输入框高度：拖动、双击恢复默认、上下方向键微调" aria-valuemin="44" aria-valuemax="280" aria-valuenow="44"></div>
             <div class="composer-preview" id="composer-preview" hidden>
               <span class="composer-preview-label">发送预览</span>
               <div class="bubble markdown-body" id="composer-preview-body"></div>
             </div>
             <label class="sr-only" for="message-input">输入印刷需求</label>
-            <textarea id="message-input" rows="2" placeholder="我们想印刷什么"></textarea>
+            <textarea id="message-input" rows="2" placeholder="说说想印什么，或输入 / 调用工具命令"></textarea>
             <div class="composer-footer">
               <div class="composer-tools">
                 <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
                 <button class="tool-button" id="upload-button" type="button" title="上传 PDF 文件">上传文件</button>
+                <button class="tool-button slash-trigger" id="slash-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" title="插入或执行斜杠工具命令（也可直接输入 /）">/ 命令</button>
                 <button class="tool-button" id="preview-toggle" type="button" aria-pressed="false" hidden title="按 Markdown 预览输入内容">预览</button>
                 <button class="tool-button" id="chat-cancel" type="button" hidden title="停止等待当前回复">停止</button>
-                <span class="tool-hint">支持 PDF，单个文件不超过 20 MB</span>
+                <span class="tool-hint">支持 PDF（≤20MB） · 输入 / 调工具</span>
               </div>
               <button class="send-button" type="submit">
                 <span class="send-label">发送</span>
@@ -325,6 +345,23 @@
       </form>
     </dialog>
 
+    <dialog class="command-palette" id="command-palette" aria-labelledby="command-palette-title">
+      <div class="command-palette-card">
+        <div class="command-palette-head">
+          <span class="command-palette-icon" aria-hidden="true">⌘</span>
+          <label class="sr-only" for="command-palette-input" id="command-palette-title">快捷命令与订单搜索</label>
+          <input id="command-palette-input" type="text" autocomplete="off" spellcheck="false" placeholder="搜索视图、工具命令或历史订单…" aria-controls="command-palette-list" aria-autocomplete="list" />
+          <button class="settings-close command-palette-close" id="command-palette-close" type="button" aria-label="关闭命令面板" title="关闭（Esc）">×</button>
+        </div>
+        <div class="command-palette-list" id="command-palette-list" role="listbox" aria-label="可执行命令列表"></div>
+        <div class="command-palette-foot">
+          <span>↑↓ 选择</span>
+          <span>Enter 执行</span>
+          <span>Esc 关闭</span>
+        </div>
+      </div>
+    </dialog>
+
     <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
       <form class="settings-card" id="settings-form">
         <div class="settings-heading">
@@ -440,10 +477,10 @@
     </dialog>
 
     <div class="toast" id="toast" role="status"></div>
-    <script src="markdown.js?v=20260918-1"></script>
-    <script src="workbench.js?v=20261025-tooltip-export-1"></script>
-    <script src="journey.js?v=20261101-size-hint-1"></script>
-    <script src="workcard.js?v=20261101-workcard-detail-1"></script>
-    <script src="app.js?v=20261101-workcard-1"></script>
+    <script src="markdown.js"></script>
+    <script src="workbench.js"></script>
+    <script src="journey.js"></script>
+    <script src="workcard.js"></script>
+    <script type="module" src="js/main.js"></script>
   </body>
 </html>

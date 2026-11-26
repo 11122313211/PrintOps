@@ -140,24 +140,24 @@ class ServerContractTest(unittest.TestCase):
         self.assertEqual(result["test"]["chosenProtocol"], "chat_only")
 
     def test_settings_ui_has_distinct_agent_capability_states(self):
-        app = (server.ROOT / "app.js").read_text(encoding="utf-8")
-        page = (server.ROOT / "index.html").read_text(encoding="utf-8")
+        settings_ui = (server.STATIC_ROOT / "js" / "render" / "settings.js").read_text(encoding="utf-8")
+        page = (server.STATIC_ROOT / "index.html").read_text(encoding="utf-8")
         for label in ("Agent 工具链可用 · 原生工具", "Agent 工具链可用 · JSON 兼容",
                       "仅支持聊天 · 不满足 Agent 协议", "接口不可用"):
-            self.assertIn(label, app)
+            self.assertIn(label, settings_ui)
         for element_id in ("capability-agent", "capability-json", "capability-native", "capability-chat"):
             self.assertIn(f'id="{element_id}"', page)
 
     def test_chat_bubbles_and_composer_preview_use_the_markdown_renderer(self):
-        app = (server.ROOT / "app.js").read_text(encoding="utf-8")
-        page = (server.ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("renderMessageBody(bubble, text)", app)
-        self.assertIn("markdown.render(value)", app)
-        self.assertIn("renderComposerPreview", app)
+        chat_ui = (server.STATIC_ROOT / "js" / "render" / "chat.js").read_text(encoding="utf-8")
+        page = (server.STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("renderMessageBody(bubble, text)", chat_ui)
+        self.assertIn("markdown.render(value)", chat_ui)
+        self.assertIn("renderComposerPreview", chat_ui)
         self.assertIn('id="composer-preview-body"', page)
         self.assertIn('id="preview-toggle"', page)
-        self.assertLess(page.index("markdown.js"), page.index("app.js"))
-        self.assertTrue((server.ROOT / "markdown.js").is_file())
+        self.assertLess(page.index("markdown.js"), page.index("js/main.js"))
+        self.assertTrue((server.STATIC_ROOT / "markdown.js").is_file())
 
     def test_multi_product_item_index_is_preserved_across_http_requests(self):
         initial = {

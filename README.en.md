@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.0--reference-blue)
+![Version](https://img.shields.io/badge/version-1.5.0--reference-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python standard-library runtime · Local first · Optional models · Human review and confirmation**
@@ -26,7 +26,7 @@ The initial study assigns one primary task to each of 8 non-expert participants 
 
 ## Current capabilities and boundaries
 
-- `VERSION` is the **1.4.0 reference release** (2026-11-22): synthetic gates green + a market-listed rate-card source + a fixed boundary notice — the stable-tier gates (≥20 real redacted cases, 8-person human walkthrough, real dsh/model end-to-end) remain organizationally blocked and are not claimed. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- `VERSION` is the **1.5.0 reference release** (2026-11-22): dual-track equivalence assertions + 123-case synthetic evaluation + a market-listed rate-card source + a fixed boundary notice — the stable-tier gates (≥20 real redacted cases, 8-person human walkthrough, real dsh/model end-to-end) remain organizationally blocked and are not claimed. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
 - This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
 - Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
 - The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
@@ -99,7 +99,7 @@ The local confirmation note is `仅核对本地交接内容；文件待交付，
 | Supplier connections | Generic local export, unconfigured suppliers, local mock, connector protocol and contract tests | No real supplier connection. Mock/sandbox results do not verify production capability. |
 | Handoff and confirmation | Authoritative handoff, local confirmation, JSON/CSV/Markdown, A4 printing, separate full history backup | Confirmation is not an authenticated corporate signature; export is not transmission. Exports recheck the current version; edits invalidate prior confirmation. |
 | Tool call statistics | Every tool call is timed at the gateway (ok/failed/blocked/rejected terminal states) and persisted locally in `tool_call_log`; `GET /api/tools/stats?window=30d` (7/30/90 days) plus a toolbox statistics view in settings | Data comes from this machine's database only (scope: local-only); nothing is uploaded or shared. Token guard matches other endpoints; stats write failures never affect the chat flow. |
-| Knowledge review cadence | The manifest declares a 90-day review cadence and next review date; `knowledge_review_status()` reports ok/due/overdue plus rate card headroom; `tools/knowledge_review.py` offline gate (mounted into dev_check without `--quick`) | When the review falls due, order responses carry an informational `knowledge_review_due` risk. Being due only warns; structural inconsistency fails with exit code 1. |
+| Knowledge review cadence | The manifest declares a 90-day review cadence and next review date; `knowledge_review_status()` reports ok/due/overdue plus rate card headroom; `scripts/knowledge_review.py` offline gate (mounted into dev_check without `--quick`) | When the review falls due, order responses carry an informational `knowledge_review_due` risk. Being due only warns; structural inconsistency fails with exit code 1. |
 | Draft editing and UI robustness | Draft field re-renders restore focus and selection via stable `data-field-key`, keeping expanded state across renders; one-time element-ID existence assertions before binding; a single source for error copy (`PrintOpsJourney.ERROR_TEXTS`) | A response arriving mid-edit no longer interrupts typing; missing elements are reported in a summary banner and only their bindings are skipped, instead of breaking every later binding with one TypeError. |
 
 ## Interface previews
@@ -112,19 +112,19 @@ These are Chromium screenshots from the **2026-10-25 uncommitted development wor
 
 ## Development and acceptance
 
-GitHub Actions CI runs the same one-command gate as the local machine (`tools/dev_check.py`); release checks still run locally before a release. See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for development constraints.
+GitHub Actions CI runs the same one-command gate as the local machine (`scripts/dev_check.py`); release checks still run locally before a release. See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for development constraints.
 
 The Python runtime and unit/contract checks use the standard library. **Browser development tests additionally require Node.js 18+, npm, pinned Playwright, and Chromium**. These are not needed to start the product.
 
 ```bash
-python3 tools/dev_check.py                             # one-command local gate: compile, tests, evaluation, knowledge review, guards (--quick runs compile and guards only)
+python3 scripts/dev_check.py                             # one-command local gate: compile, tests, evaluation, knowledge review, guards (--quick runs compile and guards only)
 python3 -m unittest discover -s tests -p "test_*.py"
 PYTHONPATH=. python3 tests/evaluate_agent.py             # Development report
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
-python3 tools/knowledge_review.py                       # knowledge review gate; dev_check mounts it on the non---quick path
-python3 tools/secret_scan.py
-python3 tools/repo_guard.py
-python3 tools/dsh_mcp_smoke.py
+python3 scripts/knowledge_review.py                       # knowledge review gate; dev_check mounts it on the non---quick path
+python3 scripts/secret_scan.py
+python3 scripts/repo_guard.py
+python3 scripts/dsh_mcp_smoke.py
 npm ci
 npm run test:browser:install
 npm run test:browser
@@ -165,12 +165,12 @@ Enter the company's base URL in settings, for example `https://llm.internal.exam
 ### Local host without npm/pnpm
 
 ```bash
-python3 tools/printops_local_host.py \
+python3 scripts/printops_local_host.py \
   --session-id local-demo \
   --message "做500张名片，成品90×54mm，300g铜版纸，双面四色，下周内"
 ```
 
-This standard-library host discovers five `.dsh/skills`, verifies the MCP boundary through the stdio launcher, and runs the rule-based Agent. It does not call a DeepSeek model or establish real dsh headless acceptance. Use `--interactive` for line-by-line interaction or `--memory-path data/agent.sqlite3` to retain the session. For boundary checks alone, run `python3 tools/dsh_mcp_smoke.py`.
+This standard-library host discovers five `.dsh/skills`, verifies the MCP boundary through the stdio launcher, and runs the rule-based Agent. It does not call a DeepSeek model or establish real dsh headless acceptance. Use `--interactive` for line-by-line interaction or `--memory-path data/agent.sqlite3` to retain the session. For boundary checks alone, run `python3 scripts/dsh_mcp_smoke.py`.
 
 ### Security and data
 
@@ -188,9 +188,9 @@ APIs other than health require a process-local token; cross-origin requests carr
 | [Storage](docs/STORAGE_CONTRACT.md) / [Pricing](docs/PRICING.md) / [Supplier connectors](docs/SUPPLIER_CONNECTORS.md) | Replaceable contracts, illustrative costs, and future integration conditions. |
 | [Storage operations](docs/STORAGE_OPERATIONS.md) / [Worked pricing examples](docs/PRICING_WORKED_EXAMPLES.md) / [Connector extension guide](docs/SUPPLIER_EXTENSION_GUIDE.md) / [Request budgets](docs/RUNTIME_BUDGET.md) | Backup/recovery, manual cost review, local extension examples, and runtime boundaries. |
 | [File management](docs/FILE_MANAGEMENT.md) / [dsh integration](docs/plan/dsh-print-agent.md) | Commit boundaries and optional integration. |
-| [Historical development plan](docs/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
+| [Historical development plan (archived)](docs/archive/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
 
-v1.4.0 ships as the **reference tier** (2026-11-22): all 18 catalog categories price conditionally, and the market-price collection surface is closed (7 categories + 2 variants from sd2000.com listed prices, see `docs/plan/sd2000-price-probe-2026-11-21.md`; further variants moved to the quarterly review). Reference-tier quotes are publicly listed prices, not authorized supplier quotes. Real supplier integration has been deferred to v1.5+ and separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
+v1.5.0 ships as the **reference tier** (2026-11-22): all 18 catalog categories price conditionally, dual-track equivalence assertions and 123 synthetic evaluation cases are green, and the market-price collection surface is closed (7 categories + 2 variants from sd2000.com listed prices, see `docs/plan/sd2000-price-probe-2026-11-21.md`; further variants moved to the quarterly review). Reference-tier quotes are publicly listed prices, not authorized supplier quotes. Real supplier integration separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
 
 ## Contributing and license
 

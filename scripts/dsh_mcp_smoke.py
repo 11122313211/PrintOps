@@ -19,7 +19,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "tools" / "dsh_mcp_launcher.py"
+LAUNCHER = REPO_ROOT / "scripts" / "dsh_mcp_launcher.py"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 import stdio_utf8

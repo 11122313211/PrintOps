@@ -21,7 +21,7 @@
     "transport": "stdio",
     "command": "python3",
     "argsTemplate": [
-      "<repo>/tools/dsh_mcp_launcher.py",
+      "<repo>/scripts/dsh_mcp_launcher.py",
       "--session-id",
       "__BOUND_SESSION_ID__",
       "--capabilities",

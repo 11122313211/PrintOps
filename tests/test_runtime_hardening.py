@@ -621,6 +621,7 @@ class LoopbackRuntimeTest(unittest.TestCase):
                 connection.request("GET", "/api/health")
                 response = connection.getresponse()
                 response.read()
+                httpd.wait_for_idle(2.0)
             self.assertEqual(response.status, 200)
             request_id = response.getheader("X-Request-ID")
         finally:
@@ -742,13 +743,8 @@ class LoopbackRuntimeTest(unittest.TestCase):
 class LocalHostSignalTest(unittest.TestCase):
     @staticmethod
     def _load_host():
-        path = REPO_ROOT / "tools" / "printops_local_host.py"
-        spec = importlib.util.spec_from_file_location("printops_local_host_signal_test", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"unable to load {path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        from scripts import printops_local_host
+        return printops_local_host
 
     def test_signal_handler_raises_structured_shutdown_and_is_restorable(self):
         host = self._load_host()
@@ -771,7 +767,7 @@ class LocalHostSignalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "agent.sqlite3"
             process = subprocess.Popen(
-                [sys.executable, "tools/printops_local_host.py", "--interactive",
+                [sys.executable, "scripts/printops_local_host.py", "--interactive",
                  "--session-id", "sigterm-host", "--memory-path", str(database)],
                 cwd=str(REPO_ROOT), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, encoding="utf-8",

@@ -21,8 +21,8 @@ PrintOps 采用“源码/规则可提交，运行数据留本机”的目录策�
 ## GitHub Desktop 提交流程
 
 1. 在 **Repository → Repository settings** 确认当前仓库是 `PrintOps`，分支为 `main`。
-2. 提交前运行 `python3 tools/repo_guard.py`，确认没有 `ERROR`。
-3. 再运行 `python3 tools/secret_scan.py`；发现命中时先移出凭据或客户数据。
+2. 提交前运行 `python3 scripts/repo_guard.py`，确认没有 `ERROR`。
+3. 再运行 `python3 scripts/secret_scan.py`；发现命中时先移出凭据或客户数据。
 4. 在 Changes 列表中只勾选源码、规则、测试和文档。`data/` 下的数据库、配置和原稿不应出现；若出现，先取消勾选并检查 `.gitignore`。
 5. 提交后再点击 **Push origin**。不要使用 “Force add” 把被忽略的本地文件加入提交。
 
@@ -42,8 +42,9 @@ find data/corrupted data/uploads data/imports data/exports data/backups \
 ## 发布前检查
 
 ```bash
-python3 tools/repo_guard.py
-python3 tools/secret_scan.py
+python3 scripts/repo_guard.py
+python3 scripts/secret_scan.py
+python3 scripts/arch_guard.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 git diff --check
 ```

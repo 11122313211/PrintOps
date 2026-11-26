@@ -15,17 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_host():
-    path = REPO_ROOT / "tools" / "printops_local_host.py"
-    spec = importlib.util.spec_from_file_location("printops_local_host_test", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-host = _load_host()
+from scripts import printops_local_host as host
 
 
 class LocalHostTest(unittest.TestCase):
@@ -70,7 +60,7 @@ class LocalHostTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             db = Path(temporary) / "agent.sqlite3"
             completed = subprocess.run(
-                [sys.executable, "tools/printops_local_host.py",
+                [sys.executable, "scripts/printops_local_host.py",
                  "--session-id", "cli-test", "--memory-path", str(db),
                  "--message", "解释一下出血"],
                 cwd=str(REPO_ROOT),
@@ -95,7 +85,7 @@ class LocalHostTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             db = Path(temporary) / "agent.sqlite3"
             completed = subprocess.run(
-                [sys.executable, "tools/printops_local_host.py", "--smoke",
+                [sys.executable, "scripts/printops_local_host.py", "--smoke",
                  "--session-id", "smoke-cli", "--memory-path", str(db)],
                 cwd=str(REPO_ROOT),
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
@@ -112,7 +102,7 @@ class LocalHostTest(unittest.TestCase):
 
     def test_invalid_session_cli_is_still_one_strict_json_document(self):
         completed = subprocess.run(
-            [sys.executable, "tools/printops_local_host.py", "--session-id", "bad session"],
+            [sys.executable, "scripts/printops_local_host.py", "--session-id", "bad session"],
             cwd=str(REPO_ROOT),
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
             text=True, encoding="utf-8",

@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.0--reference-blue)
+![Version](https://img.shields.io/badge/version-1.5.0--reference-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python 标准库运行时 · 本地优先 · 可选模型 · 人工核对与确认**
@@ -26,7 +26,7 @@ PrintOps 面向市场、设计、采购等非印刷专业用户。先描述用�
 
 ## 当前能力与边界
 
-- `VERSION` 为 **1.4.0 参考版**（2026-11-22 发布：合成门禁全绿 + 公开挂牌参考价来源 + 边界声明），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
+- `VERSION` 为 **1.5.0 参考版**（2026-11-22 发布：双轨行为差分断言 + 123 例长尾评测 + 公开挂牌参考价来源 + 边界声明），实现与验证范围见 [下一阶段开发验收](docs/NEXT_STAGE_ACCEPTANCE.md)。代码更新不等于稳定发布。
 - 它是订单前置整理工具。当前没有真实供应商授权、HTTP transport 或 live 工具入口；确认、导出和打印都不代表供应商已接收。
 - 参考估算来自版本化的 **illustrative 人工示例参数**，不是市场价、供应商报价或交期承诺。PDF 检查只提供基础线索，不能证明文件可直接生产。
 - 真实脱敏语料目前为 **0**，严格发布门槛保持阻断。开发评测、演示输入、可用性任务和示例报价不能替代真实订单。
@@ -99,7 +99,7 @@ Windows 可在项目目录双击 `start_windows.bat`。服务启动后打开 [ht
 | 供应商连接 | 通用本地导出、未配置供应商、本地 mock；连接器协议与契约测试 | 没有真实供应商连接；mock/sandbox 结果不是实际生产能力。 |
 | 交接与确认 | 权威交接草稿、本地人工确认、JSON/CSV/Markdown导出、工单小卡PNG、A4打印及独立完整备份 | 确认不是企业身份签章；导出不是发送。导出前复核当前版本，参数变化令旧确认失效。 |
 | 工具调用统计 | 每次工具调用在网关计时落库（ok/failed/blocked/rejected 全终态），本地 `tool_call_log` 持久化；`GET /api/tools/stats?window=30d`（7/30/90 天）与设置工具箱统计视图 | 数据仅来自本机数据库（scope: local-only），不上传不共享；令牌守卫与其他接口一致；统计写入失败不影响对话主流程。 |
-| 知识复核机制 | manifest 声明 90 天复核周期与下次复核日，`knowledge_review_status()` 返回 ok/due/overdue 与 rate card 余量；`tools/knowledge_review.py` 离线检查（dev_check 非 `--quick` 路径挂载） | 复核到期在订单响应注入提示级 `knowledge_review_due` 风险；到期仅警告不阻断，结构性不一致才以退出码 1 失败。 |
+| 知识复核机制 | manifest 声明 90 天复核周期与下次复核日，`knowledge_review_status()` 返回 ok/due/overdue 与 rate card 余量；`scripts/knowledge_review.py` 离线检查（dev_check 非 `--quick` 路径挂载） | 复核到期在订单响应注入提示级 `knowledge_review_due` 风险；到期仅警告不阻断，结构性不一致才以退出码 1 失败。 |
 | 草稿编辑与界面健壮性 | 草稿字段重绘按稳定 `data-field-key` 恢复焦点与选区，展开状态跨重绘保留；绑定前一次性元素 ID 存在性断言；错误文案单一来源（`PrintOpsJourney.ERROR_TEXTS`） | 响应在输入途中到达不再打断编辑；缺元素以汇总横幅报出并只跳过缺失项，不再借第一个 TypeError 让整页绑定失联。 |
 
 ## 界面预览
@@ -112,30 +112,23 @@ Windows 可在项目目录双击 `start_windows.bat`。服务启动后打开 [ht
 
 ## 开发与验收
 
-CI（GitHub Actions）与本机执行同一条门禁 `tools/dev_check.py`，发布检查以本机为准。漏洞报告方式见 [SECURITY.md](SECURITY.md)，开发约束见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+CI（GitHub Actions）与本机执行同一条门禁 `scripts/dev_check.py`，发布检查以本机为准。漏洞报告方式见 [SECURITY.md](SECURITY.md)，开发约束见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 Python 运行时和单元/契约检查使用标准库。**浏览器开发测试另需 Node.js 18+、npm、固定版本 Playwright 和 Chromium**；它们不是启动产品的依赖。
 
 ```bash
-python3 tools/dev_check.py                             # 本机一键门禁：编译+单测+评测+知识复核+守护（--quick 只跑编译与守护）
+python3 scripts/dev_check.py                           # 本机一键门禁：编译+单测+评测+知识复核+MCP冒烟+架构/安全守护（--quick 只跑编译与守护）
 python3 -m unittest discover -s tests -p "test_*.py"
-PYTHONPATH=. python3 tests/evaluate_agent.py             # 开发报告
+PYTHONPATH=. python3 tests/evaluate_agent.py           # 开发报告
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
-python3 tools/knowledge_review.py                       # 知识复核门禁：dev_check 非 --quick 已自动挂载
-python3 tools/secret_scan.py
-python3 tools/repo_guard.py
-python3 tools/dsh_mcp_smoke.py
+python3 scripts/knowledge_review.py                    # 知识复核门禁：dev_check 非 --quick 已自动挂载
+python3 scripts/arch_guard.py                          # 架构与事实源守卫（0循环/0跨层/版本一致/JS语法）
+python3 scripts/secret_scan.py
+python3 scripts/repo_guard.py
+python3 scripts/dsh_mcp_smoke.py
 npm ci
 npm run test:browser:install
-npm run test:browser
-npx playwright test --config tests/journey.config.mjs
-npx playwright test --config tests/ui_positions.config.mjs
-npx playwright test --config tests/ui_focus.config.mjs
-# Optional second browser engine
-npx playwright install webkit
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/journey.config.mjs
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_positions.config.mjs
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.mjs
+npm run test:browser:all
 ```
 
 严格发布门槛：合成字段准确率 ≥90%、可完成用例完整率 ≥80%；真实脱敏订单至少 20 例且字段准确率 ≥95%。真实语料缺失、为空、格式错误、不足或低准确率均以退出码 1 阻断。当前真实库为空；不加 `--release-gate` 的开发命令成功不能证明发布通过。
@@ -165,12 +158,12 @@ PRINTOPS_ALLOW_PRIVATE_LLM_HOSTS=1 python3 server.py
 ### 无 npm/pnpm 的本地 host
 
 ```bash
-python3 tools/printops_local_host.py \
+python3 scripts/printops_local_host.py \
   --session-id local-demo \
   --message "做500张名片，成品90×54mm，300g铜版纸，双面四色，下周内"
 ```
 
-该标准库 host 发现 `.dsh/skills` 下五个 skill，通过 stdio launcher 验证 MCP 边界，再使用规则 Agent；不调用 DeepSeek 模型，不等于真实 dsh headless 验收。`--interactive` 开启逐行交互，`--memory-path data/agent.sqlite3` 保留会话。只检查边界可运行 `python3 tools/dsh_mcp_smoke.py`。
+该标准库 host 发现 `.dsh/skills` 下五个 skill，通过 stdio launcher 验证 MCP 边界，再使用规则 Agent；不调用 DeepSeek 模型，不等于真实 dsh headless 验收。`--interactive` 开启逐行交互，`--memory-path data/agent.sqlite3` 保留会话。只检查边界可运行 `python3 scripts/dsh_mcp_smoke.py`。
 
 ### 安全与数据
 
@@ -188,9 +181,9 @@ python3 tools/printops_local_host.py \
 | [存储](docs/STORAGE_CONTRACT.md) / [计价](docs/PRICING.md) / [供应商连接器](docs/SUPPLIER_CONNECTORS.md) | 可替换契约、示例成本与未来接入条件。 |
 | [存储操作](docs/STORAGE_OPERATIONS.md) / [成本算例](docs/PRICING_WORKED_EXAMPLES.md) / [连接器扩展示例](docs/SUPPLIER_EXTENSION_GUIDE.md) / [请求预算](docs/RUNTIME_BUDGET.md) | 备份恢复、人工复核计算、第三方本地接入和运行时边界。 |
 | [文件管理](docs/FILE_MANAGEMENT.md) / [dsh 集成](docs/plan/dsh-print-agent.md) | 提交边界与可选集成。 |
-| [历史开发计划](docs/DEVELOPMENT_PLAN.md) / [开源选型](docs/OPEN_SOURCE_OPTIONS.md) | 设计参考；历史排期和任务卡不代表当前状态。 |
+| [历史开发计划（归档）](docs/archive/DEVELOPMENT_PLAN.md) / [开源选型](docs/OPEN_SOURCE_OPTIONS.md) | 设计参考；历史排期和任务卡不代表当前状态。 |
 
-v1.4.0 已按**参考版**层级发布（2026-11-22）：18 个目录品类全部具备条件计价能力，发布门槛（真实语料、真人走查）保持组织性阻断、不声明稳定发布——参考版 = 合成门禁全绿 + rate card 公开挂牌参考价标定（7 品类 + 2 变体，sd2000.com 实测记录见 docs/plan/sd2000-price-probe-2026-11-21.md，采集面已封版转季度复核）+ 固定边界声明（见 RELEASE_CHECKLIST"发布层级"节）。参考版报价口径为公开挂牌参考价，非供应商授权报价。真实供应商接入顺延至 v1.5+，需另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
+v1.5.0 延续**参考版**层级发布（2026-11-22）：18 个目录品类全部具备条件计价能力，补齐双轨差分断言与长尾评测（123 例），发布门槛（真实语料、真人走查）保持组织性阻断、不声明稳定发布——参考版 = 合成门禁全绿 + rate card 公开挂牌参考价标定（7 品类 + 2 变体，sd2000.com 实测记录见 docs/plan/sd2000-price-probe-2026-11-21.md，采集面已封版转季度复核）+ 固定边界声明（见 RELEASE_CHECKLIST"发布层级"节）。参考版报价口径为公开挂牌参考价，非供应商授权报价。真实供应商接入仍待另行授权、官方协议、身份认证、服务器确认和 sandbox 验证；不会因存在连接器接口而自动开启。
 
 ## 贡献与许可证
 

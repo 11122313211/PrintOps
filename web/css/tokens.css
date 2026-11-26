@@ -1,0 +1,104 @@
+/* PrintOps CSS Module: tokens.css — Design tokens (:root palette, spacing, radius, type, motion, scrollbar) */
+
+/* PrintOps 设计令牌：暖纸/铅字工业风。颜色、间距、圆角、字号、阴影统一由令牌驱动；
+   高对比主题仅覆盖令牌与少量表面对比，不另起配色。 */
+:root {
+  /* 纸色阶梯 */
+  --paper: #eee5d5;
+  --paper-light: #fffaf0;
+  --paper-raise: #fbf4e6;
+  --paper-deep: #e3d6c0;
+  /* 墨色阶梯 */
+  --ink: #292722;
+  --ink-soft: #514b43;
+  --quiet: #6f6558;
+  --ink-faint: #a39682;
+  /* 分隔与描边 */
+  --rule: #c8b89c;
+  --rule-light: #dfd3bd;
+  --line-warm: #c9b99e;
+  --line-strong: #b4936d;
+  /* 品牌红 */
+  --red: #a34a3e;
+  --red-deep: #78332d;
+  --red-pale: #f1ddd5;
+  --line-red: #d8a28c;
+  --line-red-strong: #b97861;
+  --red-bright: #d27755;
+  /* 黄铜与金 */
+  --brass: #96713e;
+  --brass-light: #d5af70;
+  --line-gold: #c5a46d;
+  --gold: #d19a3d;
+  --gold-pale: #f2e7cf;
+  /* 状态色 */
+  --green: #466b5d;
+  --green-pale: #e2eadf;
+  --line-green: #aabfae;
+  --green-bright: #65a07e;
+  --info: #4b6575;
+  --success: var(--green);
+  --warning: #8a5a27;
+  --danger: var(--red);
+  /* 深色顶栏 */
+  --dark-surface: #3a332c;
+  --dark-line: #766856;
+  --on-dark: #d0c5b3;
+  --on-dark-strong: #e3d9c8;
+  /* 半透明表面 */
+  --bg-sidebar: rgba(226, 213, 188, .72);
+  --bg-chat: rgba(249, 245, 235, .75);
+  --bg-order: rgba(245, 237, 220, .84);
+  --bg-panel: rgba(249, 242, 226, .62);
+  --bg-raised: rgba(249, 242, 226, .5);
+  --bg-white-tint: rgba(255, 255, 255, .68);
+  --tint-green: rgba(70, 107, 93, .1);
+  --tint-red: rgba(163, 74, 62, .08);
+  --tint-gold: rgba(228, 213, 187, .24);
+  /* 阴影：印刷偏移硬阴影 + 柔和投影，各只有一种 */
+  --shadow-hard: 3px 3px 0 rgba(128, 98, 59, .12);
+  --shadow-soft: 0 12px 28px rgba(68, 51, 31, .14);
+  /* 圆角阶梯 */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 11px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  /* 间距阶梯 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 11px;
+  --space-4: 16px;
+  --space-5: 22px;
+  --space-6: 28px;
+  --space-7: 36px;
+  --space-8: 44px;
+  /* 字号阶梯：最小 11px，保证可读性 */
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-lg: 14px;
+  --font-xl: 16px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --duration-fast: 160ms;
+  --duration-base: 220ms;
+  --duration-slow: 320ms;
+  /* 缓动 token：spring 带 ~10% 过冲回弹（微交互），out-emphasized 用于大面积进出，
+     inout 用于位置往返，out-standard 用于颜色/淡入淡出。 */
+  --ease-out-standard: cubic-bezier(0, 0, 0.2, 1);
+  --ease-inout-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring-fine: linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, 0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%, 0.997 69.8%, 1.003 76.9%, 1);
+  /* 滚动条：低对比暖灰滑块，避免抢视觉焦点 */
+  --scrollbar-thumb: rgba(98, 89, 77, .30);
+  --scrollbar-thumb-hover: rgba(98, 89, 77, .55);
+  --focus-ring: 0 0 0 3px rgba(163, 74, 62, .18);
+  /* 三栏布局（可拖动） */
+  --sidebar-w: 240px;
+  --order-w: 348px;
+  --splitter-w: 6px;
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}

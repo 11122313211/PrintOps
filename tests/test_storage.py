@@ -11,6 +11,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from order_model import normalize_state
 from storage_contract import OrderStore, StoreConflictError, ToolCallRecorder, timestamp
 from storage_factory import create_store, register_store
 from storage_memory import InMemoryOrderStore
@@ -176,7 +177,7 @@ class SQLiteMigrationTest(unittest.TestCase):
     def test_corrupt_canonical_projection_is_backed_up_before_reset(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "corrupt.sqlite3"
-            store = SQLiteOrderStore(path)
+            store = SQLiteOrderStore(path, state_normalizer=normalize_state)
             store.create_order(fixture())
             with closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE orders SET runtime_json = '{broken' WHERE order_id = 'sample'")
@@ -197,7 +198,7 @@ class SQLiteMigrationTest(unittest.TestCase):
             with closing(sqlite3.connect(path)) as db, db:
                 db.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, state TEXT NOT NULL)")
                 db.execute("INSERT INTO sessions VALUES (?, ?)", ("legacy", encoded))
-            store = SQLiteOrderStore(path)
+            store = SQLiteOrderStore(path, state_normalizer=normalize_state)
             self.assertEqual(store.load_order("legacy")["revision"], 7)
             self.assertEqual(store.load_order("legacy")["state"]["order"]["quantityValue"], 500)
             events = store.load_events("legacy")
@@ -256,7 +257,7 @@ class ToolCallLogRetentionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "telemetry.sqlite3"
             with patch("storage_sqlite.TOOL_CALL_LOG_DISK_LIMIT", 5):
-                store = SQLiteOrderStore(path)
+                store = SQLiteOrderStore(path, state_normalizer=normalize_state)
                 for index in range(8):
                     store.record_tool_call({"tool_name": f"t{index}", "status": "ok", "duration_ms": index})
                 store.record_tool_call({"tool_name": "t8", "status": "ok", "duration_ms": 8})

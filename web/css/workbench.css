@@ -1,0 +1,1174 @@
+/* PrintOps CSS Module: workbench.css — Responsive drawers/breakpoints, supplier selector, three-phase task workspace, action/export bar */
+
+/* 移动端抽屉 + 响应式 */
+@media (max-width: 1050px) {
+  .workspace {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .pane-splitter {
+    display: none;
+  }
+  .workspace.order-collapsed .order-section {
+    display: none;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(288px, 84vw);
+    background: var(--paper);
+    border-right: 1px solid var(--rule);
+    box-shadow: var(--shadow-soft);
+    transform: translateX(0);
+    transition: transform var(--duration-slow) var(--ease-inout-standard);
+  }
+  .sidebar-collapsed .sidebar {
+    transform: translateX(-102%);
+    box-shadow: none;
+  }
+  .workspace-backdrop {
+    display: block;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 25;
+    background: rgba(41, 39, 34, .42);
+    border: 0;
+    padding: 0;
+  }
+  body:not(.drawer-open) .workspace-backdrop {
+    display: none;
+  }
+  .order-section {
+    grid-column: 1 / -1;
+    padding: 24px 30px 30px;
+    border-top: 1px solid var(--rule);
+    border-left: 0;
+  }
+  .chat-section {
+    height: min(70vh, 700px);
+    min-height: 520px;
+    padding: var(--space-5) clamp(18px, 4vw, 32px) 18px;
+  }
+  .field-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--space-6);
+  }
+  .option-list {
+    grid-template-columns: 1fr;
+  }
+  .order-actions {
+    grid-template-columns: 1fr 1fr;
+    max-width: 440px;
+  }
+}
+
+@media (max-width: 700px) {
+  .brand-lockup {
+    gap: 9px;
+  }
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+  .brand-lockup h1 {
+    font-size: var(--font-xl);
+    white-space: nowrap;
+  }
+  .icon-button {
+    padding: 6px var(--space-2);
+  }
+  .workspace {
+    min-height: 100vh;
+  }
+  .sidebar {
+    width: min(288px, 86vw);
+  }
+  .progress-panel {
+    padding-bottom: 12px;
+  }
+  .step-list {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .step {
+    display: block;
+    text-align: center;
+  }
+  .file-meta {
+    grid-template-columns: 1fr;
+  }
+  .pdf-viewer {
+    height: min(46vh, 360px);
+  }
+  .step-index {
+    margin: 0 auto 5px;
+  }
+  .step small {
+    display: none;
+  }
+  .tool-panel {
+    display: block;
+    margin-top: var(--space-4);
+  }
+  .history-panel {
+    margin-top: var(--space-4);
+  }
+  .history-list {
+    max-height: none;
+  }
+  .sidebar-new-order {
+    min-height: 44px;
+  }
+  .history-item {
+    min-height: 60px;
+  }
+  .preset-panel {
+    padding: 12px var(--space-4) 14px;
+  }
+  .preset-list {
+    max-height: none;
+  }
+  .catalog-panel {
+    margin-top: var(--space-4);
+  }
+  .tool-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px var(--space-2);
+  }
+  .tool-item {
+    padding: 6px var(--space-1);
+  }
+  .tool-item small {
+    display: none;
+  }
+  .chat-section {
+    height: min(70svh, 620px);
+    min-height: 480px;
+    padding: 20px var(--space-4) var(--space-4);
+  }
+  .section-note {
+    font-size: var(--font-xs);
+  }
+  .section-title-actions {
+    gap: 5px;
+  }
+  .panel-toggle {
+    padding: 6px;
+  }
+  .panel-toggle-label {
+    display: none;
+  }
+  .chat-feed {
+    min-height: 300px;
+    padding-right: calc(var(--chat-pad-x, 0px) + 3px);
+    padding-left: 0;
+  }
+  .message {
+    max-width: 96%;
+  }
+  .tool-hint {
+    display: none;
+  }
+  .order-section {
+    padding: 23px 18px 26px;
+  }
+  .field-list, .order-actions {
+    grid-template-columns: 1fr;
+  }
+  .multi-product-editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .order-actions {
+    max-width: none;
+  }
+  .settings-card {
+    padding: 20px 17px 17px;
+  }
+  .settings-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-nav {
+    display: flex;
+    gap: 5px;
+    padding: 0 0 8px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule-light);
+  }
+  .settings-nav button {
+    flex: 0 0 124px;
+    min-height: 50px;
+  }
+  .settings-nav button[aria-selected="true"] {
+    box-shadow: inset 0 -3px 0 var(--red);
+  }
+  .settings-panels {
+    padding: var(--space-4) 0 0;
+  }
+  .settings-panel {
+    height: 100%;
+    max-height: none;
+    min-height: 0;
+  }
+  .integration-grid, .settings-status-grid {
+    grid-template-columns: 1fr;
+  }
+  .settings-panel .tool-list {
+    grid-template-columns: 1fr;
+  }
+  .settings-capabilities {
+    grid-template-columns: 1fr;
+  }
+  .settings-actions {
+    flex-wrap: wrap;
+  }
+  .settings-action-spacer {
+    display: none;
+  }
+  .settings-clear {
+    margin-right: auto;
+  }
+  .risk-panel .issue-action {
+    min-height: 44px;
+    padding: 6px 9px;
+    font-size: var(--font-xs);
+  }
+}
+
+@media (hover: none) {
+  .history-hover-actions {
+    opacity: 1;
+    transform: translate(0, -50%);
+    pointer-events: auto;
+  }
+  .history-hover-action {
+    min-width: 44px;
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 230px) {
+  .current-order-heading {
+    gap: 4px;
+  }
+  .current-order-heading-copy > span:first-child {
+    font-size: 20px;
+  }
+  .sidebar-new-order {
+    padding: 6px 7px;
+    font-size: var(--font-xs);
+  }
+  .sidebar-new-order > span:first-child {
+    font-size: 14px;
+  }
+  .sidebar-new-order > span:last-child {
+    font-size: 0;
+  }
+  .sidebar-new-order > span:last-child::after {
+    content: "新建";
+    font-size: var(--font-xs);
+  }
+}
+
+@container (max-width: 230px) {
+  .current-order-heading {
+    gap: 4px;
+  }
+  .current-order-heading-copy > span:first-child {
+    font-size: 18px;
+  }
+  .current-order-heading .sidebar-new-order {
+    padding: 6px 7px;
+  }
+  .current-order-heading .sidebar-new-order > span:last-child {
+    font-size: 0;
+  }
+  .current-order-heading .sidebar-new-order > span:last-child::after {
+    content: "新建";
+    font-size: var(--font-xs);
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-mark {
+    display: none;
+  }
+  .icon-button {
+    padding: 6px;
+  }
+}
+
+/* Order evidence and local pricing: compact, text-safe, keyboard accessible. */
+.estimate-panel {
+  padding: 14px;
+  margin: 10px 0;
+  border: 1px solid var(--line, #c9c3b8);
+  border-radius: 8px;
+}
+
+/* 供应商接口扁平化：去卡片外壳压成一行控件（label 居左 + 44px 选择器占满余宽），
+   状态长文单行省略——DOM 文本完整保留、悬停经 title 看全文，browser_smoke 文本断言不受影响。 */
+.provider-status {
+  padding: 0;
+  background: transparent;
+}
+
+.provider-status .platform-control {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.provider-status #provider-status {
+  margin: 6px 0 0;
+  color: var(--quiet);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.estimate-panel h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.estimate-panel p, .price-details p {
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.field-evidence {
+  display: block;
+  min-width: 0;
+}
+
+.field-evidence details {
+  font-size: 11px;
+  text-align: left;
+  margin-top: 4px;
+}
+
+.field-evidence p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.field-confirm {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  margin-top: 5px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: #344b32;
+  background: transparent;
+  cursor: pointer;
+}
+
+.price-details {
+  margin-top: 10px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.price-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+.price-details dl {
+  margin: 10px 0;
+}
+
+.price-details dl > div {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line, #ddd);
+}
+
+.price-details dd {
+  margin: 3px 0 0;
+  color: var(--muted, #555);
+}
+
+/* Attribute visibility must override grid/flex panel display declarations. */
+[hidden] {
+  display: none !important;
+}
+
+.history-row {
+  min-width: 0;
+}
+
+html[data-theme="high-contrast"] .history-context-menu {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+  box-shadow: none;
+}
+
+html[data-theme="high-contrast"] .history-context-action:hover, html[data-theme="high-contrast"] .history-context-action:focus-visible {
+  color: #000;
+  background: #ffd700;
+}
+
+html[data-theme="high-contrast"] .settings-launcher,
+html[data-theme="high-contrast"] .settings-status-card,
+html[data-theme="high-contrast"] .integration-grid article,
+html[data-theme="high-contrast"] .appearance-setting {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .settings-launcher:hover,
+html[data-theme="high-contrast"] .settings-nav button:hover,
+html[data-theme="high-contrast"] .settings-nav button[aria-selected="true"] {
+  color: #000;
+  background: #ffd700;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .settings-nav button[aria-selected="true"] {
+  box-shadow: inset 3px 0 0 #000;
+}
+
+html[data-theme="high-contrast"] .settings-launcher-mark {
+  color: #000;
+  background: #ffd700;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .settings-history-option {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .settings-nav {
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .settings-nav small,
+html[data-theme="high-contrast"] .settings-panel-note,
+html[data-theme="high-contrast"] .integration-grid article small {
+  color: #222;
+}
+
+/* Task workspace: one order, three working views. */
+[hidden] {
+  display: none !important;
+}
+
+.journey-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin: 4px 0 14px;
+  color: var(--ink-soft);
+}
+
+/* 常驻返回按钮：固定在 journey-meta 行最右（原保存状态的位置），不随方案/核对面板内容滚动。
+   显隐由 #workspace[data-view] 驱动：intake 无处可返，仅 compare/review 显示。 */
+.phase-back {
+  display: none;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: .25em 10px;
+  border: 1px solid var(--line-warm);
+  border-radius: 9px;
+}
+
+#workspace[data-view="compare"] .phase-back, #workspace[data-view="review"] .phase-back {
+  display: inline-block;
+}
+
+#save-status {
+  font-size: 12px;
+  color: var(--green);
+}
+
+#save-status[data-state="saving"] {
+  color: var(--ink-soft);
+}
+
+#save-status[data-state="error"] {
+  color: var(--red-deep);
+}
+
+.journey-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.journey-tabs button {
+  min-height: 44px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--ink-soft);
+  background: none;
+  font-size: 13px;
+}
+
+.journey-tabs button[aria-current] {
+  color: var(--red-deep);
+  border-bottom-color: var(--red);
+  font-weight: 700;
+  background: var(--red-pale);
+}
+
+.journey-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 12px;
+}
+
+.intake-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.intake-pane .chat-feed {
+  min-height: 70px;
+}
+
+.intake-pane .chat-feed::before {
+  display: none;
+}
+
+.starter-panel {
+  background: var(--paper-light);
+  border: 1px solid var(--rule-light);
+  border-radius: 12px;
+  padding: 0;
+  margin: 8px 0;
+  flex: 0 1 auto;
+  min-height: 46px;
+  overflow-y: auto;
+}
+
+.starter-panel > summary {
+  min-height: 44px;
+  padding: 12px;
+  color: var(--red-deep);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.starter-content {
+  padding: 0 20px 20px;
+}
+
+.starter-panel h3, .phase-intro h3 {
+  margin: 6px 0 10px;
+  font-size: 20px;
+}
+
+.starter-panel p, .phase-intro p {
+  color: var(--ink-soft);
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.starter-content > small {
+  display: block;
+  margin-top: 12px;
+  color: var(--quiet);
+  line-height: 1.6;
+}
+
+.starter-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.starter-options button {
+  text-align: left;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--paper-raise);
+  color: var(--ink);
+  min-height: 66px;
+  font-weight: 600;
+}
+
+.starter-options small {
+  display: block;
+  margin-top: 6px;
+  font-weight: 400;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.task-bar {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--rule);
+  padding: 12px 0 2px;
+  background: var(--bg-chat);
+  flex-shrink: 0;
+}
+
+.task-bar > div {
+  min-width: 0;
+}
+
+.task-bar strong {
+  font-size: 14px;
+  line-height: 1.5;
+  display: block;
+}
+
+.task-bar small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.task-bar button {
+  flex-shrink: 0;
+  width: auto;
+  padding: .3em 16px;
+}
+
+.phase-intro {
+  margin-bottom: 16px;
+}
+
+.phase-intro p {
+  margin-bottom: 8px;
+}
+
+#phase-compare .option-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+#phase-compare .option-card {
+  min-width: 0;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+}
+
+#phase-compare .choose-option {
+  margin-top: auto;
+}
+
+#phase-compare .recommendations {
+  margin-top: 20px;
+}
+
+#phase-compare .option-compare {
+  overflow: auto;
+}
+
+.estimate-total {
+  font-weight: 700;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.estimate-scope {
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+
+#phase-compare .price-details {
+  margin-bottom: 12px;
+}
+
+.review-group {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper-light);
+  margin: 0 0 12px;
+}
+
+.review-group > summary {
+  min-height: 44px;
+  padding: 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.review-field {
+  padding: 14px;
+  border-top: 1px solid var(--rule-light);
+  break-inside: avoid;
+}
+
+.review-field-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.field-state {
+  font-size: 12px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+}
+
+.state-pending_confirmation, .state-missing {
+  color: var(--warning);
+  background: var(--gold-pale);
+}
+
+.state-confirmed {
+  color: var(--green);
+  background: var(--green-pale);
+}
+
+.review-value {
+  margin: 8px 0;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.review-editor {
+  margin-top: 8px;
+}
+
+.review-editor summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--red-deep);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.review-editor input {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-light);
+  border-radius: 4px;
+  padding: 10px;
+  font: inherit;
+}
+
+.review-editor button, .field-review-actions button {
+  margin: 8px 8px 0 0;
+  width: auto;
+}
+
+/* 核对与交接的底部操作台：动作区与导出区是同一套面板——同底色、同描边、
+   同圆角与内距；按钮分级但同级严格等高（红底主动作 → 描边次动作 → 等宽导出条）。
+   交接单生成后主按钮降为安静状态条，把视觉焦点让给下一步“确认交接单”；
+   确认完成后转绿底，与 .draft-status.ready 的完成语义一致。 */
+#phase-review .order-actions {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  max-width: none;
+}
+
+#phase-review .order-actions .primary-action {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  padding: 9px var(--space-3);
+  font-size: var(--font-sm);
+}
+
+#phase-review .order-actions .primary-action:disabled {
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border: 1px solid var(--rule-light);
+}
+
+#phase-review .order-actions .secondary-action {
+  min-height: 38px;
+  padding: 8px var(--space-3);
+  font-size: var(--font-sm);
+}
+
+#phase-review .order-actions .secondary-action:disabled {
+  color: var(--ink-faint);
+  background: var(--paper-deep);
+  border-color: var(--rule-light);
+}
+
+#phase-review .order-actions #confirm-order:not([hidden]) {
+  color: var(--paper-light);
+  background: var(--red);
+  border-color: var(--line-red);
+}
+
+#phase-review .order-actions #confirm-order:hover:not(:disabled) {
+  background: var(--red-deep);
+}
+
+#phase-review .order-actions #confirm-order:disabled {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+#phase-review .order-export {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+
+#phase-review .order-export #export-label {
+  line-height: 1;
+  letter-spacing: .1em;
+}
+
+#phase-review .export-options {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+#phase-review .export-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px var(--space-2);
+  font-size: var(--font-sm);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (max-width: 1050px) {
+  #phase-review .order-actions .primary-action,
+  #phase-review .order-actions .secondary-action,
+  #phase-review .export-option {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  #phase-review .export-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.handoff-document {
+  background: #fffdf8;
+  color: #292722;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: var(--shadow-soft);
+}
+
+.handoff-document pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.7;
+}
+
+.handoff-document h1 {
+  font-size: 24px;
+  color: var(--ink);
+}
+
+.handoff-document table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.handoff-document th:first-child {
+  width: 25%;
+}
+
+.handoff-document th:last-child {
+  width: 18%;
+}
+
+.handoff-document :is(td, th) {
+  overflow-wrap: anywhere;
+}
+
+.operation-error {
+  border: 1px solid var(--red);
+  border-left-width: 4px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--paper-light);
+  margin: 0 0 12px;
+  max-height: 35vh;
+  overflow: auto;
+  flex-shrink: 0;
+}
+
+.operation-error p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.operation-error details {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recovery-actions button {
+  width: auto;
+}
+
+.change-notice {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin: 0 0 8px;
+  line-height: 1.6;
+}
+
+.change-notice button {
+  min-height: 36px;
+  width: auto;
+  margin-left: 8px;
+}
+
+.issue-action {
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--red-deep);
+  background: var(--paper-light);
+  margin-top: 8px;
+  padding: 4px 12px;
+  align-self: flex-start;
+}
+
+#risk-list h4:not(.risk-section-heading) {
+  font-size: 13px;
+  margin: 14px 0 8px;
+}
+
+.risk-info {
+  border-left: 3px solid var(--info);
+}
+
+.field-evidence details summary {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.field-evidence details p {
+  white-space: pre-wrap;
+}
+
+.field-input {
+  min-height: 36px;
+}
+
+.decision-panel {
+  display: none;
+}
+
+.connection-status {
+  max-width: 150px;
+}
+
+.drop-zone {
+  min-height: 70px;
+}
+
+@media (min-width: 1051px) {
+  .chat-section {
+    --chat-pad-x: 20px;
+    padding: 18px 20px 14px;
+  }
+  /* 桌面端仅压低顶部导航控件的视觉重量；移动端仍保留 44px 触控高度。 */
+  .chat-section > .section-title .panel-toggle {
+    min-height: 36px;
+    height: 36px;
+    padding: 4px 10px;
+  }
+}
+
+@media (max-width: 1050px) {
+  .workspace {
+    position: relative;
+    display: block;
+    height: auto;
+  }
+  .chat-section {
+    --chat-pad-x: 18px;
+    padding: 14px 18px;
+  }
+  .task-bar {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .order-section {
+    padding-bottom: 32px;
+  }
+  .workspace.order-collapsed .order-section {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .icon-button {
+    min-height: 36px;
+  }
+  .chat-section {
+    --chat-pad-x: 12px;
+    padding: 12px;
+  }
+  .chat-section .section-title h2 {
+    font-size: 20px;
+  }
+  .journey-meta {
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .journey-tabs button {
+    font-size: 12px;
+    padding: 6px 2px;
+  }
+  .starter-content {
+    padding: 0 12px 12px;
+  }
+  .starter-panel h3 {
+    font-size: 18px;
+  }
+  .starter-panel p {
+    margin: 6px 0;
+    font-size: 13px;
+  }
+  .starter-options {
+    gap: 5px;
+  }
+  .starter-options button {
+    padding: 10px 6px;
+    font-size: 12px;
+  }
+  .starter-options small {
+    display: none;
+  }
+  .starter-content > small {
+    font-size: 11px;
+  }
+  .intake-pane .chat-feed {
+    min-height: 60px;
+  }
+  .task-bar {
+    gap: 8px;
+  }
+  .task-bar strong {
+    font-size: 13px;
+  }
+  .task-bar small {
+    font-size: 11px;
+  }
+  .task-bar button {
+    font-size: 12px;
+    padding: 9px 10px;
+    max-width: 125px;
+    white-space: normal;
+  }
+  .handoff-document {
+    padding: 14px;
+  }
+  .journey-pane {
+    overscroll-behavior: contain;
+  }
+  .review-field {
+    padding: 12px;
+  }
+}
+
+/* 支持 linear() 的浏览器：消息气泡与 toast 换成多次微回弹的细腻阻尼曲线（过冲→回落→微沉浮）。
+   @supports 在解析期整块裁剪，避免 var()+linear() 在老浏览器里产生整条 transition 失效。 */
+@supports (transition-timing-function: linear(0, 1)) {
+  .message {
+    animation-timing-function: var(--ease-spring-fine);
+  }
+  .toast.show {
+    transition-timing-function: var(--ease-spring-fine);
+  }
+}
+
+/* 细滚动条：5px 圆角滑块、低对比，悬停加深。注意标准属性 scrollbar-width/color 一旦
+   生效会禁用 ::-webkit-scrollbar 自绘，因此各滚动容器不再单独声明标准属性，
+   Firefox 用下方 @supports 块降级为 thin。 */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-content, .settings-history-list, .history-list, .preset-list, .chat-feed,
+  .md-table, .order-section, .settings-panel, .settings-nav, .journey-pane, .workcard-preview {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
