@@ -9,16 +9,16 @@
 实现布局：核心代码按分层包结构组织在 `printops/` 下（根目录保留 `server.py`、`agent.py`、`mcp_server.py` 等薄兼容垫片，确保既有启动命令与外部导入零破坏）：
 
 - `printops/domain/`：`vocab.py`、`units.py`、`measurement.py`、`knowledge.py`（含产品目录、复核时效与追问/快捷选项元数据）、`order_model.py`、`order_contract.py`、`nlu.py`、`perception_candidates.py`；
-- `printops/pricing/`：`schema.py` 与 `engine.py`（读取 `rate_cards/` 版本化 JSON）；
+- `printops/pricing/`：`schema.py`、`engine.py`（读取 `rate_cards/` 版本化 JSON）与 `simulator.py`（纯只读量价阶梯拐点与 What-If 工艺差价模拟，零副作用）；
 - `printops/storage/`：`contract.py`（`OrderStore`、`ToolCallRecorder` 与领域归一化回调钩子）、`sqlite.py`、`memory.py`、`factory.py`、`policy.py`、`backup.py`；
 - `printops/supplier/`：`contract.py`、`adapters.py`、`connectors.py`（通过注册表协议单向依赖，零循环导入）；
 - `printops/tools/`：`registry.py`（8 个白名单工具注册表与契约，彻底消除原 `tools.py` 与运维脚本目录同名冲突）；
 - `printops/llm/`：拆分为 `config_store.py`、`transport.py`、`budget.py`、`protocol.py`、`probe.py`、`plan_validator.py`、`planner.py` 与薄门面 `adapter.py`；
 - `printops/agent/`：拆分为 `memory.py`、`provenance.py`、`patch_engine.py`、`planner_orchestrator.py`、`tool_gateway.py`、`delivery_lifecycle.py`、`context_projector.py`、`facade.py` 与兼容门面 `core.py`；
 - `printops/mcp/`：`server.py`（标准库 JSON-RPC stdio MCP server）；
-- `printops/web/`：`server.py`（轻量 HTTP API 与防路径穿越的 `web/` 静态白名单）；
+- `printops/web/`：`server.py`（轻量 HTTP API、只读 `GET/POST /api/pricing/simulate` 路由与防路径穿越的 `web/` 静态白名单）；
 - `scripts/`：离线门禁、知识复核、安全扫描、架构守卫（`arch_guard.py`）、双轨对比与 dsh/local host 运维脚本；
-- `web/`：无构建工具原生前端——`web/css/`（6 个多行模块化样式表）、`web/js/`（16 个原生 ES Modules + `store.js` 单一状态源）、`markdown.js`、`workbench.js`、`journey.js`、`workcard.js`。
+- `web/`：无构建工具原生前端——`web/css/`（8 个多行模块化样式表，含 `blueprint.css` 与 `pricing-simulator.css`）、`web/js/`（19 个原生 ES Modules + `store.js` 单一状态源，含 `blueprint.js`、`pdf_parser.js` 与 `pricing_simulator.js`）、`markdown.js`、`workbench.js`、`journey.js`、`workcard.js`。
 
 - `Agent`：维护任务状态；模型可提出字段补丁和受限工具调用，工具结果会回传模型总结，最多三轮，失败时回到确定性规则。每次运行生成 `runId` 与步骤事件，并保存字段来源、置信度和冲突。规则感知的置信度按证据强度分级（显式标签/单位 0.9+，裸数字与氛围词低于 0.75），生产字段低置信度时阻止生成交接单。
 - `Memory`：SQLite 会话记忆，保存订单、最近 80 条消息和当前阶段；刷新页面可恢复完整对话。

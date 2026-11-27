@@ -7,7 +7,7 @@
 [简体中文](README.md) · [English](README.en.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.5.0--reference-blue)
+![Version](https://img.shields.io/badge/version-1.6.0--reference-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 **Python standard-library runtime · Local first · Optional models · Human review and confirmation**
@@ -26,7 +26,7 @@ The initial study assigns one primary task to each of 8 non-expert participants 
 
 ## Current capabilities and boundaries
 
-- `VERSION` is the **1.5.0 reference release** (2026-11-22): dual-track equivalence assertions + 123-case synthetic evaluation + a market-listed rate-card source + a fixed boundary notice — the stable-tier gates (≥20 real redacted cases, 8-person human walkthrough, real dsh/model end-to-end) remain organizationally blocked and are not claimed. See the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
+- `VERSION` is the **1.6.0 reference release** (2026-11-27): modular `printops/` package and native ES-Module frontend + Agent Harness UI + interactive prepress blueprint engine with workcard canvas integration + native browser `FlateDecode` PDF stream preflight and cross-field validation + read-only quantity-tier sweet-spot & What-If pricing simulator + security hardening (TD-26/27/28) and zero dual-track divergence (TD-25). The stable-tier gates (≥20 real redacted cases, 8-person human walkthrough, real dsh/model end-to-end) remain organizationally blocked and are not claimed. See [CHANGELOG](CHANGELOG.md) and the [implementation acceptance matrix](docs/IMPLEMENTATION_ACCEPTANCE.md). A code update does not establish a stable release.
 - This is a pre-order preparation tool. There is no authorized live supplier connection, real HTTP transport, or live tool endpoint. Confirmation, export, and printing do not mean a supplier received anything.
 - Reference estimates use versioned **illustrative parameters created by hand**, not market prices, supplier quotes, or promised lead times. PDF checks provide basic clues, not proof that a file is production-ready.
 - The real desensitized corpus currently contains **0** orders, so the strict release gate remains blocked. Development fixtures, demos, usability tasks, and sample prices cannot replace real orders.
@@ -89,12 +89,15 @@ The local confirmation note is `仅核对本地交接内容；文件待交付，
 
 | Capability | Available now | Limits and evidence |
 | --- | --- | --- |
-| Product recognition and parameter intake | 17 catalog types, category questions, revisions/negations, independent product items | Catalog size does not imply complete pricing coverage. Accuracy on real customer language still needs a real corpus. |
+| Product recognition and parameter intake | 18 catalog types, category questions, revisions/negations, independent product items | Catalog size does not imply real-language completeness. Accuracy on real customer language still needs a real corpus. |
 | Dimensions and evidence | mm normalization; cm/in and ISO 216 aliases; separate finished/expanded/die-cut/unspecified-package/inner/outer dimensions | Original text and candidates are retained. Low-confidence production parameters require confirmation. See the [order contract](docs/ORDER_CONTRACT.md). |
-| Conditional illustrative pricing | Business cards, flyers, digital printing, invitations, hang tags, PVC cards, envelopes, paper bags; brochures/books, folded leaflets, and some packaging/labels/posters under category-specific conditions | Illustrative parameters were re-derived by hand for rate card `2026.11.01` from source `industry-standard-flow-2026-10` (engine logic unchanged; goldens and worked examples recalculated). Quantity units, material, sides, and pricing dimensions must be explicit. Folded leaflets need expanded size; books need pages/binding; box dimensions cannot replace a flat die-cut area. See [pricing coverage](docs/PRICING.md#当前覆盖范围). |
-| Uncalibrated categories | PVC boards, multipart forms, and paper cups can still collect parameters and state why they are blocked (blocked categories narrowed from 7 to 3 this round: hang tags, PVC cards, envelopes, and paper bags are now calibrated on the current family enum) | Pricing is blocked rather than using a generic category price, with the missing driver named (board thickness for PVC boards, form count for multipart forms, 3D structure for paper cups; the planned pricing engine schema 3.0 addresses these). Unknown processes return known costs and unpriced items without a full range. |
+| Conditional illustrative pricing | All 18 catalog categories support conditional pricing (business cards, flyers, digital printing, invitations, hang tags, PVC cards, envelopes, paper bags, PVC boards, multipart forms, paper cups; plus conditional brochures/books, folded leaflets, packaging boxes, labels, and posters/banners) | Calibrated under rate card `2026.12.01` (schema 3.0). Quantity units, material, sides, and pricing dimensions must be explicit; folded leaflets need expanded size, books need pages/binding, cups use calibrated volume bands, forms use parts count, and PVC boards use thickness tiers. See [pricing coverage](docs/PRICING.md#当前覆盖范围). |
+| Uncalibrated categories | None inside the 18-category catalog; out-of-catalog categories remain explicitly blocked with `reasonDetail` passthrough | Never falls back to generic category pricing; unknown processes return known subtotals and unpriced items without a full range. |
 | Explainable estimates | Decimal costs for material, setup, printing, finishing, binding, die-cutting, packaging, and minimum-charge adjustments | `ready` gives a full illustrative range, `partial` a known subtotal, and `blocked` actionable reasons. Basis is tax-exclusive and ex-works; sources, versions, and exclusions are inspectable. |
-| Basic file checks | Local browser PDF page count, page boxes, color-space and embedded-font clues; originals are not uploaded | Not professional prepress validation. An absent file must remain marked as pending. |
+| Quantity tiers & What-If simulator | Read-only `GET/POST /api/pricing/simulate` models 5–6 nearby quantity tiers with unit prices and highlights the best unit-price sweet spot; interactive What-If toggles for paper, print mode, finishing, and category specs with explicit write-back | Purely read-only simulation (GET-only on compare view entry, zero revision bump, works on archived orders); illustrative local reference only, not a formal supplier quote. |
+| Interactive prepress blueprints & workcards | Dependency-free SVG previews for flat trim/3mm bleed/safe zones/rounded corners, folded leaflet panels, booklet reference spine thickness with thick saddle-stitch warnings, 3D isometric box wireframes, and PDF dimension overlays; thumbnail blueprints also embed into exported PNG workcards | Pure client-side layer toggles; spine thickness and diagrams are pre-production estimates, not substitutes for supplier proofs. |
+| Deep browser PDF preflight | Native browser `DecompressionStream("deflate")` parses compressed `FlateDecode` object streams locally (artwork never leaves the browser), checking per-page size/orientation consistency, measured bleed mm, PDF-vs-order page-count consistency, and low-resolution image clues; multi-product previews persist per `itemId` | Metadata clues only — does not replace professional prepress sign-off. Absent files remain marked as pending delivery. |
+| Harness workbench UI | Collapsible per-turn run capsules (step flow, latency, revision), field delta chips, inline pending-candidate approval gates, live elapsed timer, `/` slash command menu, `Ctrl/Cmd+K` palette, and structured diff/undo banner | All writes and confirmations remain governed by the backend OrderStore and CAS revisions. |
 | Memory and recovery | Authoritative backend OrderStore; SQLite/memory/custom, CAS, full history, archive, and backup | SQLite is the built-in default. Memory is temporary; enterprise databases require trusted registered implementations. |
 | Supplier connections | Generic local export, unconfigured suppliers, local mock, connector protocol and contract tests | No real supplier connection. Mock/sandbox results do not verify production capability. |
 | Handoff and confirmation | Authoritative handoff, local confirmation, JSON/CSV/Markdown, A4 printing, separate full history backup | Confirmation is not an authenticated corporate signature; export is not transmission. Exports recheck the current version; edits invalidate prior confirmation. |
@@ -122,27 +125,20 @@ python3 -m unittest discover -s tests -p "test_*.py"
 PYTHONPATH=. python3 tests/evaluate_agent.py             # Development report
 PYTHONPATH=. python3 tests/evaluate_agent.py --release-gate --json
 python3 scripts/knowledge_review.py                       # knowledge review gate; dev_check mounts it on the non---quick path
+python3 scripts/arch_guard.py                             # architecture & SSOT guard (0 cycles, 0 layer violations, version sync, JS/ESM/CSS checks)
 python3 scripts/secret_scan.py
 python3 scripts/repo_guard.py
 python3 scripts/dsh_mcp_smoke.py
 npm ci
 npm run test:browser:install
-npm run test:browser
-npx playwright test --config tests/journey.config.mjs
-npx playwright test --config tests/ui_positions.config.mjs
-npx playwright test --config tests/ui_focus.config.mjs
-# Optional second browser engine
-npx playwright install webkit
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/journey.config.mjs
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_positions.config.mjs
-PRINTOPS_TEST_BROWSER=webkit npx playwright test --config tests/ui_focus.config.mjs
+npm run test:browser:all
 ```
 
 The strict release gate requires synthetic field accuracy ≥90%, completion ≥80% on completable cases, and at least 20 real desensitized orders with field accuracy ≥95%. A missing, empty, invalid, insufficient, or inaccurate real corpus blocks release with exit code 1. The real corpus is currently empty. Success without `--release-gate` is not a release approval.
 
 Two release tiers (since 2026-11-21): besides the stable gate there is a **reference tier** (`--release-gate --tier reference`) — synthetic gates fully green + the active rate card carrying a "publicly listed reference price" source + a fixed boundary statement in the output; a missing real corpus does not block but is reported as-is, while an invalid corpus still blocks. The reference tier is not a stable release: any external statement must carry the "reference tier" name. Details live in the release-tier section of [RELEASE_CHECKLIST](docs/RELEASE_CHECKLIST.md).
 
-On 2026-10-25 (1.3.0 candidate baseline), **555 Python tests passed** and the six-step dev gate is green. Chromium passed all four browser suites: **38** journey, **16** UI-position, **17** UI-focus, and **13** smoke scenarios. The 111 synthetic cases achieved 100% field accuracy, which is not a human handoff success rate. The strict release check failed as expected with zero real cases (an organizational block, not a blocker for this round). See [browser acceptance](docs/BROWSER_JOURNEY.md) and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Firefox could not launch in this host environment; real phones, human walkthroughs, and real dsh/models remain unverified.
+On 2026-11-27 (1.6.0 reference release), **669 Python tests passed** (4 skipped by environment) and the eight-step `scripts/dev_check.py` gate is green. Chromium passed all six browser suites (**93 tests total**: **39** journey, **16** UI-position, **17** UI-focus, **13** smoke, **5** Harness UI, and **3** print-intelligence E2E). All 123 synthetic cases achieved 100% field accuracy, which is not a human handoff success rate. The reference-tier gate (`--release-gate --tier reference`) passes while the strict stable release check fails as expected with zero real cases (an organizational block). See [CHANGELOG](CHANGELOG.md), [browser acceptance](docs/BROWSER_JOURNEY.md), and [development acceptance](docs/NEXT_STAGE_ACCEPTANCE.md). Real phones, human walkthroughs, and real dsh/models remain unverified.
 
 ## Advanced: models, MCP, and runtime boundaries
 
@@ -190,7 +186,7 @@ APIs other than health require a process-local token; cross-origin requests carr
 | [File management](docs/FILE_MANAGEMENT.md) / [dsh integration](docs/plan/dsh-print-agent.md) | Commit boundaries and optional integration. |
 | [Historical development plan (archived)](docs/archive/DEVELOPMENT_PLAN.md) / [Open-source options](docs/OPEN_SOURCE_OPTIONS.md) | Design references; historical schedules and task cards are not current status. |
 
-v1.5.0 ships as the **reference tier** (2026-11-22): all 18 catalog categories price conditionally, dual-track equivalence assertions and 123 synthetic evaluation cases are green, and the market-price collection surface is closed (7 categories + 2 variants from sd2000.com listed prices, see `docs/plan/sd2000-price-probe-2026-11-21.md`; further variants moved to the quarterly review). Reference-tier quotes are publicly listed prices, not authorized supplier quotes. Real supplier integration separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
+v1.6.0 ships as the **reference tier** (2026-11-27): building on v1.5.0's 18 conditionally priced categories and 123 synthetic evaluation cases, this release completes the layered `printops/` package and native ESM modularization, the Agent Harness workbench UI, security hardening (TD-26/27/28) and zero dual-track divergence (TD-25), plus three print-intelligence capabilities (interactive prepress blueprints with workcard canvas integration, native browser `FlateDecode` PDF stream preflight with cross-field validation, and the read-only quantity-tier & What-If pricing simulator). Reference-tier quotes are publicly listed prices (see `docs/plan/sd2000-price-probe-2026-11-21.md`; further variants moved to quarterly review), not authorized supplier quotes. Real supplier integration separately requires authorization, official protocols, authentication, server-held confirmation, and sandbox verification; having a connector interface does not enable it automatically.
 
 ## Contributing and license
 

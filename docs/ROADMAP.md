@@ -18,11 +18,16 @@
 
 模型负责理解和解释，规则负责约束，工具负责执行，人负责核对和确认。当前导出不会自动发送供应商。
 
-## 当前阶段：v1.5.0（2026-11-22，薄背包收口）
+## 当前阶段：v1.6.0（2026-11-27，参考版：分层重构、Harness 工作台与三大印刷智能升级）
 
-`VERSION` 为 `1.5.0`。v1.5 薄背包两条任务卡全部落地（执行计划见 [v1.5 薄背包执行计划](plan/v15-thin-backlog-plan.md)）：**TD-08** 双轨行为差分断言——10 组等价面/白名单差异面用例 + 提示词契约绊线（`PLANNER_PROMPT_VERSION` 变更锚）+ `tools/compare_modes.py` 跨提示词版本对比 CLI，"换提示词/模型的影响"从静默漂移变为测试红，并由此发现登记 TD-25（估价意图两轨 workflowStage 分歧，待裁定）；**TD-10** 长尾品类评测 12 例——合成语料 111→123 例全绿（390/390 键，tag 分组统计含"长尾"组），6 条话术口径勘误随 TD-09 评估。登记册未偿：TD-25（待裁定）、TD-09/24（待排期）。发布口径维持**参考版**层级（活动 rate card 携公开挂牌参考价来源，`--release-gate --tier reference` 退出码 0）；稳定版门槛保持组织性阻断；市场价采集面封版转季度复核（`nextReviewAt=2027-02-19`，偏差 >15% 触发重标定）。完整实现证据见 [IMPLEMENTATION_ACCEPTANCE](IMPLEMENTATION_ACCEPTANCE.md) 与 CHANGELOG，历史版本测试数字不作为当前结果。
+`VERSION` 为 `1.6.0`。本轮在 v1.5.0 全 18 类条件计价与 123 例合成评测基础上，完成：
+- **架构与安全收口**：`printops/` 分层包与 19 模块原生 ESM 前端重构、`scripts/arch_guard.py` 架构守卫、Agent Harness 工作台升级、安全加固批（TD-26 Host 白名单 / TD-27 禁 3xx 重定向 / TD-28 健壮性四批修复）与 TD-25 双轨 `workflowStage` 零分歧对齐。
+- **三大印刷智能能力**：① 交互式规格与印前蓝图引擎（`web/js/blueprint.js`：平面裁切/出血/安全边、折页折痕分幅、画册参考书脊与骑马钉预警、包装盒 3D 等轴测线框、PDF 尺寸叠层，联动 `web/workcard.js` 工单小卡缩略蓝图）；② 浏览器原生 `DecompressionStream("deflate")` 解析 `FlateDecode` 压缩 PDF 对象流（`web/js/pdf_parser.js`）+ 服务端跨字段页数/实测出血/多页一致性硬校验 + 多产品按 `itemId` 隔离预览；③ 量价拐点模拟器 & 工艺 What-If 只读试算器（`printops/pricing/simulator.py` + `GET/POST /api/pricing/simulate` + `web/js/pricing_simulator.js`，切换视图仅发 GET 零 POST、显式写入走 `/api/fields` CAS）。
+- **验证与门槛**：`dev_check.py` 八步全绿（669 项 Python 单测 / 123 例合成评测），Chromium 6 套件共 93 项通过；发布口径维持**参考版**层级（`--release-gate --tier reference` 退出码 0）；稳定版门槛（真实语料 ≥20 例、8 人真人走查）保持组织性阻断；登记册未偿项为 TD-09/TD-24（及可选安全项 TD-14/15/16）。完整记录见 [CHANGELOG](../CHANGELOG.md)。
 
 ### v1.5.0 薄背包（已完成）
+
+`v1.5.0`（2026-11-22）两卡落地（执行计划见 [v1.5 薄背包执行计划](plan/v15-thin-backlog-plan.md)）：**TD-08** 双轨行为差分断言（10 组用例 + 提示词契约绊线 + `scripts/compare_modes.py`，后续 TD-25 已清零）；**TD-10** 长尾品类评测 12 例（合成语料 111→123 例全绿，390/390 键）；市场价采集面封版转季度复核（`nextReviewAt=2027-02-19`，偏差 >15% 触发重标定）。
 
 ### v1.4.0 三主线（已完成）
 
