@@ -8,7 +8,7 @@ import {
   $, fmtMs, formatFileSize, formatFileTime, hasValue, revealPanel, showToast,
 } from "../dom.js";
 import { api, apiErrorText } from "../api.js";
-import { clearPdfPreview } from "../pdf.js";
+import { getActivePdfPreview } from "../pdf.js";
 
 export function renderDecision() {
   const stage = appState.state.workflowStage || appState.state.stage || "collect";
@@ -160,9 +160,10 @@ export function renderFileState() {
   const storedCheck = activeItem ? appState.state.preflightResults?.[activeItem.itemId] : appState.state.preflightResults;
   const feedback = appState.fileFeedback || (storedFile ? { ok: Boolean(storedCheck?.ok && !storedCheck?.stale), fileName: storedFile,
     message: storedCheck?.stale ? "规格已修改，原基础检查已过期，请重新选择文件检查。" : storedCheck?.ok ? "基础检查已通过；不替代专业印前验收。" : "文件已记录，基础检查仍需核对。" } : null);
-  const activePreview = appState.pdfPreview
-    && (items.length <= 1 || storedFile === appState.pdfPreview.fileName)
-    && (!feedback || appState.pdfPreview.fileName === feedback.fileName) ? appState.pdfPreview : null;
+  const localPreview = getActivePdfPreview();
+  const activePreview = localPreview
+    && (items.length <= 1 || !storedFile || storedFile === localPreview.fileName)
+    && (!feedback || localPreview.fileName === feedback.fileName) ? localPreview : null;
   node.hidden = !feedback && !activePreview;
   if (!feedback && !activePreview) return;
   node.className = `file-state ${feedback?.ok && activePreview?.preflight?.ok !== false ? "ok" : "error"}`;
@@ -174,6 +175,28 @@ export function renderFileState() {
   heading.append(name);
   heading.append(PrintOpsJourney.el("small", `所属产品：${activeItem?.productType || appState.state.order.productType || "当前订单"} · ${storedCheck?.updatedAt ? `检查时间 ${formatFileTime(storedCheck.updatedAt)}` : "尚无有效检查时间"}`));
   if (feedback?.message) heading.append(PrintOpsJourney.el("p", feedback.message));
+  const renderChecksBlock = (preflight) => {
+    if (!preflight || !Array.isArray(preflight.checks) || !preflight.checks.length) return null;
+    const checks = document.createElement("div");
+    checks.className = "file-checks";
+    preflight.checks.forEach((item) => {
+      const check = document.createElement("div");
+      check.className = `file-check check-${item.status}`;
+      const term = document.createElement("span");
+      const detail = document.createElement("strong");
+      term.textContent = item.label;
+      detail.textContent = item.detail;
+      check.append(term, detail);
+      checks.appendChild(check);
+    });
+    if (Array.isArray(preflight.warnings) && preflight.warnings.length) {
+      const warning = document.createElement("p");
+      warning.className = "file-warning";
+      warning.textContent = `需要确认：${preflight.warnings.join("；")}`;
+      checks.appendChild(warning);
+    }
+    return checks;
+  };
   if (activePreview) {
     const meta = document.createElement("div");
     meta.className = "file-meta";
@@ -203,32 +226,17 @@ export function renderFileState() {
     openLink.textContent = "在新窗口打开 PDF";
     fallback.append("内置预览不可用时，", openLink);
     heading.append(meta);
-    if (activePreview.preflight) {
-      const checks = document.createElement("div");
-      checks.className = "file-checks";
-      activePreview.preflight.checks.forEach((item) => {
-        const check = document.createElement("div");
-        check.className = `file-check check-${item.status}`;
-        const term = document.createElement("span");
-        const detail = document.createElement("strong");
-        term.textContent = item.label;
-        detail.textContent = item.detail;
-        check.append(term, detail);
-        checks.appendChild(check);
-      });
-      if (activePreview.preflight.warnings.length) {
-        const warning = document.createElement("p");
-        warning.className = "file-warning";
-        warning.textContent = `需要确认：${activePreview.preflight.warnings.join("；")}`;
-        checks.append(warning);
-      }
-      heading.append(checks);
-    }
+    const checksNode = renderChecksBlock(activePreview.preflight || storedCheck);
+    if (checksNode) heading.append(checksNode);
     heading.append(viewer, fallback);
   } else {
-    const detail = document.createElement("small");
-    detail.textContent = feedback?.message || "";
-    heading.append(detail);
+    const checksNode = renderChecksBlock(storedCheck);
+    if (checksNode) heading.append(checksNode);
+    else {
+      const detail = document.createElement("small");
+      detail.textContent = feedback?.message || "";
+      heading.append(detail);
+    }
   }
   node.append(heading);
 }

@@ -8,14 +8,14 @@ export async function api(path, body, method = "POST", options = {}) {
   const requestSession = body?.sessionId || appState.sessionId;
   const headers = { "Content-Type": "application/json" };
   if (window.__PRINTOPS_TOKEN__) headers["X-PrintOps-Token"] = window.__PRINTOPS_TOKEN__;
-  if (method !== "GET" && body?.sessionId === appState.sessionId && Number.isInteger(appState.state.revision) && !["/api/session", "/api/session/context"].includes(path)) {
+  if (method !== "GET" && body?.sessionId === appState.sessionId && Number.isInteger(appState.state.revision) && !["/api/session", "/api/session/context", "/api/pricing/simulate"].includes(path)) {
     body = {...body, expectedRevision: body.expectedRevision ?? appState.state.revision};
   }
   const scoped = ["/api/chat", "/api/choose", "/api/preflight", "/api/tools/call", "/api/fields"].includes(path);
   if (scoped && body?.itemId == null && body?.itemIndex == null && appState.state.order?.items?.length > 1) {
     body = {...body, itemId: appState.state.order.items[appState.state.activeItemIndex]?.itemId};
   }
-  const mutation = method !== "GET" && Boolean(body?.sessionId) && !["/api/session", "/api/session/context", "/api/focus"].includes(path);
+  const mutation = method !== "GET" && Boolean(body?.sessionId) && !["/api/session", "/api/session/context", "/api/focus", "/api/pricing/simulate"].includes(path);
   if (mutation && appState.viewLoading) throw new Error("正在切换订单或产品，请稍后继续。");
   if (mutation && requestSession === appState.sessionId && (appState.state.status === "archived" || appState.state.orderStatus === "archived")) throw new Error("已归档订单只能查看或导出。");
   if (mutation && appState.unresolvedWrites.has(body.sessionId)) {

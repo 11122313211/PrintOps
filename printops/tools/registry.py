@@ -7,6 +7,7 @@ state directly.
 
 from __future__ import annotations
 
+import math
 import re
 from copy import deepcopy
 from typing import Any, Callable
@@ -217,16 +218,129 @@ def explain_print_term(question: str) -> dict[str, str]:
     return {"topic": topic, "answer": answer, "next": "如果愿意，我可以把这个偏好直接写入当前订单。"}
 
 
+_PT_TO_MM = 25.4 / 72.0
+
+
+def _safe_finite_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _safe_nonneg_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 0 else None
+
+
+def _safe_pos_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+def _normalize_pdf_box(box: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    coords = [_safe_finite_float(item) for item in box]
+    if any(coord is None for coord in coords):
+        return None
+    x0, y0, x1, y1 = coords  # type: ignore[misc]
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _box_dimensions_mm(box: Any) -> tuple[float, float] | None:
+    rect = _normalize_pdf_box(box)
+    if rect is None:
+        return None
+    width = (rect[2] - rect[0]) * _PT_TO_MM
+    height = (rect[3] - rect[1]) * _PT_TO_MM
+    if width <= 0 or height <= 0:
+        return None
+    return (width, height)
+
+
+def _parse_expected_pages(value: int | str | None) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= 100000 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        match = re.search(r"(\d+)\s*(?:页|[pP](?:ages?)?)(?![A-Za-z])", text)
+        if not match:
+            if "开" in text:
+                return None
+            match = re.fullmatch(r"(\d+)", text)
+        if match:
+            parsed = int(match.group(1))
+            return parsed if 0 < parsed <= 100000 else None
+    return None
+
+
+def _measure_bleed_mm(inspection: dict[str, Any], media_box: Any,
+                      trim_box: Any, bleed_box: Any) -> tuple[float | None, str]:
+    raw_analysis = inspection.get("bleedAnalysis")
+    if isinstance(raw_analysis, dict):
+        source = str(raw_analysis.get("source") or "").strip()
+        min_mm = _safe_finite_float(raw_analysis.get("minMm"))
+        if source in {"bleed_vs_trim", "media_vs_trim"} and min_mm is not None:
+            return (round(min_mm, 2), source)
+
+    trim_rect = _normalize_pdf_box(trim_box)
+    bleed_rect = _normalize_pdf_box(bleed_box)
+    if trim_rect and bleed_rect:
+        sides = (
+            (trim_rect[0] - bleed_rect[0]) * _PT_TO_MM,
+            (bleed_rect[2] - trim_rect[2]) * _PT_TO_MM,
+            (trim_rect[1] - bleed_rect[1]) * _PT_TO_MM,
+            (bleed_rect[3] - trim_rect[3]) * _PT_TO_MM,
+        )
+        return (round(min(sides), 2), "bleed_vs_trim")
+
+    media_rect = _normalize_pdf_box(media_box)
+    if trim_rect and media_rect:
+        sides = (
+            (trim_rect[0] - media_rect[0]) * _PT_TO_MM,
+            (media_rect[2] - trim_rect[2]) * _PT_TO_MM,
+            (trim_rect[1] - media_rect[1]) * _PT_TO_MM,
+            (media_rect[3] - trim_rect[3]) * _PT_TO_MM,
+        )
+        if min(sides) >= -0.05 and 1.0 <= max(sides) <= 15.0:
+            return (max(0.0, round(min(sides), 2)), "media_vs_trim")
+
+    return (None, "none")
+
+
 @tool
 def preflight_file(file_name: str, size_bytes: int, page_count: int | None = None,
                    encrypted: bool = False, readable: bool = True,
                    inspection: dict[str, Any] | None = None,
-                   expected_size: str | None = None) -> dict[str, Any]:
+                   expected_size: str | None = None,
+                   expected_pages: int | str | None = None,
+                   product_type: str | None = None) -> dict[str, Any]:
     """检查文件类型、大小和浏览器本地解析出的印前线索。"""
     checks = []
     errors = []
     warnings = []
     suggestions = []
+    observed_size_mm: list[float] | None = None
+    measured_bleed_mm: float | None = None
+    page_consistency: dict[str, Any] | None = None
+    expected_pages_match: bool | None = None
+
+    inspection_dict = inspection if isinstance(inspection, dict) else {}
+    raw_compressed = inspection_dict.get("compressedStreams")
+    compressed = raw_compressed if isinstance(raw_compressed, dict) else None
+    cs_detected = _safe_nonneg_int(compressed.get("detected")) if compressed else None
+    cs_decoded = _safe_nonneg_int(compressed.get("decoded")) if compressed else None
+
     if not file_name.lower().endswith(".pdf"):
         errors.append("MVP 暂只支持 PDF 文件。")
         checks.append({"label": "文件类型", "status": "error", "detail": "仅支持 PDF"})
@@ -252,7 +366,10 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
         warnings.append("无法解析页数，请在下单前人工确认页数。")
         checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
     elif page_count <= 0:
-        warnings.append("未解析到页数，可能使用了压缩对象流，请人工确认页数。")
+        if cs_detected and cs_detected > 0 and (cs_decoded or 0) == 0:
+            warnings.append("检测到压缩对象流但本地未能解压，无法解析页数，请使用专业印前软件核验。")
+        else:
+            warnings.append("未解析到页数，可能使用了压缩对象流，请人工确认页数。")
         checks.append({"label": "页数", "status": "unknown", "detail": "未解析到"})
     else:
         checks.append({"label": "页数", "status": "ok", "detail": f"{page_count} 页"})
@@ -273,10 +390,42 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
     else:
         checks.append({"label": "文件命名", "status": "ok", "detail": "未发现常见风险标记"})
 
+    # Cross-field deterministic checks against order page count and binding rules.
+    parsed_expected_pages = _parse_expected_pages(expected_pages)
+    valid_page_count = _safe_pos_int(page_count)
+    if parsed_expected_pages is not None and valid_page_count is not None:
+        if valid_page_count != parsed_expected_pages:
+            expected_pages_match = False
+            checks.append({
+                "label": "订单页数一致性",
+                "status": "warn",
+                "detail": f"文件 {valid_page_count} 页 / 订单 {parsed_expected_pages} 页",
+            })
+            warnings.append(
+                f"文件实测为 {valid_page_count} 页，与订单填写的 {parsed_expected_pages} 页不一致，请核对是否漏含封面/封底或空白页"
+            )
+        else:
+            expected_pages_match = True
+            checks.append({
+                "label": "订单页数一致性",
+                "status": "ok",
+                "detail": f"文件与订单均为 {valid_page_count} 页",
+            })
+
+    normalized_product = str(product_type or "").strip()
+    if normalized_product in {"宣传册", "画册"} and valid_page_count is not None and valid_page_count % 2 != 0:
+        checks.append({
+            "label": "装订页数规范",
+            "status": "warn",
+            "detail": f"{normalized_product}文件为奇数页（{valid_page_count} 页）",
+        })
+        warnings.append("画册/宣传册文件页数为奇数，印刷装订通常需偶数页（骑马钉需为 4 的倍数）")
+        suggestions.append("请核对是否漏含封底或空白页；骑马钉装订需为 4 的倍数页。")
+
     # The browser performs a bounded, local PDF metadata scan.  Treat every
     # result as a clue, not a production-grade proof; final preflight stays a
     # human or professional PDF tool responsibility.
-    inspection = inspection if isinstance(inspection, dict) else {}
+    inspection = inspection_dict
     if inspection:
         if inspection.get("isPdf") is False:
             errors.append("未检测到有效的 PDF 文件头，请重新导出文件。")
@@ -286,10 +435,15 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
         pdf_version = str(inspection.get("pdfVersion") or "").strip()[:12]
         if pdf_version:
             checks.append({"label": "PDF 版本", "status": "info", "detail": f"PDF {pdf_version}"})
+        if cs_decoded is not None and cs_decoded > 0:
+            checks.append({"label": "PDF 对象流", "status": "ok", "detail": f"已本地解压 {cs_decoded} 处压缩对象流"})
+        elif cs_detected is not None and cs_detected > 0 and (cs_decoded or 0) == 0 and (page_count is None or page_count <= 0):
+            checks.append({"label": "PDF 对象流", "status": "warn", "detail": f"检测到 {cs_detected} 处压缩流但未能本地解压"})
         inspected_pages = inspection.get("pageCount")
-        if isinstance(inspected_pages, int) and page_count and inspected_pages != page_count:
+        if (isinstance(inspected_pages, int) and not isinstance(inspected_pages, bool)
+                and valid_page_count is not None and inspected_pages != valid_page_count):
             warnings.append("浏览器解析页数与提交页数不一致，请人工核对")
-            checks.append({"label": "页数一致性", "status": "warn", "detail": f"提交 {page_count} 页 / 解析 {inspected_pages} 页"})
+            checks.append({"label": "页数一致性", "status": "warn", "detail": f"提交 {valid_page_count} 页 / 解析 {inspected_pages} 页"})
         if inspection.get("hasEof") is False:
             warnings.append("未发现 PDF 结束标记，文件可能未完整导出")
             checks.append({"label": "文件结束标记", "status": "warn", "detail": "未发现 %%EOF"})
@@ -304,12 +458,10 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
         def box_detail(box: Any) -> str:
             if not isinstance(box, list) or len(box) != 4:
                 return "未解析到"
-            try:
-                width = abs(float(box[2]) - float(box[0])) * 25.4 / 72
-                height = abs(float(box[3]) - float(box[1])) * 25.4 / 72
-                return f"约 {width:.1f}×{height:.1f} mm"
-            except (TypeError, ValueError):
+            dims = _box_dimensions_mm(box)
+            if dims is None:
                 return "格式异常"
+            return f"约 {dims[0]:.1f}×{dims[1]:.1f} mm"
 
         if media_box:
             checks.append({"label": "页面 MediaBox", "status": "info", "detail": box_detail(media_box)})
@@ -325,6 +477,32 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
             suggestions.append("确认成品四边通常各预留约 3mm 出血，并检查文字安全边")
             checks.append({"label": "出血 BleedBox", "status": "unknown", "detail": "未解析到"})
 
+        measured_bleed_mm, bleed_source = _measure_bleed_mm(inspection, media_box, trim_box, bleed_box)
+        if measured_bleed_mm is not None:
+            source_note = "（由 MediaBox/TrimBox 推算）" if bleed_source == "media_vs_trim" else ""
+            if measured_bleed_mm >= 2.8:
+                checks.append({
+                    "label": "实测单边出血",
+                    "status": "ok",
+                    "detail": f"实测单边约 {measured_bleed_mm:.1f} mm（符合常规 3mm 出血参考）{source_note}",
+                })
+            elif measured_bleed_mm > 0.1:
+                checks.append({
+                    "label": "实测单边出血",
+                    "status": "warn",
+                    "detail": f"实测单边约 {measured_bleed_mm:.1f} mm{source_note}",
+                })
+                warnings.append(f"实测单边出血仅约 {measured_bleed_mm:.1f} mm，小于常规 3mm，裁切易露白")
+                suggestions.append("建议将四边出血补足至 3mm，并检查关键图文是否处于安全边距内。")
+            else:
+                checks.append({
+                    "label": "实测单边出血",
+                    "status": "warn",
+                    "detail": f"实测单边约 {max(0.0, measured_bleed_mm):.1f} mm（无有效出血）",
+                })
+                warnings.append("BleedBox 与 TrimBox 重合（出血 0 mm），请确认已添加四边 3mm 出血")
+                suggestions.append("请在排版软件中为成品四边各添加 3mm 出血后再导出 PDF。")
+
         # Compare the requested flat size with TrimBox (or MediaBox when no
         # TrimBox is available). Three-dimensional package sizes stay unknown.
         expected_sizes = []
@@ -333,10 +511,12 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
             if parsed and len(parsed) == 2:
                 expected_sizes.append(parsed)
         observed_box = trim_box or media_box
+        observed_dims = _box_dimensions_mm(observed_box)
+        if observed_dims is not None:
+            observed_size_mm = [round(observed_dims[0], 1), round(observed_dims[1], 1)]
         if expected_sizes and observed_box and len(observed_box) == 4:
-            try:
-                observed = (abs(float(observed_box[2]) - float(observed_box[0])) * 25.4 / 72,
-                            abs(float(observed_box[3]) - float(observed_box[1])) * 25.4 / 72)
+            if observed_dims is not None:
+                observed = observed_dims
                 matches = any(
                     (abs(observed[0] - candidate[0]) <= 1 and abs(observed[1] - candidate[1]) <= 1)
                     or (abs(observed[0] - candidate[1]) <= 1 and abs(observed[1] - candidate[0]) <= 1)
@@ -348,10 +528,47 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
                 else:
                     warnings.append(f"文件页面尺寸为{observed_detail}，与订单成品尺寸不一致，请确认是否为展开尺寸")
                     checks.append({"label": "成品尺寸一致性", "status": "warn", "detail": f"文件 {observed_detail} / 订单 {expected_size}"})
-            except (TypeError, ValueError):
+            else:
                 checks.append({"label": "成品尺寸一致性", "status": "unknown", "detail": "尺寸格式异常"})
         elif expected_sizes:
             checks.append({"label": "成品尺寸一致性", "status": "unknown", "detail": "缺少可比页面框"})
+
+        # Per-page size & orientation consistency from browser-local pageSummary.
+        raw_page_summary = inspection.get("pageSummary")
+        if isinstance(raw_page_summary, dict):
+            analyzed_pages = _safe_nonneg_int(raw_page_summary.get("analyzedPages")) or 0
+            raw_uniform = raw_page_summary.get("uniformSize")
+            raw_mixed = raw_page_summary.get("mixedOrientation")
+            raw_mismatches = raw_page_summary.get("mismatchPages")
+            mismatch_pages: list[int] = []
+            if isinstance(raw_mismatches, list):
+                for item in raw_mismatches:
+                    num = _safe_pos_int(item)
+                    if num is not None and num not in mismatch_pages:
+                        mismatch_pages.append(num)
+                    if len(mismatch_pages) >= 8:
+                        break
+            if isinstance(raw_uniform, bool) or isinstance(raw_mixed, bool):
+                uniform_size = raw_uniform if isinstance(raw_uniform, bool) else True
+                mixed_orientation = raw_mixed if isinstance(raw_mixed, bool) else False
+                page_consistency = {
+                    "uniformSize": uniform_size,
+                    "mixedOrientation": mixed_orientation,
+                    "mismatchPages": mismatch_pages,
+                }
+                if analyzed_pages > 1 and uniform_size is True and mixed_orientation is False:
+                    checks.append({"label": "逐页尺寸一致性", "status": "ok", "detail": f"{analyzed_pages} 页尺寸与方向一致"})
+                if uniform_size is False:
+                    if mismatch_pages:
+                        pages_str = "、".join(str(p) for p in mismatch_pages)
+                        mismatch_detail = f"第 {pages_str} 页与首页不同"
+                    else:
+                        mismatch_detail = "部分页面与首页尺寸不同"
+                    checks.append({"label": "逐页尺寸一致性", "status": "warn", "detail": mismatch_detail})
+                    warnings.append(f"检测到多页尺寸不一致（{mismatch_detail}）")
+                if mixed_orientation is True:
+                    checks.append({"label": "页面方向一致性", "status": "warn", "detail": "横版与竖版混排"})
+                    warnings.append("检测到横版与竖版页面混排，请确认是否为有意设计")
 
         color_spaces = inspection.get("colorSpaces") if isinstance(inspection.get("colorSpaces"), list) else []
         color_spaces = [str(item)[:24] for item in color_spaces if item][:8]
@@ -373,11 +590,42 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
         else:
             checks.append({"label": "字体嵌入线索", "status": "unknown", "detail": "无法从轻量扫描确认"})
 
-        image_count = inspection.get("imageCount")
-        if isinstance(image_count, int) and image_count > 0:
+        image_count = _safe_nonneg_int(inspection.get("imageCount"))
+        if image_count is not None and image_count > 0:
             checks.append({"label": "图片对象", "status": "info", "detail": f"发现 {image_count} 个图片对象；分辨率需专业工具确认"})
         else:
             checks.append({"label": "图片对象", "status": "unknown", "detail": "未解析到"})
+
+        raw_image_summary = inspection.get("imageSummary")
+        if isinstance(raw_image_summary, dict):
+            raw_suspects = raw_image_summary.get("lowResSuspects")
+            suspect_pairs: list[tuple[int, int]] = []
+            if isinstance(raw_suspects, list):
+                for item in raw_suspects[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    w_px = _safe_pos_int(item.get("widthPx"))
+                    h_px = _safe_pos_int(item.get("heightPx"))
+                    if w_px is not None and h_px is not None:
+                        suspect_pairs.append((w_px, h_px))
+            reported_low_count = _safe_nonneg_int(raw_image_summary.get("lowResCount"))
+            low_res_count = max(reported_low_count or 0, len(suspect_pairs))
+            if suspect_pairs or low_res_count > 0:
+                if suspect_pairs:
+                    min_w, min_h = min(suspect_pairs, key=lambda pair: pair[0] * pair[1])
+                    size_note = f"（最低约 {min_w}×{min_h} px）"
+                else:
+                    size_note = ""
+                checks.append({
+                    "label": "图片分辨率线索",
+                    "status": "warn",
+                    "detail": f"发现 {low_res_count} 处疑似低分辨率图片{size_note}",
+                })
+                warnings.append(
+                    f"检测到 {low_res_count} 处疑似低分辨率图片对象{size_note}，建议在专业印前软件核查是否达到 300 DPI"
+                )
+                suggestions.append("位图印刷通常建议达到 300 DPI，请以专业印前软件确认最终有效分辨率。")
+
         if inspection.get("hasTransparency"):
             warnings.append("检测到透明度对象，需确认扁平化和叠印效果")
             checks.append({"label": "透明度线索", "status": "warn", "detail": "发现透明度对象"})
@@ -387,7 +635,7 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
     if errors:
         message = errors[0]
     elif warnings:
-        page_summary = f"已解析到 {page_count} 页；" if page_count and page_count > 0 else ""
+        page_summary = f"已解析到 {page_count} 页；" if valid_page_count is not None else ""
         message = f"基础检查完成，{page_summary}有 {len(warnings)} 项需要人工确认：" + "；".join(warnings)
     else:
         message = "基础检查通过；出血、颜色和字体仍需正式印前检查。"
@@ -395,7 +643,11 @@ def preflight_file(file_name: str, size_bytes: int, page_count: int | None = Non
             "pageCount": page_count, "encrypted": encrypted, "readable": readable,
             "checks": checks,
             "warnings": warnings, "suggestions": suggestions,
-            "inspectionLevel": "metadata" if inspection else "basic"}
+            "inspectionLevel": "metadata" if inspection else "basic",
+            "observedSizeMm": observed_size_mm,
+            "measuredBleedMm": measured_bleed_mm,
+            "pageConsistency": page_consistency,
+            "expectedPagesMatch": expected_pages_match}
 
 
 @tool

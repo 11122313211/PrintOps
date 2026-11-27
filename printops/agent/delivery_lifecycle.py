@@ -589,7 +589,8 @@ class DeliveryLifecycleMixin:
         else:
             item_order = self.state["order"]
         check = self._call("preflight_file", file_name, size_bytes, page_count, encrypted, readable, inspection,
-                           expected_size or item_order.get("size"))
+                           expected_size or item_order.get("size"),
+                           item_order.get("pages"), item_order.get("productType"))
         self.state["workflowStage"] = "preflight"
         self._store_preflight_result(check, item_index)
         if check["ok"]:

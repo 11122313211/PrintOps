@@ -457,7 +457,8 @@ class ToolGatewayMixin:
             item_order = self._item_order(item_index) if item_index is not None else self.state["order"]
             result = self._call(name, str(payload.get("fileName", "")), size_bytes, page_count,
                                 payload.get("encrypted") is True, payload.get("readable") is not False,
-                                payload.get("inspection"), payload.get("expectedSize") or item_order.get("size"))
+                                payload.get("inspection"), payload.get("expectedSize") or item_order.get("size"),
+                                item_order.get("pages"), item_order.get("productType"))
             self.state["workflowStage"] = "preflight"
             self._store_preflight_result(result, item_index)
             if result.get("ok"):

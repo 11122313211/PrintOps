@@ -1,8 +1,11 @@
 /* Native ES Module entrypoint for PrintOps Workbench (zero bundler, zero framework). */
 
 import { DESKTOP_QUERY, actions, appState, cloneData, notify, responseView } from "./store.js";
-import { $, reportMissingBindings } from "./dom.js";
-import { api, refreshCredentials } from "./api.js";
+import { $, reportMissingBindings, showToast } from "./dom.js";
+import { api, apiErrorText, refreshCredentials } from "./api.js";
+import { getActivePdfPreview, syncActivePdfPreview } from "./pdf.js";
+import { renderBlueprintPanel } from "./blueprint.js";
+import { renderPricingSimulator, resetSimulatorState } from "./pricing_simulator.js";
 import {
   applyComposerHeight, applyLayout, loadLayout, setHighContrast,
   setSidebarCollapsed, setupComposerResize, setupSplitters,
@@ -38,6 +41,114 @@ function sliceChanged(key, value) {
   return true;
 }
 
+function activeOrderSnapshot() {
+  const order = appState.state.order || {};
+  const items = Array.isArray(order.items) ? order.items : [];
+  if (items.length > 1) {
+    const idx = Number.isInteger(appState.state.activeItemIndex) && items[appState.state.activeItemIndex]
+      ? appState.state.activeItemIndex : 0;
+    const item = items[idx] || {};
+    return { order: item, itemIndex: idx, itemId: item.itemId || appState.state.activeItemId || null, isMulti: true };
+  }
+  return { order, itemIndex: null, itemId: items[0]?.itemId || null, isMulti: false };
+}
+
+function activePdfInspectionForBlueprint() {
+  const { itemId, isMulti } = activeOrderSnapshot();
+  const localPreview = getActivePdfPreview();
+  const storedCheck = isMulti && itemId
+    ? appState.state.preflightResults?.[itemId]
+    : appState.state.preflightResults;
+  if (localPreview?.inspection) {
+    const preflight = localPreview.preflight || storedCheck || null;
+    return {
+      ...localPreview.inspection,
+      ...(preflight?.observedSizeMm ? { observedSizeMm: preflight.observedSizeMm } : {}),
+      ...(preflight?.measuredBleedMm != null ? { bleedMm: preflight.measuredBleedMm } : {}),
+      ...(preflight?.checks ? { checks: preflight.checks } : {}),
+    };
+  }
+  if (storedCheck && typeof storedCheck === "object" && !storedCheck.stale && (storedCheck.checks || storedCheck.observedSizeMm)) {
+    return {
+      ...(storedCheck.observedSizeMm ? { observedSizeMm: storedCheck.observedSizeMm } : {}),
+      ...(storedCheck.measuredBleedMm != null ? { bleedMm: storedCheck.measuredBleedMm } : {}),
+      checks: storedCheck.checks || [],
+    };
+  }
+  return null;
+}
+
+function renderBlueprints(force = false) {
+  const { order, itemId } = activeOrderSnapshot();
+  const pdfInfo = activePdfInspectionForBlueprint();
+  const fingerprint = [
+    appState.sessionId, itemId, order?.productType, order?.size, order?.dimensions,
+    order?.pages, order?.paper, order?.binding, order?.productSpecs, pdfInfo,
+  ];
+  if (!force && !sliceChanged("blueprint", fingerprint)) return;
+  renderBlueprintPanel($("#spec-blueprint-host"), order, pdfInfo, { compact: true });
+  renderBlueprintPanel($("#review-blueprint-host"), order, pdfInfo, { compact: false });
+}
+
+async function applySimulatorOverrides(fieldValues) {
+  if (!fieldValues || !Object.keys(fieldValues).length) return;
+  if (appState.isSending || appState.orderWritePending || appState.viewLoading) return;
+  const archived = appState.state.status === "archived" || appState.state.orderStatus === "archived";
+  if (archived) {
+    showToast("已归档订单仅支持只读试算，不能写入修改。", "error");
+    return;
+  }
+  const origin = appState.sessionId;
+  const { itemId, isMulti } = activeOrderSnapshot();
+  appState.isSending = true;
+  setComposerBusy(true);
+  try {
+    const body = { sessionId: origin, action: "set", values: fieldValues };
+    if (isMulti && itemId) body.itemId = itemId;
+    const result = await api("/api/fields", body);
+    if (origin !== appState.sessionId) return;
+    for (const [path, val] of Object.entries(fieldValues)) {
+      PrintOpsJourney.fieldSaved(reviewField(path, isMulti ? itemId : undefined), origin, val);
+    }
+    render(result, false);
+    showToast("已将试算配置写入订单草稿，请按当前版本重新核对方案与交接单");
+  } catch (error) {
+    showToast(apiErrorText(error, "试算配置写入失败，请重试"), "error");
+    throw error;
+  } finally {
+    appState.isSending = false;
+    setComposerBusy(false);
+  }
+}
+
+function renderSimulator() {
+  const host = $("#pricing-simulator-host");
+  if (!host) return;
+  const { itemIndex, itemId, isMulti } = activeOrderSnapshot();
+  const archived = appState.state.status === "archived" || appState.state.orderStatus === "archived";
+  const sessionId = appState.sessionId;
+  renderPricingSimulator(host, {
+    sessionId,
+    state: appState.state,
+    revision: appState.state.revision,
+    itemIndex: isMulti ? itemIndex : null,
+    itemId: isMulti ? itemId : null,
+    archived,
+    fetchInitial: () => {
+      const params = new URLSearchParams({ sessionId });
+      if (isMulti && itemId) params.set("itemId", itemId);
+      else if (isMulti && Number.isInteger(itemIndex)) params.set("itemIndex", String(itemIndex));
+      return api(`/api/pricing/simulate?${params.toString()}`, undefined, "GET");
+    },
+    fetchSimulate: (overrides) => api("/api/pricing/simulate", {
+      sessionId,
+      ...(isMulti && itemId ? { itemId } : isMulti && Number.isInteger(itemIndex) ? { itemIndex } : {}),
+      overrides,
+    }),
+    onApplyOverrides: applySimulatorOverrides,
+  });
+}
+
 export function render(data, showMessages = true) {
   if (data[responseView] !== undefined && data[responseView] !== appState.viewEpoch) return;
   if (data.sessionId === appState.sessionId && Number.isInteger(data.revision) && data.revision < appState.state.revision) return;
@@ -51,11 +162,13 @@ export function render(data, showMessages = true) {
     appState.renderFingerprints = Object.create(null);
     appState.activeUndoNoticeRevision = null;
     closeSlashMenu();
+    resetSimulatorState();
   }
   appState.state = { ...appState.state, ...data, order: data.order || appState.state.order };
   trackOrderChanges(appState.state.order);
   if (data.llm) renderSettings({ llm: data.llm });
   appState.sessionId = data.sessionId || appState.sessionId;
+  syncActivePdfPreview();
   if (appState.sessionId) {
     localStorage.setItem("printops_session", appState.sessionId);
     const orderNum = $("#order-number");
@@ -90,10 +203,12 @@ export function render(data, showMessages = true) {
   if (!s.review) renderValidation();
   if (sliceChanged("files", [
     appState.sessionId, s.activeItemIndex, s.uploadedFile, s.preflightResults,
-    appState.fileFeedback, Boolean(appState.pdfPreview), s.order?.items?.map((item) => item?.uploadedFile),
+    appState.fileFeedback, getActivePdfPreview()?.fileName || null, Boolean(getActivePdfPreview()),
+    s.order?.items?.map((item) => item?.uploadedFile),
   ])) {
     renderFileState();
   }
+  renderBlueprints();
   if (sliceChanged("quickReplies", s.quickReplies)) renderQuickReplies();
   if (sliceChanged("options", [
     appState.sessionId, s.options, s.selectedOption, s.activeItemSelectedOption,
@@ -101,6 +216,7 @@ export function render(data, showMessages = true) {
   ])) {
     renderOptions();
   }
+  renderSimulator();
   if (sliceChanged("tools", s.availableTools)) renderTools();
   renderDecision();
   if (sliceChanged("quote", [appState.sessionId, s.activeQuoteRequestId, s.quoteRequest, s.quoteRequests])) {
@@ -216,6 +332,10 @@ PrintOpsJourney.init({
   focusDraftField,
   canFocusInlineDraft: () => DESKTOP_QUERY.matches && !appState.layout.orderCollapsed,
   hasUndoNotice: (revision) => appState.activeUndoNoticeRevision != null && appState.activeUndoNoticeRevision === revision,
+  onViewChange: (name) => {
+    if (name === "compare") renderSimulator();
+    if (name === "review") renderBlueprints(true);
+  },
   syncControls: () => { if (appState.isSending || appState.orderWritePending || appState.viewLoading) setComposerBusy(true); else applyArchivedState(); }
 });
 setupSplitters();

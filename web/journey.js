@@ -38,6 +38,7 @@
     $("#workspace").dataset.view = name;
     $("#workspace-title").textContent = {intake: "把想法说出来", compare: "比较效果与成本", review: "把每一项核对清楚"}[name];
     if (snapshot.sessionId && lastOrder === snapshot.sessionId) render(snapshot);
+    callbacks?.onViewChange?.(name);
     if (focus) $(name === "intake" ? "#message-input" : `#phase-${name}`).focus({preventScroll: true});
   }
   function init(actions) {

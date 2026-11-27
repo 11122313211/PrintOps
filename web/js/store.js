@@ -37,6 +37,7 @@ export const appState = {
   suppressOrderDiff: true,
   fileFeedback: null,
   pdfPreview: null,
+  pdfPreviews: new Map(),
   serverOrderHistory: [],
   settingsOrders: [],
   settingsHistorySelection: new Set(),

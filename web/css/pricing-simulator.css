@@ -1,0 +1,900 @@
+/* PrintOps CSS Module: pricing-simulator.css — 量价拐点模拟器 & 工艺 What-If 试算器
+   严格复用 tokens.css 设计令牌；支持高对比模式 (WCAG AAA) 与 390px 窄屏零横向溢出。 */
+
+.pricing-sim,
+.pricing-sim *,
+.pricing-sim *::before,
+.pricing-sim *::after {
+  box-sizing: border-box;
+}
+
+.pricing-sim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--brass);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-hard);
+  overflow-wrap: anywhere;
+}
+
+/* 顶栏 */
+.pricing-sim-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--rule-light);
+}
+
+.pricing-sim-head-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.pricing-sim-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--brass);
+}
+
+.pricing-sim-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pricing-sim-title {
+  margin: 0;
+  font-size: var(--font-xl);
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.pricing-sim-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+}
+
+.pricing-sim-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pricing-sim-readonly {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px var(--space-2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--info);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+}
+
+.pricing-sim-toggle {
+  padding: 5px var(--space-3);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* 反馈条与空态/阻断态 */
+.pricing-sim-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+.pricing-sim-feedback.is-ok {
+  color: var(--green);
+  background: var(--green-pale);
+  border: 1px solid var(--line-green);
+}
+
+.pricing-sim-feedback.is-error {
+  color: var(--red-deep);
+  background: var(--red-pale);
+  border: 1px solid var(--line-red);
+}
+
+.pricing-sim-retry-btn {
+  padding: 3px var(--space-2);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.pricing-sim-empty,
+.pricing-sim-loading {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--ink-soft);
+  background: var(--paper-raise);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-idle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  font-size: var(--font-sm);
+  color: var(--ink-soft);
+  background: var(--paper-raise);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-blocked-title {
+  font-size: var(--font-md);
+  color: var(--warning);
+}
+
+.pricing-sim-blocked-desc {
+  margin: 0;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+/* 区块容器 */
+.pricing-sim-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.pricing-sim-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.pricing-sim-section-title {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.pricing-sim-section-hint {
+  font-size: var(--font-xs);
+  color: var(--quiet);
+}
+
+/* 性价比拐点暖金横幅 */
+.pricing-sim-sweet-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-sweet-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.pricing-sim-sweet-text {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.pricing-sim-sweet-btn {
+  flex: 0 0 auto;
+  padding: 5px var(--space-3);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  background: var(--paper-light);
+  border-color: var(--brass);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pricing-sim-sweet-btn:hover:not(:disabled) {
+  background: var(--brass);
+  border-color: var(--brass);
+  color: var(--paper-light);
+}
+
+/* 通用徽章 */
+.pricing-sim-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: var(--font-xs);
+  font-weight: 700;
+  line-height: 1.5;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.pricing-sim-badge.is-current {
+  color: var(--ink);
+  background: var(--paper-deep);
+  border: 1px solid var(--line-strong);
+}
+
+.pricing-sim-badge.is-sim {
+  color: var(--paper-light);
+  background: var(--red);
+  border: 1px solid var(--red-deep);
+}
+
+.pricing-sim-badge.is-sweet {
+  color: var(--ink);
+  background: var(--brass-light);
+  border: 1px solid var(--brass);
+}
+
+/* 区块 1：数量阶梯卡片网格 */
+.pricing-sim-tiers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.pricing-sim-tier-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--space-3);
+  text-align: left;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out-standard),
+    background-color var(--duration-fast) var(--ease-out-standard),
+    transform var(--duration-fast) var(--ease-out-standard),
+    box-shadow var(--duration-fast) var(--ease-out-standard);
+}
+
+.pricing-sim-tier-card:hover {
+  border-color: var(--line-strong);
+  background: var(--paper-light);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-hard);
+}
+
+.pricing-sim-tier-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--red);
+}
+
+.pricing-sim-tier-card.is-current {
+  background: var(--paper-light);
+  border-color: var(--line-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.pricing-sim-tier-card.is-sim-selected {
+  background: var(--paper-light);
+  border-color: var(--red);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
+.pricing-sim-tier-card.is-sweet {
+  background: var(--gold-pale);
+  border-color: var(--gold);
+}
+
+.pricing-sim-tier-card.is-sweet:hover {
+  border-color: var(--brass);
+}
+
+.pricing-sim-tier-card.is-unavailable {
+  opacity: 0.78;
+  border-style: dashed;
+}
+
+.pricing-sim-tier-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.pricing-sim-tier-qty {
+  font-size: var(--font-md);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.pricing-sim-tier-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pricing-sim-tier-range {
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--red-deep);
+}
+
+.pricing-sim-tier-unit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: var(--font-xs);
+}
+
+.pricing-sim-tier-unit {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+.pricing-sim-pct {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pricing-sim-pct.is-down {
+  color: var(--green);
+}
+
+.pricing-sim-pct.is-up {
+  color: var(--warning);
+}
+
+.pricing-sim-pct.is-flat {
+  color: var(--quiet);
+}
+
+/* 相对单价对比条 */
+.pricing-sim-unit-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--paper-deep);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.pricing-sim-unit-fill {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  border-radius: var(--radius-pill);
+  transition: width var(--duration-base) var(--ease-out-standard);
+}
+
+.pricing-sim-unit-fill.is-sweet {
+  background: var(--brass);
+}
+
+.pricing-sim-tier-foot {
+  font-size: var(--font-xs);
+  color: var(--quiet);
+  line-height: 1.4;
+}
+
+/* 区块 2：What-If 试算控件 */
+.pricing-sim-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule-light);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pricing-sim-field-wide {
+  grid-column: 1 / -1;
+}
+
+.pricing-sim-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.pricing-sim-label {
+  font-size: var(--font-xs);
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.pricing-sim-subhint {
+  font-size: var(--font-xs);
+  color: var(--quiet);
+}
+
+.pricing-sim-select {
+  width: 100%;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 5px var(--space-2);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-select:focus-visible {
+  outline: none;
+  border-color: var(--red);
+  box-shadow: var(--focus-ring);
+}
+
+.pricing-sim-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pricing-sim-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px var(--space-3);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-warm);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-standard),
+    border-color var(--duration-fast) var(--ease-out-standard),
+    color var(--duration-fast) var(--ease-out-standard);
+}
+
+.pricing-sim-pill:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red-deep);
+}
+
+.pricing-sim-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.pricing-sim-pill.is-active {
+  color: var(--paper-light);
+  background: var(--red);
+  border-color: var(--red-deep);
+}
+
+.pricing-sim-pill.pricing-sim-pill-none.is-active {
+  color: var(--ink);
+  background: var(--paper-deep);
+  border-color: var(--line-strong);
+}
+
+.pricing-sim-pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 实时对比条 */
+.pricing-sim-compare-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pricing-sim-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  transition: opacity var(--duration-fast) var(--ease-out-standard);
+}
+
+.pricing-sim-compare.is-updating {
+  opacity: 0.72;
+}
+
+.pricing-sim-compare-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--paper-light);
+  border: 1px solid var(--rule-light);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-sim-compare-card.is-simulated {
+  border-color: var(--line-gold);
+}
+
+.pricing-sim-compare-label {
+  font-size: var(--font-xs);
+  font-weight: 700;
+  color: var(--quiet);
+}
+
+.pricing-sim-compare-price {
+  font-family: var(--font-mono);
+  font-size: var(--font-xl);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.pricing-sim-compare-meta {
+  font-size: var(--font-xs);
+  color: var(--ink-soft);
+}
+
+.pricing-sim-compare-delta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.pricing-sim-delta-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.pricing-sim-delta-badge.is-down {
+  color: var(--green);
+  background: var(--green-pale);
+  border: 1px solid var(--line-green);
+}
+
+.pricing-sim-delta-badge.is-up {
+  color: var(--warning);
+  background: var(--red-pale);
+  border: 1px solid var(--line-red);
+}
+
+.pricing-sim-delta-badge.is-flat {
+  color: var(--quiet);
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+}
+
+.pricing-sim-delta-badge.is-warn {
+  color: var(--warning);
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+}
+
+.pricing-sim-delta-unit {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  color: var(--ink-soft);
+}
+
+.pricing-sim-degraded {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+  color: var(--warning);
+  background: var(--gold-pale);
+  border: 1px solid var(--line-gold);
+  border-radius: var(--radius-sm);
+}
+
+/* 操作栏 */
+.pricing-sim-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pricing-sim-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.pricing-sim-reset-btn,
+.pricing-sim-apply-btn {
+  padding: 7px var(--space-4);
+  font-size: var(--font-sm);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pricing-sim-apply-btn:disabled,
+.pricing-sim-reset-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.pricing-sim-apply-note {
+  display: block;
+  text-align: right;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--quiet);
+}
+
+/* 底部边界声明 */
+.pricing-sim-disclaimer {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--rule-light);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+  color: var(--quiet);
+}
+
+/* 触控目标基线（≤1050px） */
+@media (max-width: 1050px) {
+  .pricing-sim-toggle,
+  .pricing-sim-sweet-btn,
+  .pricing-sim-pill,
+  .pricing-sim-select,
+  .pricing-sim-reset-btn,
+  .pricing-sim-apply-btn,
+  .pricing-sim-retry-btn {
+    min-height: 44px;
+  }
+}
+
+/* 中等与窄屏响应式（适配 390px 零横向溢出） */
+@media (max-width: 700px) {
+  .pricing-sim {
+    padding: var(--space-3);
+  }
+
+  .pricing-sim-compare {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .pricing-sim-compare-delta {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: var(--space-1) 0;
+  }
+
+  .pricing-sim-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-sim-action-buttons {
+    justify-content: stretch;
+  }
+
+  .pricing-sim-reset-btn,
+  .pricing-sim-apply-btn {
+    flex: 1 1 140px;
+  }
+
+  .pricing-sim-apply-note {
+    text-align: left;
+  }
+}
+
+@media (max-width: 440px) {
+  .pricing-sim {
+    padding: var(--space-3) var(--space-2);
+  }
+
+  .pricing-sim-tiers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .pricing-sim-tier-card {
+    padding: var(--space-2);
+  }
+
+  .pricing-sim-tier-range {
+    font-size: var(--font-xs);
+  }
+
+  .pricing-sim-compare-price {
+    font-size: var(--font-lg);
+  }
+
+  .pricing-sim-sweet-btn {
+    width: 100%;
+  }
+
+  .pricing-sim-delta-badge {
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+/* 高对比度模式 (WCAG AAA ≥ 7:1) */
+html[data-theme="high-contrast"] .pricing-sim,
+html[data-theme="high-contrast"] .pricing-sim-tier-card,
+html[data-theme="high-contrast"] .pricing-sim-controls,
+html[data-theme="high-contrast"] .pricing-sim-compare,
+html[data-theme="high-contrast"] .pricing-sim-compare-card,
+html[data-theme="high-contrast"] .pricing-sim-sweet-banner,
+html[data-theme="high-contrast"] .pricing-sim-blocked,
+html[data-theme="high-contrast"] .pricing-sim-degraded {
+  background: var(--paper-light);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: none;
+}
+
+html[data-theme="high-contrast"] .pricing-sim-tier-card.is-current,
+html[data-theme="high-contrast"] .pricing-sim-tier-card.is-sim-selected,
+html[data-theme="high-contrast"] .pricing-sim-tier-card.is-sweet {
+  border-width: 3px;
+  box-shadow: none;
+}
+
+html[data-theme="high-contrast"] .pricing-sim-pill {
+  background: var(--paper-light);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-pill.is-active,
+html[data-theme="high-contrast"] .pricing-sim-badge.is-sim,
+html[data-theme="high-contrast"] .pricing-sim-badge.is-sweet {
+  background: var(--ink);
+  color: var(--paper-light);
+  border-color: var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-badge.is-current,
+html[data-theme="high-contrast"] .pricing-sim-readonly,
+html[data-theme="high-contrast"] .pricing-sim-chip,
+html[data-theme="high-contrast"] .pricing-sim-delta-badge {
+  background: var(--paper-light);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-select {
+  background: var(--paper-light);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-unit-bar {
+  background: var(--paper-light);
+  border: 1px solid var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-unit-fill,
+html[data-theme="high-contrast"] .pricing-sim-unit-fill.is-sweet {
+  background: var(--ink);
+}
+
+html[data-theme="high-contrast"] .pricing-sim-tier-range,
+html[data-theme="high-contrast"] .pricing-sim-tier-unit,
+html[data-theme="high-contrast"] .pricing-sim-tier-foot,
+html[data-theme="high-contrast"] .pricing-sim-pct,
+html[data-theme="high-contrast"] .pricing-sim-eyebrow,
+html[data-theme="high-contrast"] .pricing-sim-section-hint,
+html[data-theme="high-contrast"] .pricing-sim-label,
+html[data-theme="high-contrast"] .pricing-sim-subhint,
+html[data-theme="high-contrast"] .pricing-sim-compare-label,
+html[data-theme="high-contrast"] .pricing-sim-compare-meta,
+html[data-theme="high-contrast"] .pricing-sim-delta-unit,
+html[data-theme="high-contrast"] .pricing-sim-apply-note,
+html[data-theme="high-contrast"] .pricing-sim-disclaimer {
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pricing-sim-tier-card,
+  .pricing-sim-unit-fill,
+  .pricing-sim-pill,
+  .pricing-sim-compare {
+    transition: none;
+  }
+}
+
+@media print {
+  .pricing-sim {
+    display: none !important;
+  }
+}

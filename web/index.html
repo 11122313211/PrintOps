@@ -11,6 +11,8 @@
     <link rel="stylesheet" href="css/components.css" />
     <link rel="stylesheet" href="css/workbench.css" />
     <link rel="stylesheet" href="css/harness.css" />
+    <link rel="stylesheet" href="css/blueprint.css" />
+    <link rel="stylesheet" href="css/pricing-simulator.css" />
     <link rel="stylesheet" href="css/print-and-overrides.css" />
   </head>
   <body>
@@ -186,10 +188,12 @@
               <div class="option-compare" id="option-compare" hidden></div>
               <div class="option-list" id="option-list"></div>
             </div>
+            <section class="pricing-simulator-host" id="pricing-simulator-host" aria-label="量价阶梯与工艺试算"></section>
           </section>
           <section id="phase-review" class="journey-pane" aria-label="核对与交接" hidden>
             <div class="phase-intro"><h3>核对每个产品，再生成交接单</h3><p>检查数量、尺寸、材料与文件归属。当前只准备本地交接资料，尚未发送供应商。</p></div>
             <details id="review-checklist-section" open><summary>查看与修改生产参数</summary><div id="review-checklist"></div></details>
+            <div class="blueprint-host" id="review-blueprint-host" aria-label="印前规格示意图" hidden></div>
             <article id="handoff-preview" class="handoff-document" aria-label="交接单预览"></article>
             <div class="order-actions">
               <button class="primary-action" id="generate-order" type="button" disabled>生成订单草稿</button>
@@ -276,6 +280,7 @@
                 </div>
                 <div class="parameter-form" id="parameter-form" aria-label="产品专属参数"></div>
                 <div class="field-list" id="spec-fields"></div>
+                <div class="blueprint-host" id="spec-blueprint-host" aria-label="印前规格示意图" hidden></div>
               </div>
             </details>
 

@@ -16,6 +16,7 @@ import {
   applySpecPreset, closePresetDrawer, removeSpecPreset, saveCurrentSpecPreset, togglePresetDrawer,
 } from "./presets.js";
 import { clearPdfPreview, uploadFile } from "./pdf.js";
+import { resetSimulatorState } from "./pricing_simulator.js";
 import { currentHandoff, exportOrder } from "./export.js";
 import {
   addMessage, applyArchivedState, autoGrowComposer, removePendingMessage,
@@ -308,6 +309,7 @@ export function bindEvents() {
       appState.state.status = null;
       appState.state.orderStatus = null;
       setComposerBusy(false);
+      const prevSessionId = appState.sessionId;
       localStorage.removeItem("printops_session");
       $("#chat-feed").innerHTML = "";
       appState.sessionId = "";
@@ -315,8 +317,9 @@ export function bindEvents() {
       appState.activeUndoNoticeRevision = null;
       appState.renderFingerprints = Object.create(null);
       closeSlashMenu();
+      resetSimulatorState();
       appState.fileFeedback = null;
-      clearPdfPreview();
+      clearPdfPreview(prevSessionId || false);
       await bootstrap();
       if (!DESKTOP_QUERY.matches) $("#message-input").focus({preventScroll: true});
       showToast("已重置当前订单，开始新的对话");

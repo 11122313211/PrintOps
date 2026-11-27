@@ -8,7 +8,7 @@ import {
   $, captureFieldFocus, hasValue, restoreFieldFocus, revealPanel, showToast,
 } from "../dom.js";
 import { api, apiErrorText } from "../api.js";
-import { clearPdfPreview } from "../pdf.js";
+import { syncActivePdfPreview } from "../pdf.js";
 import { applyLayout, saveLayout, updateOrderToggle } from "../layout.js";
 import { renderUndoBanner } from "../harness.js";
 
@@ -126,8 +126,12 @@ export async function focusItem(itemId) {
   if (appState.isSending || appState.orderWritePending) return;
   const epoch = ++appState.viewEpoch;
   appState.viewLoading = true;
-  appState.fileFeedback = null; clearPdfPreview();
-  try { actions.render(await api("/api/focus", {sessionId: appState.sessionId, itemId, expectedRevision: appState.state.revision}), false); }
+  appState.fileFeedback = null;
+  try {
+    const nextState = await api("/api/focus", {sessionId: appState.sessionId, itemId, expectedRevision: appState.state.revision});
+    actions.render(nextState, false);
+    syncActivePdfPreview();
+  }
   catch { /* Persistent error already displayed. */ }
   finally { if (epoch === appState.viewEpoch) { appState.viewLoading = false; actions.setComposerBusy(false); } }
 }
@@ -380,7 +384,6 @@ export function renderMultiProductItems() {
       event.preventDefault();
       if (appState.state.activeItemIndex !== index) {
         appState.fileFeedback = null;
-        clearPdfPreview();
       }
       focusItem(item.itemId);
     });

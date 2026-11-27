@@ -1,0 +1,727 @@
+/* PrintOps CSS Module: blueprint.css — 交互式“规格与印前示意图”面板与工业蓝图 SVG 样式 */
+
+.blueprint-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  margin: var(--space-3) 0;
+  color: var(--ink);
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--brass);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-hard);
+}
+
+.blueprint-panel[hidden] {
+  display: none;
+}
+
+.blueprint-panel--compact {
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+/* 顶栏：标题、摘要与胶囊徽章 */
+.blueprint-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.blueprint-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.blueprint-title {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+
+.blueprint-panel--compact .blueprint-title {
+  font-size: var(--font-md);
+}
+
+.blueprint-subtitle {
+  margin: 0;
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  color: var(--quiet);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.blueprint-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.blueprint-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  background: var(--paper-light);
+  border: 1px solid var(--line-warm);
+  border-radius: var(--radius-pill);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.blueprint-badge.is-accent {
+  color: var(--red-deep);
+  background: var(--red-pale);
+  border-color: var(--line-red);
+}
+
+.blueprint-badge.is-ok {
+  color: var(--green);
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+.blueprint-badge.is-warn {
+  color: var(--warning);
+  background: var(--gold-pale);
+  border-color: var(--line-gold);
+}
+
+.blueprint-badge.is-info {
+  color: var(--info);
+  background: var(--paper-light);
+  border-color: var(--line-strong);
+}
+
+/* 图层交互开关栏 */
+.blueprint-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.blueprint-layer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--quiet);
+  background: var(--paper-light);
+  border: 1px solid var(--line-warm);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out-standard),
+    border-color var(--duration-fast) var(--ease-out-standard),
+    color var(--duration-fast) var(--ease-out-standard);
+}
+
+.blueprint-layer-btn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--paper);
+}
+
+.blueprint-layer-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.blueprint-layer-btn.is-active {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line-strong);
+}
+
+.blueprint-layer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  opacity: 0.45;
+}
+
+.blueprint-layer-btn.is-active .blueprint-layer-dot {
+  opacity: 1;
+}
+
+.blueprint-layer-dot.dot-bleed {
+  background: var(--red);
+}
+
+.blueprint-layer-dot.dot-safe {
+  background: var(--green);
+}
+
+.blueprint-layer-dot.dot-dims {
+  background: var(--brass);
+}
+
+.blueprint-layer-dot.dot-pdf {
+  background: var(--info);
+}
+
+.blueprint-layer-dot.dot-pdf-warn {
+  background: var(--warning);
+}
+
+/* 响应式 SVG 蓝图画布容器 */
+.blueprint-stage {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--paper-light);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.blueprint-svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  user-select: none;
+}
+
+.blueprint-svg .is-hidden {
+  display: none;
+}
+
+/* SVG 内部工业制图风格令牌映射 */
+.bp-canvas-bg {
+  fill: var(--paper-light);
+}
+
+.bp-grid-line {
+  stroke: var(--rule-light);
+}
+
+.bp-bleed-fill {
+  fill: var(--tint-red);
+}
+
+.bp-bleed-stroke {
+  fill: none;
+  stroke: var(--red);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 3;
+}
+
+.bp-trim-fill {
+  fill: var(--paper-raise);
+}
+
+.bp-trim-stroke {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+
+.bp-crop-mark {
+  stroke: var(--ink-soft);
+  stroke-width: 1;
+}
+
+.bp-safe-stroke {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 1.35;
+  stroke-dasharray: 2.5 3;
+}
+
+.bp-fold-crease {
+  stroke: var(--info);
+  stroke-width: 1.5;
+  stroke-dasharray: 7 3 2 3;
+}
+
+.bp-hole-mark {
+  fill: var(--paper-light);
+  stroke: var(--ink);
+  stroke-width: 1.4;
+}
+
+.bp-binding-band {
+  fill: var(--paper-deep);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.bp-staple-mark {
+  stroke: var(--red-deep);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+/* 尺寸标注与双向箭头 */
+.bp-ext-line {
+  stroke: var(--line-warm);
+  stroke-width: 0.9;
+}
+
+.bp-dim-line {
+  stroke: var(--ink-soft);
+  stroke-width: 1.15;
+}
+
+.bp-dim-line-red {
+  stroke: var(--red);
+  stroke-width: 1.3;
+}
+
+.bp-dim-line-green {
+  stroke: var(--green);
+  stroke-width: 1.3;
+}
+
+.bp-dim-line-info {
+  stroke: var(--info);
+  stroke-width: 1.3;
+}
+
+.bp-arrow-dim {
+  fill: var(--ink-soft);
+}
+
+.bp-arrow-red {
+  fill: var(--red);
+}
+
+.bp-arrow-green {
+  fill: var(--green);
+}
+
+.bp-arrow-info {
+  fill: var(--info);
+}
+
+.bp-label-halo {
+  fill: var(--paper-light);
+  opacity: 0.92;
+}
+
+.bp-dim-text,
+.bp-dim-text-red,
+.bp-dim-text-green,
+.bp-dim-text-info {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.bp-dim-text {
+  fill: var(--ink);
+}
+
+.bp-dim-text-red {
+  fill: var(--red-deep);
+}
+
+.bp-dim-text-green {
+  fill: var(--green);
+}
+
+.bp-dim-text-info {
+  fill: var(--info);
+}
+
+.bp-tag-red {
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--red);
+}
+
+.bp-tag-green {
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--green);
+}
+
+.bp-tag-info {
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--info);
+}
+
+.bp-tag-muted {
+  font-size: 9.5px;
+  font-weight: 500;
+  fill: var(--quiet);
+}
+
+.bp-panel-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.bp-panel-sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--ink-soft);
+}
+
+.bp-panel-sub.is-inner {
+  fill: var(--red-deep);
+}
+
+/* 画册书脊剖面与刀模子卡 */
+.bp-spine-card {
+  fill: var(--paper-raise);
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+.bp-spine-title {
+  font-size: 10px;
+  font-weight: 700;
+  fill: var(--brass);
+}
+
+.bp-spine-bar {
+  fill: var(--paper-light);
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+
+.bp-spine-leaf {
+  stroke: var(--line-strong);
+  stroke-width: 0.9;
+}
+
+.bp-warn-pill {
+  fill: var(--gold-pale);
+  stroke: var(--line-gold);
+  stroke-width: 1;
+}
+
+.bp-warn-pill-text {
+  font-size: 9px;
+  font-weight: 700;
+  fill: var(--warning);
+}
+
+/* 包装盒等轴测 3D 线框 */
+.bp-box-face-top {
+  fill: var(--paper-light);
+}
+
+.bp-box-face-left {
+  fill: var(--paper-raise);
+}
+
+.bp-box-face-right {
+  fill: var(--paper-deep);
+}
+
+.bp-box-edge {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+
+.bp-box-hidden {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.bp-open-arrow {
+  stroke: var(--info);
+  stroke-width: 1.6;
+}
+
+/* 纸杯示意 */
+.bp-cup-rim {
+  fill: var(--paper-light);
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+
+.bp-cup-safe-fill {
+  fill: var(--tint-green);
+}
+
+.bp-cup-fan {
+  fill: var(--paper-light);
+  stroke: var(--brass);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+}
+
+/* PDF 叠层比对框 */
+.bp-pdf-box {
+  fill: none;
+  stroke-width: 2.1;
+  stroke-dasharray: 6 3;
+}
+
+.bp-pdf-box.is-match,
+.bp-pdf-box.is-info {
+  stroke: var(--info);
+}
+
+.bp-pdf-box.is-mismatch {
+  stroke: var(--warning);
+}
+
+.bp-pdf-bleed {
+  fill: none;
+  stroke: var(--info);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.7;
+}
+
+.bp-pdf-tag.is-match {
+  fill: var(--info);
+}
+
+.bp-pdf-tag.is-mismatch {
+  fill: var(--warning);
+}
+
+.bp-pdf-tag-text {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--paper-light);
+}
+
+/* PDF 叠层摘要条 */
+.blueprint-pdf-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-warm);
+  background: var(--paper-light);
+  overflow-wrap: anywhere;
+}
+
+.blueprint-pdf-bar.is-match {
+  background: var(--green-pale);
+  border-color: var(--line-green);
+}
+
+.blueprint-pdf-bar.is-mismatch {
+  background: var(--gold-pale);
+  border-color: var(--line-gold);
+}
+
+.blueprint-pdf-status {
+  font-weight: 700;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.blueprint-pdf-bar.is-match .blueprint-pdf-status {
+  color: var(--green);
+}
+
+.blueprint-pdf-bar.is-mismatch .blueprint-pdf-status {
+  color: var(--warning);
+}
+
+.blueprint-pdf-summary {
+  color: var(--ink-soft);
+  min-width: 0;
+}
+
+/* 印前要点列表与诚实边界声明 */
+.blueprint-notes {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-xs);
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.blueprint-note-item {
+  overflow-wrap: anywhere;
+}
+
+.blueprint-disclaimer {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--rule-light);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--quiet);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- 触屏与 390px 窄屏适配（零横向溢出） ---------------- */
+@media (max-width: 1050px) {
+  .blueprint-layer-btn {
+    min-height: 36px;
+    padding: 6px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .blueprint-panel {
+    padding: var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .blueprint-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .blueprint-layer-btn {
+    min-height: 40px;
+  }
+}
+
+/* ---------------- 高对比模式 (WCAG AAA) ---------------- */
+html[data-theme="high-contrast"] .blueprint-panel {
+  color: #000;
+  background: #fff;
+  border: 2px solid #000;
+  border-top-width: 4px;
+  box-shadow: none;
+}
+
+html[data-theme="high-contrast"] .blueprint-stage,
+html[data-theme="high-contrast"] .blueprint-badge,
+html[data-theme="high-contrast"] .blueprint-pdf-bar {
+  color: #000;
+  background: #fff;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .blueprint-layer-btn {
+  color: #000;
+  background: #fff;
+  border: 2px solid #000;
+}
+
+html[data-theme="high-contrast"] .blueprint-layer-btn.is-active {
+  color: #000;
+  background: #ffd700;
+  border-color: #000;
+}
+
+html[data-theme="high-contrast"] .blueprint-layer-btn:hover {
+  color: #fff;
+  background: #000;
+}
+
+html[data-theme="high-contrast"] .bp-canvas-bg,
+html[data-theme="high-contrast"] .bp-trim-fill,
+html[data-theme="high-contrast"] .bp-spine-card,
+html[data-theme="high-contrast"] .bp-box-face-top,
+html[data-theme="high-contrast"] .bp-box-face-left,
+html[data-theme="high-contrast"] .bp-label-halo {
+  fill: #fff;
+}
+
+html[data-theme="high-contrast"] .bp-box-face-right,
+html[data-theme="high-contrast"] .bp-binding-band {
+  fill: #e8e8e8;
+}
+
+html[data-theme="high-contrast"] .bp-grid-line {
+  stroke: #d0d0d0;
+}
+
+html[data-theme="high-contrast"] .bp-trim-stroke,
+html[data-theme="high-contrast"] .bp-box-edge,
+html[data-theme="high-contrast"] .bp-dim-line,
+html[data-theme="high-contrast"] .bp-crop-mark {
+  stroke: #000;
+}
+
+html[data-theme="high-contrast"] .bp-bleed-stroke,
+html[data-theme="high-contrast"] .bp-dim-line-red {
+  stroke: #b00020;
+}
+
+html[data-theme="high-contrast"] .bp-safe-stroke,
+html[data-theme="high-contrast"] .bp-dim-line-green {
+  stroke: #005a32;
+}
+
+html[data-theme="high-contrast"] .bp-fold-crease,
+html[data-theme="high-contrast"] .bp-pdf-box.is-match,
+html[data-theme="high-contrast"] .bp-dim-line-info,
+html[data-theme="high-contrast"] .bp-open-arrow {
+  stroke: #004494;
+}
+
+html[data-theme="high-contrast"] .bp-pdf-box.is-mismatch {
+  stroke: #8a4500;
+}
+
+html[data-theme="high-contrast"] .bp-dim-text,
+html[data-theme="high-contrast"] .bp-panel-code,
+html[data-theme="high-contrast"] .bp-spine-title,
+html[data-theme="high-contrast"] .blueprint-subtitle,
+html[data-theme="high-contrast"] .blueprint-notes,
+html[data-theme="high-contrast"] .blueprint-disclaimer {
+  fill: #000;
+  color: #000;
+}
+
+html[data-theme="high-contrast"] .bp-pdf-tag.is-match,
+html[data-theme="high-contrast"] .bp-pdf-tag.is-mismatch {
+  fill: #000;
+}
+
+html[data-theme="high-contrast"] .bp-pdf-tag-text {
+  fill: #fff;
+}
+
+/* ---------------- 打印友好 ---------------- */
+@media print {
+  .blueprint-panel {
+    box-shadow: none;
+    break-inside: avoid;
+    background: #fff;
+    border-color: #999;
+  }
+
+  .blueprint-controls {
+    display: none;
+  }
+}

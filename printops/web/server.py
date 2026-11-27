@@ -32,6 +32,7 @@ from printops.llm.adapter import (ConfigWriteError, OpenAICompatiblePlanner, rea
                          write_saved_config)
 from printops.domain.order_contract import canonical_order, handoff_document
 from printops.domain.order_model import normalize_state
+from printops.pricing.simulator import simulate_what_if
 from printops.storage.contract import StoreConflictError, aggregate_tool_calls, summary
 from printops.supplier.connectors import list_platforms
 from printops.tools.registry import validate_order
@@ -604,11 +605,78 @@ def dispatch_post(path: str, body: dict[str, object], agent: Agent):
         agent._operation_complete = False
 
 
+def _pricing_simulate_order(agent: Agent, body: dict[str, Any]) -> dict[str, Any]:
+    """Run read-only quantity-tier & What-If pricing simulation without mutating state."""
+    state = agent.state
+    order = state.get("order") if isinstance(state.get("order"), dict) else {}
+    items = order.get("items") if isinstance(order.get("items"), list) else []
+    target_body = {key: body[key] for key in ("itemId", "itemIndex") if body.get(key) is not None}
+    resolved_index: int | None = None
+    resolved_item_id: str | None = None
+
+    if len(items) > 1:
+        if target_body:
+            resolved_index = _resolve_item_target(agent, target_body)
+        else:
+            resolved_index = agent._item_index()
+            if resolved_index is None:
+                resolved_index = 0
+        base_order = deepcopy(agent._item_order(resolved_index) or items[resolved_index])
+        resolved_item_id = base_order.get("itemId")
+        selected_ref = base_order.get("selectedOption")
+        context_options = agent._context_options(state, items[resolved_index])
+    else:
+        if target_body:
+            if target_body.get("itemIndex") is not None:
+                idx = _item_index(target_body)
+                if idx != 0:
+                    raise RequestError("指定产品项不存在，请恢复最新订单", 409, "ITEM_NOT_FOUND")
+            if target_body.get("itemId") is not None:
+                raw_id = target_body["itemId"]
+                if not isinstance(raw_id, str) or not raw_id.strip() or len(raw_id) > 128:
+                    raise RequestError("itemId 无效", code="INVALID_ITEM")
+                if items and items[0].get("itemId") and items[0].get("itemId") != raw_id:
+                    raise RequestError("指定产品项不存在，请恢复最新订单", 409, "ITEM_NOT_FOUND")
+        base_order = deepcopy(order)
+        resolved_item_id = items[0].get("itemId") if len(items) == 1 and isinstance(items[0], dict) else None
+        selected_ref = state.get("selectedOption")
+        context_options = agent._context_options(state)
+
+    if isinstance(selected_ref, str) and selected_ref and isinstance(context_options, list):
+        matched = next((opt for opt in context_options if isinstance(opt, dict) and opt.get("id") == selected_ref), None)
+        if matched is not None:
+            base_order["selectedOption"] = deepcopy(matched)
+    elif isinstance(selected_ref, dict):
+        base_order["selectedOption"] = deepcopy(selected_ref)
+
+    overrides = body.get("overrides")
+    quantities = body.get("quantities")
+    try:
+        result = simulate_what_if(base_order, overrides=overrides, quantities=quantities)
+    except ValueError as error:
+        raise RequestError(str(error), 400, "INVALID_SIMULATION")
+
+    result["sessionId"] = agent.id
+    result["revision"] = state.get("revision", 0)
+    result["itemId"] = resolved_item_id
+    result["itemIndex"] = resolved_index
+    result["archived"] = state.get("orderStatus") == "archived"
+    return result
+
+
 def _dispatch_post(path: str, body: dict[str, object], agent: Agent):
     """Dispatch a parsed API payload without doing network I/O."""
     history_result = dispatch_history_post(path, body, agent.memory)
     if history_result is not None:
         return history_result
+    if path == "/api/pricing/simulate":
+        expected_revision = body.get("expectedRevision")
+        if expected_revision is not None:
+            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 0:
+                raise RequestError("expectedRevision 必须是非负整数", code="INVALID_REVISION")
+            if expected_revision != agent.state.get("revision", 0):
+                raise RequestError("订单已更新，请刷新后重试", 409, "REVISION_CONFLICT")
+        return _pricing_simulate_order(agent, body)
     if agent.state.get("orderStatus") == "archived":
         if path in {"/api/session", "/api/session/context", "/api/focus"}:
             if path == "/api/focus":
@@ -876,6 +944,28 @@ def dispatch_get(path: str) -> dict[str, object] | None:
         return stats
     if path == "/api/products":
         return catalog_payload()
+    if path == "/api/pricing/simulate":
+        memory = session_memory()
+        raw_sid = str((query.get("sessionId") or [""])[0] or "").strip()
+        record = _history_record(memory, raw_sid)
+        sim_body: dict[str, Any] = {}
+        raw_idx = (query.get("itemIndex") or [None])[0]
+        if raw_idx not in (None, ""):
+            try:
+                parsed_idx = int(raw_idx)
+            except (TypeError, ValueError):
+                raise RequestError("itemIndex 必须是非负整数", code="INVALID_ITEM")
+            if parsed_idx < 0:
+                raise RequestError("itemIndex 必须是非负整数", code="INVALID_ITEM")
+            sim_body["itemIndex"] = parsed_idx
+        raw_item_id = (query.get("itemId") or [None])[0]
+        if raw_item_id not in (None, ""):
+            sim_body["itemId"] = str(raw_item_id)
+        agent = Agent(memory, record["sessionId"], planner=planner_for_request())
+        agent.state = normalize_state(deepcopy(record["state"]))
+        if record.get("status") == "archived":
+            agent.state["orderStatus"] = "archived"
+        return _pricing_simulate_order(agent, sim_body)
     return None
 
 

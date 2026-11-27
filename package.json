@@ -9,7 +9,8 @@
     "test:browser:positions": "playwright test --config tests/ui_positions.config.mjs",
     "test:browser:focus": "playwright test --config tests/ui_focus.config.mjs",
     "test:browser:harness": "playwright test --config tests/ui_harness.config.mjs",
-    "test:browser:all": "npm run test:browser:smoke && npm run test:browser:journey && npm run test:browser:positions && npm run test:browser:focus && npm run test:browser:harness",
+    "test:browser:intelligence": "playwright test --config tests/ui_print_intelligence.config.mjs",
+    "test:browser:all": "npm run test:browser:smoke && npm run test:browser:journey && npm run test:browser:positions && npm run test:browser:focus && npm run test:browser:harness && npm run test:browser:intelligence",
     "test:browser:install": "playwright install chromium"
   },
   "devDependencies": {

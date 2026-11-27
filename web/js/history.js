@@ -4,7 +4,7 @@ import { ORDER_STATUS_LABELS, orderHistoryKey } from "./constants.js";
 import { actions, appState, cloneData } from "./store.js";
 import { $, showToast } from "./dom.js";
 import { api, apiErrorText, recoverOperation } from "./api.js";
-import { clearPdfPreview } from "./pdf.js";
+import { clearPdfPreview, syncActivePdfPreview } from "./pdf.js";
 
 export function loadOrderHistory() {
   return appState.serverOrderHistory;
@@ -443,10 +443,11 @@ export async function switchOrder(orderId) {
     if (epoch !== appState.viewEpoch) return;
     $("#chat-feed").innerHTML = "";
     appState.fileFeedback = null;
-    clearPdfPreview();
+    appState.pdfPreview = null;
     appState.suppressOrderDiff = true;
     appState.state = { order: {}, stage: "collect", quickReplies: [], options: [], selectedOption: null, activeItemSelectedOption: null, orderGenerated: false, handoff: null, confirmation: { status: "not_ready" }, quoteRequest: null, quoteRequests: [], activeQuoteRequestId: null, toolTrace: [], availableTools: appState.state.availableTools || [], productProfile: null, activeItemIndex: null };
     actions.render(snapshot, false);
+    syncActivePdfPreview();
     PrintOpsJourney.clearFailure();
     const unresolved = appState.unresolvedWrites.get(appState.sessionId);
     if (unresolved) PrintOpsJourney.failure(unresolved.error, unresolved.request, recoverOperation);
